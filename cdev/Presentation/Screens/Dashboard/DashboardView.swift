@@ -33,7 +33,7 @@ struct DashboardView: View {
                     diffsCount: viewModel.diffs.count
                 )
 
-                // Content
+                // Content - tap to dismiss keyboard
                 TabView(selection: $viewModel.selectedTab) {
                     LogListView(
                         logs: viewModel.logs,
@@ -48,6 +48,7 @@ struct DashboardView: View {
                     .tag(DashboardTab.diffs)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .dismissKeyboardOnTap()
 
                 // Bottom action bar
                 ActionBarView(

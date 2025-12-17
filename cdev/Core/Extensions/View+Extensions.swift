@@ -110,6 +110,29 @@ extension View {
     }
 }
 
+// MARK: - Keyboard Dismissal
+
+extension View {
+    /// Dismiss keyboard when tapping outside text fields
+    func dismissKeyboardOnTap() -> some View {
+        modifier(DismissKeyboardModifier())
+    }
+
+    /// Programmatically dismiss keyboard
+    func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
+struct DismissKeyboardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .onTapGesture {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+    }
+}
+
 // MARK: - Button Press Effect
 
 struct ButtonPressEffect: ViewModifier {
