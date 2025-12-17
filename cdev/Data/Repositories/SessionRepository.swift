@@ -53,7 +53,13 @@ final class SessionRepository: SessionStorageProtocol, SettingsStorageProtocol {
     // MARK: - SettingsStorageProtocol
 
     var autoReconnect: Bool {
-        get { defaults.bool(forKey: Constants.UserDefaults.autoReconnect) }
+        get {
+            // Default to true if not set
+            if defaults.object(forKey: Constants.UserDefaults.autoReconnect) == nil {
+                return true
+            }
+            return defaults.bool(forKey: Constants.UserDefaults.autoReconnect)
+        }
         set { defaults.set(newValue, forKey: Constants.UserDefaults.autoReconnect) }
     }
 
