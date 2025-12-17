@@ -86,7 +86,7 @@ struct DashboardView: View {
     }
 }
 
-// MARK: - Status Bar
+// MARK: - Compact Status Bar
 
 struct StatusBarView: View {
     let connectionState: ConnectionState
@@ -94,48 +94,48 @@ struct StatusBarView: View {
     let repoName: String?
 
     var body: some View {
-        HStack(spacing: Spacing.sm) {
-            // Connection status
-            HStack(spacing: Spacing.xxs) {
+        HStack(spacing: Spacing.xs) {
+            // Connection status - compact
+            HStack(spacing: 3) {
                 Circle()
                     .fill(connectionState.isConnected ? Color.accentGreen : Color.errorRed)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 6, height: 6)
 
-                Text(connectionState.isConnected ? "Connected" : "Offline")
-                    .font(Typography.caption1)
+                Text(connectionState.isConnected ? "Online" : "Offline")
+                    .font(Typography.caption2)
                     .foregroundStyle(.secondary)
             }
 
             Divider()
-                .frame(height: 12)
+                .frame(height: 10)
 
-            // Claude status
-            HStack(spacing: Spacing.xxs) {
+            // Claude status - compact
+            HStack(spacing: 3) {
                 Circle()
                     .fill(claudeStateColor)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 6, height: 6)
 
                 Text(claudeState.rawValue.capitalized)
-                    .font(Typography.caption1)
+                    .font(Typography.caption2)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            // Repo name
+            // Repo name - compact
             if let repoName = repoName {
-                HStack(spacing: Spacing.xxs) {
+                HStack(spacing: 2) {
                     Image(systemName: "folder")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                     Text(repoName)
-                        .font(Typography.caption1)
+                        .font(Typography.caption2)
                         .lineLimit(1)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.xs)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, 4)
         .background(Color(.secondarySystemBackground))
     }
 
@@ -161,24 +161,24 @@ struct CompactTabSelector: View {
         HStack(spacing: 0) {
             ForEach(DashboardTab.allCases, id: \.self) { tab in
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(.easeInOut(duration: 0.15)) {
                         selectedTab = tab
                     }
                     Haptics.selection()
                 } label: {
-                    HStack(spacing: Spacing.xxs) {
+                    HStack(spacing: 3) {
                         Image(systemName: tab.icon)
-                            .font(.caption)
+                            .font(.system(size: 10))
 
                         Text(tab.rawValue)
-                            .font(Typography.footnote)
+                            .font(Typography.caption2)
 
-                        // Badge
+                        // Badge - compact
                         let count = tab == .logs ? logsCount : diffsCount
                         if count > 0 {
                             Text("\(min(count, 99))\(count > 99 ? "+" : "")")
-                                .font(.system(size: 10, weight: .medium))
-                                .padding(.horizontal, 4)
+                                .font(.system(size: 9, weight: .medium))
+                                .padding(.horizontal, 3)
                                 .padding(.vertical, 1)
                                 .background(
                                     selectedTab == tab
@@ -188,7 +188,7 @@ struct CompactTabSelector: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    .padding(.vertical, Spacing.xs)
+                    .padding(.vertical, 5)
                     .frame(maxWidth: .infinity)
                     .foregroundStyle(selectedTab == tab ? Color.primaryBlue : .secondary)
                 }
@@ -209,7 +209,7 @@ struct CompactTabSelector: View {
     }
 }
 
-// MARK: - Action Bar
+// MARK: - Compact Action Bar
 
 struct ActionBarView: View {
     let claudeState: ClaudeState
@@ -224,25 +224,25 @@ struct ActionBarView: View {
         VStack(spacing: 0) {
             Divider()
 
-            HStack(spacing: Spacing.sm) {
-                // Stop button (when running)
+            HStack(spacing: Spacing.xs) {
+                // Stop button (when running) - compact
                 if claudeState == .running || claudeState == .waiting {
                     Button(action: onStop) {
                         Image(systemName: "stop.fill")
-                            .font(.body)
+                            .font(.system(size: 12))
                             .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 28, height: 28)
                             .background(Color.errorRed)
                             .clipShape(Circle())
                     }
                     .pressEffect()
                 }
 
-                // Prompt input
-                HStack(spacing: Spacing.xs) {
+                // Prompt input - compact
+                HStack(spacing: 6) {
                     TextField("Ask Claude...", text: $promptText, axis: .vertical)
-                        .font(Typography.body)
-                        .lineLimit(1...4)
+                        .font(Typography.footnote)
+                        .lineLimit(1...3)
                         .focused($isFocused)
                         .submitLabel(.send)
                         .onSubmit {
@@ -251,15 +251,15 @@ struct ActionBarView: View {
                             }
                         }
 
-                    // Send button
+                    // Send button - compact
                     Button(action: onSend) {
                         Group {
                             if isLoading {
                                 ProgressView()
-                                    .scaleEffect(0.8)
+                                    .scaleEffect(0.7)
                             } else {
                                 Image(systemName: "arrow.up.circle.fill")
-                                    .font(.title2)
+                                    .font(.system(size: 22))
                             }
                         }
                         .foregroundStyle(promptText.isBlank ? .secondary : Color.primaryBlue)
@@ -267,12 +267,12 @@ struct ActionBarView: View {
                     .disabled(promptText.isBlank || isLoading)
                 }
                 .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, Spacing.xs)
+                .padding(.vertical, 6)
                 .background(Color(.tertiarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .clipShape(RoundedRectangle(cornerRadius: 18))
             }
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, 6)
             .background(Color(.secondarySystemBackground))
         }
     }

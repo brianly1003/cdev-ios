@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Compact log list - terminal-style view
+/// Compact log list - terminal-style view optimized for developer productivity
 struct LogListView: View {
     let logs: [LogEntry]
     let onClear: () -> Void
@@ -18,14 +18,14 @@ struct LogListView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
+                        LazyVStack(alignment: .leading, spacing: 1) {
                             ForEach(logs) { entry in
                                 LogEntryRow(entry: entry, showTimestamp: showTimestamps)
                                     .id(entry.id)
                             }
                         }
-                        .padding(.horizontal, Spacing.sm)
-                        .padding(.vertical, Spacing.xs)
+                        .padding(.horizontal, Spacing.xs)
+                        .padding(.vertical, Spacing.xxs)
                     }
                     .onChange(of: logs.count) { _, _ in
                         // Auto-scroll to bottom
@@ -39,18 +39,6 @@ struct LogListView: View {
                 .background(Color.black)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                if !logs.isEmpty {
-                    Button {
-                        onClear()
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.caption)
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -61,22 +49,29 @@ struct LogEntryRow: View {
     let showTimestamp: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.xs) {
-            // Timestamp
+        HStack(alignment: .top, spacing: 4) {
+            // Compact timestamp (HH:mm:ss only)
             if showTimestamp {
-                Text(entry.formattedTimestamp)
-                    .font(Typography.codeSmall)
-                    .foregroundStyle(Color.gray)
-                    .frame(width: 70, alignment: .leading)
+                Text(compactTimestamp)
+                    .font(Typography.terminalTimestamp)
+                    .foregroundStyle(Color.gray.opacity(0.6))
+                    .frame(width: 48, alignment: .leading)
             }
 
-            // Content
+            // Content - compact terminal font
             Text(entry.content)
-                .font(Typography.code)
+                .font(Typography.terminal)
                 .foregroundStyle(entryColor)
                 .textSelection(.enabled)
+                .lineSpacing(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var compactTimestamp: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: entry.timestamp)
     }
 
     private var entryColor: Color {
@@ -91,7 +86,7 @@ struct LogEntryRow: View {
     }
 }
 
-// MARK: - Empty State
+// MARK: - Compact Empty State
 
 struct EmptyStateView: View {
     let icon: String
@@ -99,21 +94,22 @@ struct EmptyStateView: View {
     let subtitle: String
 
     var body: some View {
-        VStack(spacing: Spacing.md) {
+        VStack(spacing: Spacing.sm) {
             Image(systemName: icon)
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 32))
+                .foregroundStyle(.tertiary)
 
             Text(title)
-                .font(Typography.title3)
-                .foregroundStyle(.primary)
+                .font(Typography.footnote)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
 
             Text(subtitle)
-                .font(Typography.callout)
-                .foregroundStyle(.secondary)
+                .font(Typography.caption2)
+                .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(Spacing.xl)
+        .padding(Spacing.lg)
     }
 }

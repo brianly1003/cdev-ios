@@ -29,6 +29,11 @@ enum Typography {
     static let codeSmall: Font = .system(.caption, design: .monospaced)
     static let codeLarge: Font = .system(.title3, design: .monospaced)
 
+    // Terminal-optimized (compact)
+    static let terminal: Font = .system(size: 12, weight: .regular, design: .monospaced)
+    static let terminalSmall: Font = .system(size: 10, weight: .regular, design: .monospaced)
+    static let terminalTimestamp: Font = .system(size: 9, weight: .regular, design: .monospaced)
+
     // MARK: - Rounded (for numbers/stats)
 
     static let statLarge: Font = .system(.largeTitle, design: .rounded).bold()
