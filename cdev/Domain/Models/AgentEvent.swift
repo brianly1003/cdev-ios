@@ -33,7 +33,7 @@ struct AgentEvent: Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id
-        case type
+        case type = "event"  // Agent sends "event", not "type"
         case payload
         case timestamp
     }
