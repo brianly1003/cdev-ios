@@ -34,7 +34,7 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
 }
 
 /// Protocol for HTTP API operations
-protocol HTTPServiceProtocol {
+protocol HTTPServiceProtocol: AnyObject {
     /// Base URL for HTTP requests
     var baseURL: URL? { get set }
 

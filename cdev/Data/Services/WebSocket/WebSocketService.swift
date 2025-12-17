@@ -49,33 +49,89 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
 
         guard let session = session else {
+            updateState(.failed(reason: "Failed to create session"))
             throw AppError.connectionFailed(underlying: nil)
         }
 
         webSocket = session.webSocketTask(with: connectionInfo.webSocketURL)
         webSocket?.resume()
 
-        // Wait for connection or timeout
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            Task {
-                // Start receiving messages
-                self.receiveMessage()
-
-                // Check connection with a ping
-                do {
-                    webSocket?.sendPing { error in
-                        if let error = error {
-                            continuation.resume(throwing: AppError.connectionFailed(underlying: error))
-                        } else {
-                            self.updateState(.connected(connectionInfo))
-                            continuation.resume()
-                        }
-                    }
+        // Wait for connection with timeout
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                // Timeout task
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(Constants.Network.connectionTimeout * 1_000_000_000))
+                    throw AppError.connectionTimeout
                 }
+
+                // Connection task
+                group.addTask {
+                    try await self.waitForConnection(connectionInfo: connectionInfo)
+                }
+
+                // Wait for first to complete (connection success or timeout)
+                try await group.next()
+                group.cancelAll()
             }
+        } catch {
+            // Clean up on failure
+            webSocket?.cancel(with: .abnormalClosure, reason: nil)
+            webSocket = nil
+            self.session?.invalidateAndCancel()
+            self.session = nil
+
+            let errorMessage = Self.friendlyErrorMessage(from: error)
+            updateState(.failed(reason: errorMessage))
+            AppLogger.webSocket("Connection failed: \(errorMessage)", type: .error)
+            throw error
         }
 
         startPingTimer()
+    }
+
+    private func waitForConnection(connectionInfo: ConnectionInfo) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            // Start receiving messages
+            self.receiveMessage()
+
+            // Check connection with a ping
+            self.webSocket?.sendPing { [weak self] error in
+                if let error = error {
+                    continuation.resume(throwing: AppError.connectionFailed(underlying: error))
+                } else {
+                    self?.updateState(.connected(connectionInfo))
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private static func friendlyErrorMessage(from error: Error) -> String {
+        if let appError = error as? AppError {
+            switch appError {
+            case .connectionTimeout:
+                return "Connection timed out"
+            case .connectionFailed:
+                return "Could not connect to server"
+            default:
+                return appError.localizedDescription
+            }
+        }
+
+        let nsError = error as NSError
+        switch nsError.code {
+        case -1004: // kCFURLErrorCannotConnectToHost
+            return "Server not reachable"
+        case -1001: // kCFURLErrorTimedOut
+            return "Connection timed out"
+        case -1009: // kCFURLErrorNotConnectedToInternet
+            return "No internet connection"
+        case 61: // Connection refused
+            return "Connection refused - is the server running?"
+        default:
+            return nsError.localizedDescription
+        }
     }
 
     func disconnect() {
@@ -195,13 +251,21 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     private func handleDisconnect(error: Error) {
-        if case .connected = connectionState {
-            updateState(.failed(reason: error.localizedDescription))
+        let errorMessage = Self.friendlyErrorMessage(from: error)
 
-            // Attempt reconnect
+        switch connectionState {
+        case .connected:
+            updateState(.failed(reason: errorMessage))
+            // Attempt reconnect only if was connected
             Task {
                 try? await reconnect()
             }
+        case .connecting, .reconnecting:
+            // Connection failed during initial connect - update state
+            updateState(.failed(reason: errorMessage))
+        case .disconnected, .failed:
+            // Already in terminal state, ignore
+            break
         }
     }
 
@@ -239,6 +303,10 @@ extension WebSocketService: URLSessionWebSocketDelegate {
     ) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) }
         AppLogger.webSocket("WebSocket closed: \(closeCode.rawValue)")
-        updateState(.connectionClosed(reason: reasonString))
+        if let reason = reasonString {
+            updateState(.failed(reason: reason))
+        } else {
+            updateState(.disconnected)
+        }
     }
 }

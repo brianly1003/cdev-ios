@@ -1,24 +1,34 @@
 import Foundation
 
 /// Connection information for pairing with agent
+/// Matches cdev-agent's PairingInfo struct from internal/pairing/qrcode.go
 struct ConnectionInfo: Codable, Equatable {
     let webSocketURL: URL
     let httpURL: URL
     let sessionId: String
     let repoName: String
+    let token: String?
 
+    /// JSON keys match cdev-agent's PairingInfo:
+    /// - ws: WebSocket URL
+    /// - http: HTTP API URL
+    /// - session: Session ID
+    /// - repo: Repository name
+    /// - token: Optional pairing token
     enum CodingKeys: String, CodingKey {
-        case webSocketURL = "ws_url"
-        case httpURL = "http_url"
-        case sessionId = "session_id"
-        case repoName = "repo_name"
+        case webSocketURL = "ws"
+        case httpURL = "http"
+        case sessionId = "session"
+        case repoName = "repo"
+        case token
     }
 
-    init(webSocketURL: URL, httpURL: URL, sessionId: String, repoName: String) {
+    init(webSocketURL: URL, httpURL: URL, sessionId: String, repoName: String, token: String? = nil) {
         self.webSocketURL = webSocketURL
         self.httpURL = httpURL
         self.sessionId = sessionId
         self.repoName = repoName
+        self.token = token
     }
 
     init(from decoder: Decoder) throws {
@@ -46,6 +56,7 @@ struct ConnectionInfo: Codable, Equatable {
 
         self.sessionId = try container.decode(String.self, forKey: .sessionId)
         self.repoName = try container.decode(String.self, forKey: .repoName)
+        self.token = try container.decodeIfPresent(String.self, forKey: .token)
     }
 
     /// Host address (for display)

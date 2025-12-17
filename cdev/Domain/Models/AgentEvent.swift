@@ -168,7 +168,7 @@ struct ClaudeWaitingPayload: Codable {
     }
 }
 
-struct QuestionOption: Codable, Identifiable {
+struct QuestionOption: Codable, Identifiable, Equatable {
     var id: String { label }
     let label: String
     let description: String?

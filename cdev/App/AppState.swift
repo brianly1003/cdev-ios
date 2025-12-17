@@ -8,6 +8,32 @@ final class AppState: ObservableObject {
 
     @Published var connectionState: ConnectionState = .disconnected
 
+    // MARK: - QR Scan Debouncing (persists across PairingViewModel instances)
+
+    var lastScannedCode: String?
+    var lastScanTime: Date?
+    let scanDebounceInterval: TimeInterval = 3.0
+
+    func shouldProcessScan(code: String) -> Bool {
+        if let lastCode = lastScannedCode,
+           let lastTime = lastScanTime,
+           lastCode == code,
+           Date().timeIntervalSince(lastTime) < scanDebounceInterval {
+            return false
+        }
+        return true
+    }
+
+    func recordScan(code: String) {
+        lastScannedCode = code
+        lastScanTime = Date()
+    }
+
+    func clearScanHistory() {
+        lastScannedCode = nil
+        lastScanTime = nil
+    }
+
     // MARK: - Dependencies
 
     private let webSocketService: WebSocketServiceProtocol
@@ -62,7 +88,8 @@ final class AppState: ObservableObject {
         PairingViewModel(
             parseQRCodeUseCase: parseQRCodeUseCase,
             connectToAgentUseCase: connectToAgentUseCase,
-            httpService: httpService
+            httpService: httpService,
+            appState: self
         )
     }
 
@@ -75,6 +102,14 @@ final class AppState: ObservableObject {
             logCache: logCache,
             diffCache: diffCache
         )
+    }
+
+    // MARK: - Public Actions
+
+    /// Cancel ongoing connection attempt
+    func cancelConnection() {
+        AppLogger.log("Cancelling connection")
+        webSocketService.disconnect()
     }
 
     // MARK: - Private

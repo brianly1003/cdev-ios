@@ -12,8 +12,11 @@ struct RootView: View {
                 PairingView(viewModel: appState.makePairingViewModel())
 
             case .connecting, .reconnecting:
-                // Show connecting state
-                ConnectingView(state: appState.connectionState)
+                // Show connecting state with cancel option
+                ConnectingView(
+                    state: appState.connectionState,
+                    onCancel: { appState.cancelConnection() }
+                )
 
             case .connected:
                 // Show main dashboard
@@ -28,21 +31,37 @@ struct RootView: View {
 
 struct ConnectingView: View {
     let state: ConnectionState
+    let onCancel: () -> Void
 
     var body: some View {
-        VStack(spacing: Spacing.lg) {
-            ProgressView()
-                .scaleEffect(1.5)
+        NavigationStack {
+            VStack(spacing: Spacing.lg) {
+                Spacer()
 
-            Text(state.statusText)
-                .font(Typography.bodyBold)
+                ProgressView()
+                    .scaleEffect(1.5)
 
-            if case .reconnecting(let attempt) = state {
-                Text("Attempt \(attempt) of \(Constants.Network.maxReconnectAttempts)")
-                    .font(Typography.caption1)
-                    .foregroundStyle(.secondary)
+                Text(state.statusText)
+                    .font(Typography.bodyBold)
+
+                if case .reconnecting(let attempt) = state {
+                    Text("Attempt \(attempt) of \(Constants.Network.maxReconnectAttempts)")
+                        .font(Typography.caption1)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("Connect")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        onCancel()
+                    }
+                }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

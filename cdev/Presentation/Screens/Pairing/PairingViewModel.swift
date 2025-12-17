@@ -16,17 +16,20 @@ final class PairingViewModel: ObservableObject {
     private let parseQRCodeUseCase: ParseQRCodeUseCase
     private let connectToAgentUseCase: ConnectToAgentUseCase
     private let httpService: HTTPServiceProtocol
+    private weak var appState: AppState?
 
     // MARK: - Init
 
     init(
         parseQRCodeUseCase: ParseQRCodeUseCase,
         connectToAgentUseCase: ConnectToAgentUseCase,
-        httpService: HTTPServiceProtocol
+        httpService: HTTPServiceProtocol,
+        appState: AppState
     ) {
         self.parseQRCodeUseCase = parseQRCodeUseCase
         self.connectToAgentUseCase = connectToAgentUseCase
         self.httpService = httpService
+        self.appState = appState
 
         checkCameraPermission()
     }
@@ -49,6 +52,21 @@ final class PairingViewModel: ObservableObject {
     // MARK: - QR Code Handling
 
     func handleScannedCode(_ code: String) async {
+        // Debounce: Skip if same code scanned recently (check AppState)
+        guard appState?.shouldProcessScan(code: code) == true else {
+            AppLogger.log("Ignoring duplicate QR scan (debounced)")
+            return
+        }
+
+        // Also skip if already connecting
+        guard !isConnecting else {
+            AppLogger.log("Ignoring QR scan - already connecting")
+            return
+        }
+
+        // Record this scan in AppState (persists across ViewModel instances)
+        appState?.recordScan(code: code)
+
         isConnecting = true
         Haptics.success()
 
@@ -109,6 +127,9 @@ final class PairingViewModel: ObservableObject {
 
             // Connect via WebSocket
             try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+
+            // Clear scan history on successful connection
+            appState?.clearScanHistory()
 
             isConnected = true
             Haptics.success()
