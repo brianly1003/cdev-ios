@@ -55,13 +55,13 @@ enum AppLogger {
         #if DEBUG
         switch type {
         case .info:
-            webSocketLog.info("\(message)")
+            webSocketLog.info("[WS] \(message)")
         case .success:
-            webSocketLog.info("[SUCCESS] \(message)")
+            webSocketLog.info("[WS] ✓ \(message)")
         case .warning:
-            webSocketLog.warning("[WARNING] \(message)")
+            webSocketLog.warning("[WS] ⚠ \(message)")
         case .error:
-            webSocketLog.error("[ERROR] \(message)")
+            webSocketLog.error("[WS] ✗ \(message)")
         }
         #endif
     }

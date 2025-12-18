@@ -42,6 +42,10 @@ final class DashboardViewModel: ObservableObject {
     private var eventTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
 
+    // Debouncing for log updates to prevent UI lag
+    private var logUpdateScheduled = false
+    private var diffUpdateScheduled = false
+
     // MARK: - Init
 
     init(
@@ -79,6 +83,47 @@ final class DashboardViewModel: ObservableObject {
         stateTask?.cancel()
     }
 
+    // MARK: - Debounced Updates
+
+    /// Schedule a debounced log UI update to prevent main thread blocking
+    /// Uses flag-based coalescing - only one update runs per 100ms window
+    private func scheduleLogUpdate() {
+        guard !logUpdateScheduled else { return }
+        logUpdateScheduled = true
+
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            guard let self = self else { return }
+            self.logUpdateScheduled = false
+            self.logs = await self.logCache.getAll()
+        }
+    }
+
+    /// Schedule a debounced diff UI update
+    private func scheduleDiffUpdate() {
+        guard !diffUpdateScheduled else { return }
+        diffUpdateScheduled = true
+
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            guard let self = self else { return }
+            self.diffUpdateScheduled = false
+            self.diffs = await self.diffCache.getAll()
+        }
+    }
+
+    /// Force immediate log update (for user actions)
+    private func forceLogUpdate() async {
+        logUpdateScheduled = false
+        logs = await logCache.getAll()
+    }
+
+    /// Force immediate diff update
+    private func forceDiffUpdate() async {
+        diffUpdateScheduled = false
+        diffs = await diffCache.getAll()
+    }
+
     // MARK: - Public Actions
 
     /// Send prompt to Claude (or handle built-in commands)
@@ -103,7 +148,7 @@ final class DashboardViewModel: ObservableObject {
             stream: .user
         )
         await logCache.add(userEntry)
-        logs = await logCache.getAll()
+        await forceLogUpdate() // Immediate for user action
 
         do {
             // If Claude is waiting for a response, use respondToClaude
@@ -169,7 +214,7 @@ final class DashboardViewModel: ObservableObject {
                 stream: .system
             )
             await logCache.add(helpEntry)
-            logs = await logCache.getAll()
+            await forceLogUpdate()
         }
     }
 
@@ -204,7 +249,7 @@ final class DashboardViewModel: ObservableObject {
                     await logCache.add(entry)
                 }
             }
-            logs = await logCache.getAll()
+            await forceLogUpdate()
 
             // Add system message
             let resumeEntry = LogEntry(
@@ -212,7 +257,7 @@ final class DashboardViewModel: ObservableObject {
                 stream: .system
             )
             await logCache.add(resumeEntry)
-            logs = await logCache.getAll()
+            await forceLogUpdate()
 
             Haptics.success()
         } catch {
@@ -236,7 +281,7 @@ final class DashboardViewModel: ObservableObject {
             stream: .system
         )
         await logCache.add(newEntry)
-        logs = await logCache.getAll()
+        await forceLogUpdate()
         Haptics.success()
     }
 
@@ -251,7 +296,7 @@ final class DashboardViewModel: ObservableObject {
             stream: .system
         )
         await logCache.add(clearEntry)
-        logs = await logCache.getAll()
+        await forceLogUpdate()
         Haptics.success()
     }
 
@@ -286,7 +331,7 @@ final class DashboardViewModel: ObservableObject {
                 stream: .system
             )
             await logCache.add(entry)
-            logs = await logCache.getAll()
+            await forceLogUpdate()
             Haptics.success()
         } catch {
             AppLogger.error(error, context: "Delete all sessions")
@@ -309,7 +354,7 @@ final class DashboardViewModel: ObservableObject {
             stream: .system
         )
         await logCache.add(helpEntry)
-        logs = await logCache.getAll()
+        await forceLogUpdate()
     }
 
     /// Stop Claude
@@ -398,7 +443,7 @@ final class DashboardViewModel: ObservableObject {
                 let entry = DiffEntry.from(gitFile: file)
                 await diffCache.add(entry)
             }
-            diffs = await diffCache.getAll()
+            await forceDiffUpdate()
         } catch {
             AppLogger.error(error, context: "Refresh git status")
         }
@@ -467,7 +512,7 @@ final class DashboardViewModel: ObservableObject {
             }
 
             // Update logs array
-            logs = await logCache.getAll()
+            await forceLogUpdate()
             AppLogger.log("Loaded \(messagesResponse.count) messages from session history, total logs: \(logs.count)")
         } catch {
             // Log the actual error for debugging
@@ -509,7 +554,7 @@ final class DashboardViewModel: ObservableObject {
         case .claudeLog:
             if let entry = LogEntry.from(event: event) {
                 await logCache.add(entry)
-                logs = await logCache.getAll()
+                scheduleLogUpdate() // Debounced - prevents UI lag with rapid logs
             }
             // Capture sessionId from log events
             if case .claudeLog(let payload) = event.payload,
@@ -554,7 +599,7 @@ final class DashboardViewModel: ObservableObject {
         case .gitDiff:
             if let entry = DiffEntry.from(event: event) {
                 await diffCache.add(entry)
-                diffs = await diffCache.getAll()
+                scheduleDiffUpdate() // Debounced
             }
 
         case .fileChanged:
@@ -564,10 +609,10 @@ final class DashboardViewModel: ObservableObject {
                 // If file was deleted, remove from cache
                 if payload.change == .deleted {
                     await diffCache.remove(path: path)
-                    diffs = await diffCache.getAll()
+                    scheduleDiffUpdate()
                 } else if let entry = DiffEntry.fromFileChanged(event: event) {
                     await diffCache.add(entry)
-                    diffs = await diffCache.getAll()
+                    scheduleDiffUpdate()
                 }
             }
 

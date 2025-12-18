@@ -1,6 +1,8 @@
 import Foundation
+import Network
 
 /// WebSocket service for real-time communication with agent
+/// Enhanced with mobile-optimized stability features per WEBSOCKET-STABILITY.md
 final class WebSocketService: NSObject, WebSocketServiceProtocol {
     // MARK: - Properties
 
@@ -19,6 +21,25 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         connectionState.isConnected
     }
 
+    // MARK: - Stability Properties
+
+    /// Last received message timestamp for connection health monitoring
+    /// Updated on ANY received message (not just heartbeats)
+    private var lastActivityTime: Date?
+
+    /// Network path monitor for detecting network changes
+    private var networkMonitor: NWPathMonitor?
+    private var networkMonitorQueue: DispatchQueue?
+    private var isNetworkAvailable = true
+
+    /// DispatchSource timers for reliable timing (not affected by run loop)
+    private var pingTimer: DispatchSourceTimer?
+    private var heartbeatCheckTimer: DispatchSourceTimer?
+    private let timerQueue = DispatchQueue(label: "com.cdev.websocket.timers", qos: .utility)
+
+    /// Track if we should attempt reconnection
+    private var shouldAutoReconnect = true
+
     // MARK: - Streams
 
     private var stateStreamContinuation: AsyncStream<ConnectionState>.Continuation?
@@ -36,11 +57,171 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
     }()
 
+    // MARK: - Init
+
+    override init() {
+        super.init()
+        setupNetworkMonitor()
+    }
+
+    deinit {
+        stopNetworkMonitor()
+        stopTimers()
+    }
+
+    // MARK: - Network Monitoring
+
+    /// Setup NWPathMonitor to detect network changes (WiFi ↔ Cellular transitions)
+    private func setupNetworkMonitor() {
+        networkMonitorQueue = DispatchQueue(label: "com.cdev.networkmonitor", qos: .utility)
+        networkMonitor = NWPathMonitor()
+
+        networkMonitor?.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+
+            let wasAvailable = self.isNetworkAvailable
+            self.isNetworkAvailable = path.status == .satisfied
+
+            AppLogger.webSocket("Network status: \(path.status == .satisfied ? "available" : "unavailable")")
+
+            // If network was lost and is now available, and we were connected, reconnect
+            if !wasAvailable && self.isNetworkAvailable {
+                AppLogger.webSocket("Network restored - checking connection", type: .info)
+                self.handleNetworkRestored()
+            }
+
+            // If network was lost while connected, prepare for reconnection
+            if wasAvailable && !self.isNetworkAvailable {
+                AppLogger.webSocket("Network lost", type: .warning)
+            }
+        }
+
+        networkMonitor?.start(queue: networkMonitorQueue!)
+    }
+
+    private func stopNetworkMonitor() {
+        networkMonitor?.cancel()
+        networkMonitor = nil
+        networkMonitorQueue = nil
+    }
+
+    /// Handle network restoration - attempt reconnection if needed
+    private func handleNetworkRestored() {
+        Task { @MainActor in
+            switch self.connectionState {
+            case .failed, .disconnected:
+                // Attempt to reconnect if we have connection info
+                if self.connectionInfo != nil && self.shouldAutoReconnect {
+                    AppLogger.webSocket("Attempting reconnection after network restore")
+                    try? await self.reconnect()
+                }
+            case .connected:
+                // Already connected, verify with ping
+                let success = try? await self.ping()
+                if success != true {
+                    AppLogger.webSocket("Connection stale after network change - reconnecting")
+                    try? await self.reconnect()
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: - Timer Management
+
+    private func startTimers() {
+        startPingTimer()
+        startHeartbeatCheckTimer()
+    }
+
+    private func stopTimers() {
+        pingTimer?.cancel()
+        pingTimer = nil
+        heartbeatCheckTimer?.cancel()
+        heartbeatCheckTimer = nil
+    }
+
+    /// Start ping timer using DispatchSourceTimer for reliability
+    private func startPingTimer() {
+        pingTimer?.cancel()
+
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer.schedule(
+            deadline: .now() + Constants.Network.pingInterval,
+            repeating: Constants.Network.pingInterval
+        )
+        timer.setEventHandler { [weak self] in
+            Task {
+                await self?.handlePingTick()
+            }
+        }
+        timer.resume()
+        pingTimer = timer
+    }
+
+    /// Handle ping timer tick - send ping and handle failures
+    private func handlePingTick() async {
+        guard isConnected else { return }
+
+        let success = try? await ping()
+        if success != true {
+            AppLogger.webSocket("Ping failed - connection may be stale", type: .warning)
+
+            // Trigger reconnection on ping failure
+            await MainActor.run {
+                self.triggerReconnection(reason: "Ping failed")
+            }
+        }
+    }
+
+    /// Start activity check timer
+    private func startHeartbeatCheckTimer() {
+        heartbeatCheckTimer?.cancel()
+
+        // Initialize last activity time on connection
+        lastActivityTime = Date()
+
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        // Check every 5 seconds if connection is stale (no messages received)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            Task {
+                await self?.checkActivity()
+            }
+        }
+        timer.resume()
+        heartbeatCheckTimer = timer
+    }
+
+    /// Check if connection is stale (no messages received) and trigger reconnection
+    private func checkActivity() async {
+        guard isConnected else { return }
+
+        guard let lastActivity = lastActivityTime else { return }
+
+        let elapsed = Date().timeIntervalSince(lastActivity)
+
+        if elapsed > Constants.Network.heartbeatTimeout {
+            AppLogger.webSocket("Connection stale - no messages for \(Int(elapsed))s", type: .warning)
+
+            await MainActor.run {
+                self.triggerReconnection(reason: "No activity timeout")
+            }
+        }
+    }
+
+    /// Update last activity timestamp (called on any received message)
+    func updateLastActivity() {
+        lastActivityTime = Date()
+    }
+
     // MARK: - Connection
 
     func connect(to connectionInfo: ConnectionInfo) async throws {
         self.connectionInfo = connectionInfo
         reconnectAttempts = 0
+        shouldAutoReconnect = true
 
         updateState(.connecting)
 
@@ -87,7 +268,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             throw error
         }
 
-        startPingTimer()
+        // Start stability timers on successful connection
+        startTimers()
     }
 
     private func waitForConnection(connectionInfo: ConnectionInfo) async throws {
@@ -136,6 +318,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
     func disconnect() {
         AppLogger.webSocket("Disconnecting")
+        shouldAutoReconnect = false
+        stopTimers()
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         session?.invalidateAndCancel()
@@ -143,9 +327,25 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         updateState(.disconnected)
     }
 
+    /// Trigger reconnection from stability checks (ping/heartbeat failures)
+    private func triggerReconnection(reason: String) {
+        guard !isReconnecting else { return }
+
+        switch connectionState {
+        case .connected, .failed:
+            AppLogger.webSocket("Triggering reconnection: \(reason)")
+            Task {
+                try? await reconnect()
+            }
+        default:
+            break
+        }
+    }
+
     func reconnect() async throws {
         guard let connectionInfo = connectionInfo,
-              !isReconnecting else { return }
+              !isReconnecting,
+              shouldAutoReconnect else { return }
 
         isReconnecting = true
 
@@ -160,20 +360,25 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         updateState(.reconnecting(attempt: reconnectAttempts))
 
         // Clean up old connection first
-        pingTimer?.invalidate()
-        pingTimer = nil
+        stopTimers()
         webSocket?.cancel(with: .goingAway, reason: nil)
         webSocket = nil
         session?.invalidateAndCancel()
         session = nil
 
-        // Exponential backoff
-        let delay = Constants.Network.reconnectDelay * pow(2, Double(reconnectAttempts - 1))
+        // Exponential backoff with max cap
+        let delay = min(
+            Constants.Network.reconnectDelay * pow(2, Double(reconnectAttempts - 1)),
+            Constants.Network.maxReconnectDelay
+        )
+        AppLogger.webSocket("Reconnect attempt \(reconnectAttempts) in \(String(format: "%.1f", delay))s")
         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
         do {
             try await connect(to: connectionInfo)
             isReconnecting = false
+            reconnectAttempts = 0
+            AppLogger.webSocket("Reconnection successful", type: .success)
         } catch {
             isReconnecting = false
             throw error
@@ -239,6 +444,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
+        // Any received message proves connection is alive - update last activity time
+        updateLastActivity()
+
         switch message {
         case .string(let text):
             parseEvent(from: text)
@@ -264,6 +472,13 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
             do {
                 let event = try decoder.decode(AgentEvent.self, from: data)
+
+                // Handle heartbeat events - don't forward to event stream
+                if event.type == .heartbeat {
+                    AppLogger.webSocket("Heartbeat received")
+                    continue
+                }
+
                 eventStreamContinuation?.yield(event)
                 AppLogger.webSocket("Received event: \(event.type.rawValue)")
             } catch {
@@ -284,9 +499,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         switch connectionState {
         case .connected:
             updateState(.failed(reason: errorMessage))
-            // Attempt reconnect only if was connected
-            Task {
-                try? await reconnect()
+            // Attempt reconnect only if was connected and auto-reconnect is enabled
+            if shouldAutoReconnect {
+                Task {
+                    try? await reconnect()
+                }
             }
         case .connecting:
             // Connection failed during initial connect - update state
@@ -300,18 +517,41 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
     }
 
-    private var pingTimer: Timer?
+    // MARK: - App Lifecycle Support
 
-    private func startPingTimer() {
-        pingTimer?.invalidate()
-        pingTimer = Timer.scheduledTimer(withTimeInterval: Constants.Network.pingInterval, repeats: true) { [weak self] _ in
-            Task {
-                let success = try? await self?.ping()
+    /// Called when app enters foreground - verify connection and reconnect if needed
+    func handleAppDidBecomeActive() {
+        AppLogger.webSocket("App became active - checking connection")
+
+        Task {
+            switch connectionState {
+            case .connected:
+                // Verify connection is still alive
+                let success = try? await ping()
                 if success != true {
-                    AppLogger.webSocket("Ping failed", type: .warning)
+                    AppLogger.webSocket("Connection stale after foregrounding - reconnecting")
+                    try? await reconnect()
+                } else {
+                    // Reset activity timer since we just verified connection
+                    updateLastActivity()
                 }
+            case .failed, .disconnected:
+                // Attempt reconnection if we have connection info
+                if connectionInfo != nil && shouldAutoReconnect {
+                    AppLogger.webSocket("Reconnecting after foregrounding")
+                    try? await reconnect()
+                }
+            default:
+                break
             }
         }
+    }
+
+    /// Called when app enters background - prepare for potential disconnection
+    func handleAppWillResignActive() {
+        AppLogger.webSocket("App will resign active")
+        // Note: iOS will keep the connection alive briefly, but we should be
+        // prepared to reconnect when foregrounding
     }
 }
 

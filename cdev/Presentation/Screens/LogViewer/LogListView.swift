@@ -32,6 +32,7 @@ struct LogListView: View {
                         }
                         .padding(.horizontal, Spacing.xs)
                         .padding(.top, Spacing.xxs)
+                        .padding(.bottom, Spacing.sm)
                     }
                     .onChange(of: logs.count) { oldCount, newCount in
                         // Auto-scroll to bottom when logs change

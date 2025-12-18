@@ -50,6 +50,7 @@ struct DashboardView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .dismissKeyboardOnTap()
+                .background(ColorSystem.terminalBg)
                 // Use safeAreaInset so ScrollView accounts for action bar height
                 .safeAreaInset(edge: .bottom) {
                     if viewModel.selectedTab == .logs {
@@ -64,6 +65,7 @@ struct DashboardView: View {
                     }
                 }
             }
+            .background(ColorSystem.terminalBg)
             .animation(Animations.stateChange, value: viewModel.selectedTab)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -217,7 +219,7 @@ struct StatusBarView: View {
                 }
                 .foregroundStyle(ColorSystem.textQuaternary)
                 .padding(.horizontal, Spacing.sm)
-                .padding(.bottom, 4)
+                .padding(.bottom, Spacing.xxs)
             }
         }
         .background(ColorSystem.terminalBgElevated)
@@ -468,10 +470,9 @@ struct ActionBarView: View {
                 )
             }
             .padding(.horizontal, Spacing.sm)
-            // .padding(.vertical, Spacing.sm)
+            .padding(.vertical, Spacing.sm)
             .background(ColorSystem.terminalBgElevated)
         }
-        .padding(.top, Spacing.sm)  // Extra space between chat and input
         .background(ColorSystem.terminalBg)
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)

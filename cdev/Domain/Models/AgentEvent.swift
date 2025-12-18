@@ -14,6 +14,7 @@ enum AgentEventType: String, Codable {
     case sessionEnd = "session_end"
     case statusResponse = "status_response"
     case fileContent = "file_content"
+    case heartbeat = "heartbeat"
     case error = "error"
 }
 
@@ -65,6 +66,7 @@ enum AgentEventPayload: Codable {
     case sessionLifecycle(SessionLifecyclePayload)
     case statusResponse(StatusResponsePayload)
     case fileContent(FileContentPayload)
+    case heartbeat(HeartbeatPayload)
     case error(ErrorPayload)
     case unknown
 
@@ -90,6 +92,8 @@ enum AgentEventPayload: Codable {
             self = .statusResponse(payload)
         } else if let payload = try? container.decode(FileContentPayload.self), payload.content != nil {
             self = .fileContent(payload)
+        } else if let payload = try? container.decode(HeartbeatPayload.self), payload.serverTime != nil {
+            self = .heartbeat(payload)
         } else if let payload = try? container.decode(ErrorPayload.self), payload.message != nil {
             self = .error(payload)
         } else {
@@ -119,6 +123,8 @@ enum AgentEventPayload: Codable {
         case .statusResponse(let payload):
             try container.encode(payload)
         case .fileContent(let payload):
+            try container.encode(payload)
+        case .heartbeat(let payload):
             try container.encode(payload)
         case .error(let payload):
             try container.encode(payload)
@@ -257,6 +263,21 @@ struct FileContentPayload: Codable {
     let content: String?
     let encoding: String?
     let truncated: Bool?
+}
+
+/// Heartbeat event payload for connection health monitoring
+struct HeartbeatPayload: Codable {
+    let serverTime: String?
+    let sequence: Int?
+    let claudeStatus: String?
+    let uptimeSeconds: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case serverTime = "server_time"
+        case sequence
+        case claudeStatus = "claude_status"
+        case uptimeSeconds = "uptime_seconds"
+    }
 }
 
 struct ErrorPayload: Codable {

@@ -6,11 +6,19 @@ enum Constants {
     enum Network {
         static let defaultHTTPPort = 8766
         static let defaultWSPort = 8765
-        static let connectionTimeout: TimeInterval = 15
-        static let requestTimeout: TimeInterval = 60  // Increased for dev tunnels
-        static let pingInterval: TimeInterval = 30
-        static let maxReconnectAttempts = 5
-        static let reconnectDelay: TimeInterval = 2
+        static let connectionTimeout: TimeInterval = 30       // Increased for dev tunnels
+        static let requestTimeout: TimeInterval = 120         // 2 min for dev tunnels with slow ops
+        static let requestTimeoutLocal: TimeInterval = 30     // Faster for localhost
+
+        // WebSocket stability settings (mobile-optimized per WEBSOCKET-STABILITY.md)
+        static let pingInterval: TimeInterval = 30           // WebSocket ping interval
+        static let heartbeatInterval: TimeInterval = 30      // Server sends heartbeat every 30s
+        static let heartbeatTimeout: TimeInterval = 45       // Reconnect if no heartbeat for 45s (1.5x interval)
+        static let maxReconnectAttempts = 10                 // Increased for mobile (was 5)
+        static let reconnectDelay: TimeInterval = 1          // Initial delay (was 2)
+        static let maxReconnectDelay: TimeInterval = 30      // Cap exponential backoff at 30s
+
+        // HTTP settings
         static let httpMaxRetries = 3
         static let httpRetryDelay: TimeInterval = 1.0
     }

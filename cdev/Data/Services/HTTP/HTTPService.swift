@@ -4,12 +4,25 @@ import Foundation
 final class HTTPService: HTTPServiceProtocol {
     // MARK: - Properties
 
-    var baseURL: URL?
-    private let session: URLSession
+    var baseURL: URL? {
+        didSet {
+            // Recreate session with appropriate timeout when baseURL changes
+            if let url = baseURL {
+                updateSession(for: url)
+            }
+        }
+    }
+    private var session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let maxRetries: Int
-    private let retryDelay: TimeInterval
+    private let baseRetryDelay: TimeInterval
+
+    /// Whether current connection is to a remote server (dev tunnel, not localhost)
+    private var isRemoteConnection: Bool {
+        guard let host = baseURL?.host else { return false }
+        return host != "localhost" && host != "127.0.0.1" && !host.hasPrefix("192.168.")
+    }
 
     // MARK: - Init
 
@@ -17,6 +30,7 @@ final class HTTPService: HTTPServiceProtocol {
         maxRetries: Int = Constants.Network.httpMaxRetries,
         retryDelay: TimeInterval = Constants.Network.httpRetryDelay
     ) {
+        // Start with default timeout, will be updated when baseURL is set
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = Constants.Network.requestTimeout
         configuration.timeoutIntervalForResource = Constants.Network.requestTimeout * 2
@@ -25,7 +39,25 @@ final class HTTPService: HTTPServiceProtocol {
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
         self.maxRetries = maxRetries
-        self.retryDelay = retryDelay
+        self.baseRetryDelay = retryDelay
+    }
+
+    /// Update session configuration based on connection type
+    private func updateSession(for url: URL) {
+        let host = url.host ?? ""
+        let isLocal = host == "localhost" || host == "127.0.0.1" || host.hasPrefix("192.168.")
+
+        let timeout = isLocal ? Constants.Network.requestTimeoutLocal : Constants.Network.requestTimeout
+
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout * 2
+
+        // Invalidate old session and create new one
+        session.invalidateAndCancel()
+        session = URLSession(configuration: configuration)
+
+        AppLogger.network("HTTP timeout set to \(Int(timeout))s for \(isLocal ? "local" : "remote") connection")
     }
 
     // MARK: - Public Methods
@@ -181,7 +213,7 @@ final class HTTPService: HTTPServiceProtocol {
         return retryableCodes.contains(nsError.code)
     }
 
-    /// Execute request with automatic retry for transient errors
+    /// Execute request with automatic retry for transient errors (exponential backoff)
     private func executeWithRetry(
         request: URLRequest,
         path: String,
@@ -191,8 +223,12 @@ final class HTTPService: HTTPServiceProtocol {
             return try await session.data(for: request)
         } catch {
             if isRetryableError(error) && attempt < maxRetries {
-                AppLogger.network("Retry \(attempt + 1)/\(maxRetries) for \(path) after error: \(error.localizedDescription)")
-                try await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                // Exponential backoff: 1s, 2s, 4s for remote; 0.5s, 1s, 2s for local
+                let backoffMultiplier = isRemoteConnection ? 2.0 : 1.0
+                let delay = baseRetryDelay * backoffMultiplier * pow(2, Double(attempt))
+
+                AppLogger.network("Retry \(attempt + 1)/\(maxRetries) for \(path) in \(String(format: "%.1f", delay))s")
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 return try await executeWithRetry(request: request, path: path, attempt: attempt + 1)
             }
             throw error

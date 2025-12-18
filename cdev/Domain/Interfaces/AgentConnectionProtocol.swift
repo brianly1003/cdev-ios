@@ -31,6 +31,12 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
 
     /// Ping server to check connection health
     func ping() async throws -> Bool
+
+    /// Handle app becoming active (foreground)
+    func handleAppDidBecomeActive()
+
+    /// Handle app resigning active (background)
+    func handleAppWillResignActive()
 }
 
 /// Protocol for HTTP API operations
