@@ -88,7 +88,8 @@ struct RunClaudePayload: Codable {
 enum SessionMode: String, Codable {
     case new
     case `continue`
-    case resume
+    // Note: 'resume' mode was removed from cdev-agent API
+    // Use 'continue' with session_id to continue a specific session
 }
 
 struct RespondToClaudePayload: Codable {

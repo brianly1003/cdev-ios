@@ -30,7 +30,7 @@ struct DashboardView: View {
                 // Tab selector
                 CompactTabSelector(
                     selectedTab: $viewModel.selectedTab,
-                    logsCount: viewModel.logs.count,
+                    logsCount: viewModel.logsCountForBadge,
                     diffsCount: viewModel.diffs.count
                 )
 
@@ -44,7 +44,8 @@ struct DashboardView: View {
 
                     DiffListView(
                         diffs: viewModel.diffs,
-                        onClear: { Task { await viewModel.clearDiffs() } }
+                        onClear: { Task { await viewModel.clearDiffs() } },
+                        onRefresh: { await viewModel.refreshGitStatus() }
                     )
                     .tag(DashboardTab.diffs)
                 }
@@ -90,6 +91,8 @@ struct DashboardView: View {
                 SessionPickerView(
                     sessions: viewModel.sessions,
                     currentSessionId: viewModel.agentStatus.sessionId,
+                    hasMore: viewModel.sessionsHasMore,
+                    isLoadingMore: viewModel.isLoadingMoreSessions,
                     onSelect: { sessionId in
                         Task { await viewModel.resumeSession(sessionId) }
                     },
@@ -98,6 +101,9 @@ struct DashboardView: View {
                     },
                     onDeleteAll: {
                         Task { await viewModel.deleteAllSessions() }
+                    },
+                    onLoadMore: {
+                        Task { await viewModel.loadMoreSessions() }
                     },
                     onDismiss: { viewModel.showSessionPicker = false }
                 )
@@ -118,7 +124,7 @@ struct StatusBarView: View {
     let repoName: String?
     let sessionId: String?
 
-    @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = false
+    @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = true
     @State private var isPulsing = false
     @State private var showCopiedToast = false
 
@@ -395,6 +401,16 @@ struct ActionBarView: View {
         !suggestedCommands.isEmpty && isFocused
     }
 
+    /// Whether sending is disabled (Claude is running or waiting)
+    private var isSendDisabled: Bool {
+        promptText.isBlank || isLoading || claudeState == .running
+    }
+
+    /// Placeholder text based on Claude state
+    private var placeholderText: String {
+        claudeState == .running ? "Claude is running..." : "Ask Claude..."
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Command suggestions (above the input)
@@ -425,14 +441,21 @@ struct ActionBarView: View {
 
                 // Prompt input with Pulse Terminal styling
                 HStack(spacing: Spacing.xs) {
-                    TextField("Ask Claude...", text: $promptText, axis: .vertical)
+                    TextField(placeholderText, text: $promptText, axis: .vertical)
                         .font(Typography.inputField)
                         .foregroundStyle(ColorSystem.textPrimary)
                         .lineLimit(1...3)
                         .focused($isFocused)
                         .submitLabel(.send)
+                        .disabled(claudeState == .running)
+                        .padding(.vertical, Spacing.sm)
+                        .padding(.leading, Spacing.sm)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            isFocused = true
+                        }
                         .onSubmit {
-                            if !promptText.isBlank {
+                            if !isSendDisabled {
                                 onSend()
                             }
                         }
@@ -449,16 +472,16 @@ struct ActionBarView: View {
                                     .font(.system(size: 24))
                             }
                         }
-                        .foregroundStyle(promptText.isBlank ? ColorSystem.textQuaternary : ColorSystem.primary)
+                        .foregroundStyle(isSendDisabled ? ColorSystem.textQuaternary : ColorSystem.primary)
                         .shadow(
-                            color: promptText.isBlank ? .clear : ColorSystem.primaryGlow,
+                            color: isSendDisabled ? .clear : ColorSystem.primaryGlow,
                             radius: 4
                         )
                     }
-                    .disabled(promptText.isBlank || isLoading)
+                    .disabled(isSendDisabled)
+                    .padding(.trailing, Spacing.sm)
+                    .padding(.vertical, Spacing.xs)
                 }
-                .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, Spacing.xs)
                 .background(ColorSystem.terminalBgHighlight)
                 .clipShape(RoundedRectangle(cornerRadius: 20))
                 .overlay(

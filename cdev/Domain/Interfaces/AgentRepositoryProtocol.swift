@@ -26,8 +26,11 @@ protocol AgentRepositoryProtocol {
     /// Get git diff for file
     func getGitDiff(file: String?) async throws -> [GitDiffPayload]
 
-    /// Get list of available Claude sessions
-    func getSessions() async throws -> SessionsResponse
+    /// Get list of available Claude sessions (paginated)
+    /// - Parameters:
+    ///   - limit: Maximum sessions to return (default: 20, max: 100)
+    ///   - offset: Number of sessions to skip (default: 0)
+    func getSessions(limit: Int, offset: Int) async throws -> SessionsResponse
 
     /// Get messages for a specific session
     func getSessionMessages(sessionId: String) async throws -> SessionMessagesResponse
@@ -92,22 +95,53 @@ struct GitStatusResponse: Codable {
         }
 
         /// Convert git status to change type
+        /// Git status format: XY where X=staging status, Y=working tree status
+        /// Common values: M=modified, A=added, D=deleted, R=renamed, ?=untracked
         var changeType: FileChangeType {
             if isUntracked { return .created }
-            let trimmed = status.trimmingCharacters(in: .whitespaces)
-            switch trimmed {
-            case "D": return .deleted
-            case "R": return .renamed
-            default: return .modified
-            }
+
+            // Check for deleted - either in staging (first char) or working tree (second char)
+            // "D " = deleted in staging
+            // " D" = deleted in working tree
+            // "AD" = added then deleted
+            if status.contains("D") { return .deleted }
+
+            // Check for renamed
+            if status.contains("R") { return .renamed }
+
+            // Check for newly added (staged)
+            // "A " = added in staging
+            // "AM" = added in staging, modified in working tree
+            let firstChar = status.first
+            if firstChar == "A" { return .created }
+
+            return .modified
         }
     }
 }
 
-/// Sessions list response from HTTP API
+/// Sessions list response from HTTP API (with pagination)
 struct SessionsResponse: Codable {
     let sessions: [SessionInfo]
     let current: String?
+
+    // Pagination fields
+    let total: Int?
+    let limit: Int?
+    let offset: Int?
+
+    /// Whether there are more sessions to load
+    var hasMore: Bool {
+        guard let total = total, let limit = limit, let offset = offset else {
+            return false
+        }
+        return offset + sessions.count < total
+    }
+
+    /// Next offset for pagination
+    var nextOffset: Int {
+        (offset ?? 0) + sessions.count
+    }
 
     struct SessionInfo: Codable, Identifiable {
         var id: String { sessionId }
@@ -115,12 +149,14 @@ struct SessionsResponse: Codable {
         let summary: String
         let messageCount: Int
         let lastUpdated: String
+        let branch: String?
 
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
             case summary
             case messageCount = "message_count"
             case lastUpdated = "last_updated"
+            case branch
         }
     }
 }

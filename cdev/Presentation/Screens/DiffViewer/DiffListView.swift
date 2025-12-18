@@ -4,17 +4,25 @@ import SwiftUI
 struct DiffListView: View {
     let diffs: [DiffEntry]
     let onClear: () -> Void
+    let onRefresh: () async -> Void
 
     @State private var selectedDiff: DiffEntry?
 
     var body: some View {
         Group {
             if diffs.isEmpty {
-                EmptyStateView(
-                    icon: Icons.changes,
-                    title: "No Changes",
-                    subtitle: "File changes will appear here"
-                )
+                // Empty state with pull-to-refresh
+                ScrollView {
+                    EmptyStateView(
+                        icon: Icons.changes,
+                        title: "No Changes",
+                        subtitle: "Pull to refresh"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 300)
+                }
+                .refreshable {
+                    await onRefresh()
+                }
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
@@ -28,6 +36,9 @@ struct DiffListView: View {
                         }
                     }
                     .padding(.vertical, Spacing.xxs)
+                }
+                .refreshable {
+                    await onRefresh()
                 }
             }
         }

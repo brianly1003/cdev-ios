@@ -4,9 +4,12 @@ import SwiftUI
 struct SessionPickerView: View {
     let sessions: [SessionsResponse.SessionInfo]
     let currentSessionId: String?
+    let hasMore: Bool
+    let isLoadingMore: Bool
     let onSelect: (String) -> Void
     let onDelete: (String) -> Void
     let onDeleteAll: () -> Void
+    let onLoadMore: () -> Void
     let onDismiss: () -> Void
 
     @State private var searchText: String = ""
@@ -82,6 +85,32 @@ struct SessionPickerView: View {
                                 }
                                 .tint(ColorSystem.error)
                             }
+                        }
+
+                        // Load More button (only show when not searching and has more)
+                        if hasMore && searchText.isEmpty {
+                            Button {
+                                onLoadMore()
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    if isLoadingMore {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                            .tint(ColorSystem.primary)
+                                    } else {
+                                        Text("Load More")
+                                            .font(Typography.terminal)
+                                            .foregroundStyle(ColorSystem.primary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, Spacing.sm)
+                            }
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                            .listRowBackground(ColorSystem.terminalBg)
+                            .listRowSeparator(.hidden)
+                            .disabled(isLoadingMore)
                         }
                     }
                     .listStyle(.plain)

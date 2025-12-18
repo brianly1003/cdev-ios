@@ -63,5 +63,6 @@ enum Constants {
         static let theme = "app_theme"
         static let showSessionId = "show_session_id"
         static let diffZoomScale = "diff_zoom_scale"
+        static let selectedSessionId = "selected_session_id"
     }
 }

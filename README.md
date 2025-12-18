@@ -46,6 +46,7 @@ See [Docs Index](docs/readme.md) for development guidelines.
 
 ## Documentation
 
+- [Architecture](docs/ARCHITECTURE.md) - Technical architecture and implementation details
 - [Design Specification](docs/DESIGN-SPEC.md) - UI/UX design principles
 - [Docs Index](docs/readme.md) - AI assistant guidelines
 

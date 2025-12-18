@@ -90,7 +90,7 @@ final class AgentRepository: AgentRepositoryProtocol {
     // MARK: - Claude Control
 
     func runClaude(prompt: String, mode: SessionMode, sessionId: String?) async throws {
-        // Use HTTP API for running Claude (cleaner than WebSocket)
+        // Use HTTP API for running Claude
         let body = RunClaudeRequest(prompt: prompt, mode: mode, sessionId: sessionId)
         let _: RunClaudeResponse = try await httpService.post(path: "/api/claude/run", body: body)
     }
@@ -139,8 +139,12 @@ final class AgentRepository: AgentRepositoryProtocol {
 
     // MARK: - Sessions
 
-    func getSessions() async throws -> SessionsResponse {
-        try await httpService.get(path: "/api/claude/sessions", queryItems: nil)
+    func getSessions(limit: Int = 20, offset: Int = 0) async throws -> SessionsResponse {
+        let queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
+        return try await httpService.get(path: "/api/claude/sessions", queryItems: queryItems)
     }
 
     func getSessionMessages(sessionId: String) async throws -> SessionMessagesResponse {

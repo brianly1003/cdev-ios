@@ -87,4 +87,23 @@ final class SessionRepository: SessionStorageProtocol, SettingsStorageProtocol {
         }
         set { defaults.set(newValue.rawValue, forKey: Constants.UserDefaults.theme) }
     }
+
+    // MARK: - Session Selection
+
+    /// Currently selected session ID (persisted across app launches)
+    var selectedSessionId: String? {
+        get { defaults.string(forKey: Constants.UserDefaults.selectedSessionId) }
+        set {
+            if let value = newValue, !value.isEmpty {
+                defaults.set(value, forKey: Constants.UserDefaults.selectedSessionId)
+            } else {
+                defaults.removeObject(forKey: Constants.UserDefaults.selectedSessionId)
+            }
+        }
+    }
+
+    /// Clear the selected session ID
+    func clearSelectedSessionId() {
+        defaults.removeObject(forKey: Constants.UserDefaults.selectedSessionId)
+    }
 }

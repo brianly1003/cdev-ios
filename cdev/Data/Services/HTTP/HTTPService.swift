@@ -64,6 +64,7 @@ final class HTTPService: HTTPServiceProtocol {
 
     func get<T: Decodable>(path: String, queryItems: [URLQueryItem]? = nil) async throws -> T {
         guard let baseURL = baseURL else {
+            AppLogger.network("[HTTP] GET \(path) - No baseURL configured", type: .error)
             throw AppError.serverUnreachable
         }
 
@@ -78,16 +79,20 @@ final class HTTPService: HTTPServiceProtocol {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        AppLogger.network("GET \(path)")
-
-        let (data, response) = try await executeWithRetry(request: request, path: path)
-
-        try validateResponse(response, data: data)
+        let startTime = Date()
+        logRequest(method: "GET", path: path, queryItems: queryItems, body: nil)
 
         do {
+            let (data, response) = try await executeWithRetry(request: request, path: path)
+            let duration = Date().timeIntervalSince(startTime)
+
+            try validateResponse(response, data: data, path: path, duration: duration)
+
             return try decoder.decode(T.self, from: data)
         } catch {
-            throw AppError.decodingFailed(underlying: error)
+            let duration = Date().timeIntervalSince(startTime)
+            logRequestError(error, method: "GET", path: path, duration: duration)
+            throw error
         }
     }
 
@@ -107,6 +112,7 @@ final class HTTPService: HTTPServiceProtocol {
 
     func delete<T: Decodable>(path: String, queryItems: [URLQueryItem]? = nil) async throws -> T {
         guard let baseURL = baseURL else {
+            AppLogger.network("[HTTP] DELETE \(path) - No baseURL configured", type: .error)
             throw AppError.serverUnreachable
         }
 
@@ -121,16 +127,20 @@ final class HTTPService: HTTPServiceProtocol {
         request.httpMethod = "DELETE"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        AppLogger.network("DELETE \(path)")
-
-        let (data, response) = try await executeWithRetry(request: request, path: path)
-
-        try validateResponse(response, data: data)
+        let startTime = Date()
+        logRequest(method: "DELETE", path: path, queryItems: queryItems, body: nil)
 
         do {
+            let (data, response) = try await executeWithRetry(request: request, path: path)
+            let duration = Date().timeIntervalSince(startTime)
+
+            try validateResponse(response, data: data, path: path, duration: duration)
+
             return try decoder.decode(T.self, from: data)
         } catch {
-            throw AppError.decodingFailed(underlying: error)
+            let duration = Date().timeIntervalSince(startTime)
+            logRequestError(error, method: "DELETE", path: path, duration: duration)
+            throw error
         }
     }
 
@@ -159,6 +169,7 @@ final class HTTPService: HTTPServiceProtocol {
 
     private func performPost<B: Encodable>(path: String, body: B?) async throws -> Data {
         guard let baseURL = baseURL else {
+            AppLogger.network("[HTTP] POST \(path) - No baseURL configured", type: .error)
             throw AppError.serverUnreachable
         }
 
@@ -168,28 +179,120 @@ final class HTTPService: HTTPServiceProtocol {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+        var bodyString: String?
         if let body = body {
-            request.httpBody = try encoder.encode(body)
+            let bodyData = try encoder.encode(body)
+            request.httpBody = bodyData
+            bodyString = String(data: bodyData, encoding: .utf8)
         }
 
-        AppLogger.network("POST \(path)")
+        let startTime = Date()
+        logRequest(method: "POST", path: path, queryItems: nil, body: bodyString)
 
-        let (data, response) = try await executeWithRetry(request: request, path: path)
+        do {
+            let (data, response) = try await executeWithRetry(request: request, path: path)
+            let duration = Date().timeIntervalSince(startTime)
 
-        try validateResponse(response, data: data)
+            try validateResponse(response, data: data, path: path, duration: duration)
 
-        return data
+            return data
+        } catch {
+            let duration = Date().timeIntervalSince(startTime)
+            logRequestError(error, method: "POST", path: path, duration: duration)
+            throw error
+        }
     }
 
-    private func validateResponse(_ response: URLResponse, data: Data) throws {
+    private func validateResponse(_ response: URLResponse, data: Data, path: String, duration: TimeInterval) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AppError.invalidResponse
         }
 
-        guard (200...299).contains(httpResponse.statusCode) else {
+        let statusCode = httpResponse.statusCode
+        let durationMs = Int(duration * 1000)
+
+        if (200...299).contains(statusCode) {
+            AppLogger.network("[HTTP] ← \(statusCode) \(path) (\(durationMs)ms)")
+        } else {
             let message = String(data: data, encoding: .utf8)
-            AppLogger.network("HTTP error \(httpResponse.statusCode): \(message ?? "unknown")", type: .error)
-            throw AppError.httpRequestFailed(statusCode: httpResponse.statusCode, message: message)
+            let errorDetail = describeHTTPError(statusCode)
+            AppLogger.network("[HTTP] ✗ \(statusCode) \(path) (\(durationMs)ms) - \(errorDetail)", type: .error)
+            if let msg = message, !msg.isEmpty {
+                AppLogger.network("[HTTP]   Response: \(msg.prefix(200))", type: .error)
+            }
+            throw AppError.httpRequestFailed(statusCode: statusCode, message: message)
+        }
+    }
+
+    /// Human-readable description of HTTP error codes
+    private func describeHTTPError(_ statusCode: Int) -> String {
+        switch statusCode {
+        case 400: return "Bad Request"
+        case 401: return "Unauthorized"
+        case 403: return "Forbidden"
+        case 404: return "Not Found"
+        case 409: return "Conflict (Claude already running)"
+        case 500: return "Internal Server Error"
+        case 502: return "Bad Gateway (server/tunnel issue)"
+        case 503: return "Service Unavailable"
+        case 504: return "Gateway Timeout (server/tunnel slow or down)"
+        default: return "HTTP Error"
+        }
+    }
+
+    /// Log outgoing request with params/body
+    private func logRequest(method: String, path: String, queryItems: [URLQueryItem]?, body: String?) {
+        var logParts: [String] = ["[HTTP] → \(method) \(path)"]
+
+        // Add query params if present
+        if let queryItems = queryItems, !queryItems.isEmpty {
+            let params = queryItems.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
+            logParts.append("?\(params)")
+        }
+
+        AppLogger.network(logParts.joined())
+
+        // Log body on separate line if present
+        if let body = body, !body.isEmpty {
+            AppLogger.network("[HTTP]   body: \(body)")
+        }
+    }
+
+    /// Log detailed error information for failed requests
+    private func logRequestError(_ error: Error, method: String, path: String, duration: TimeInterval) {
+        let durationMs = Int(duration * 1000)
+
+        if let appError = error as? AppError {
+            switch appError {
+            case .httpRequestFailed:
+                // Already logged in validateResponse
+                break
+            case .decodingFailed(let underlying):
+                AppLogger.network("[HTTP] ✗ \(method) \(path) - Decode error: \(underlying.localizedDescription)", type: .error)
+            default:
+                AppLogger.network("[HTTP] ✗ \(method) \(path) (\(durationMs)ms) - \(appError.localizedDescription)", type: .error)
+            }
+        } else {
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain {
+                let errorDesc = describeURLError(nsError.code)
+                AppLogger.network("[HTTP] ✗ \(method) \(path) (\(durationMs)ms) - \(errorDesc)", type: .error)
+            } else {
+                AppLogger.network("[HTTP] ✗ \(method) \(path) (\(durationMs)ms) - \(error.localizedDescription)", type: .error)
+            }
+        }
+    }
+
+    /// Human-readable description of URL error codes
+    private func describeURLError(_ code: Int) -> String {
+        switch code {
+        case NSURLErrorTimedOut: return "Request timed out"
+        case NSURLErrorCannotConnectToHost: return "Cannot connect to server"
+        case NSURLErrorNetworkConnectionLost: return "Network connection lost"
+        case NSURLErrorNotConnectedToInternet: return "No internet connection"
+        case NSURLErrorCannotFindHost: return "Cannot find server"
+        case NSURLErrorSecureConnectionFailed: return "SSL/TLS connection failed"
+        default: return "Network error (code: \(code))"
         }
     }
 
@@ -227,7 +330,10 @@ final class HTTPService: HTTPServiceProtocol {
                 let backoffMultiplier = isRemoteConnection ? 2.0 : 1.0
                 let delay = baseRetryDelay * backoffMultiplier * pow(2, Double(attempt))
 
-                AppLogger.network("Retry \(attempt + 1)/\(maxRetries) for \(path) in \(String(format: "%.1f", delay))s")
+                let nsError = error as NSError
+                let errorDesc = describeURLError(nsError.code)
+                AppLogger.network("[HTTP] ⟳ Retry \(attempt + 1)/\(maxRetries) for \(path) in \(String(format: "%.1f", delay))s (\(errorDesc))", type: .warning)
+
                 try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 return try await executeWithRetry(request: request, path: path, attempt: attempt + 1)
             }

@@ -99,6 +99,7 @@ final class AppState: ObservableObject {
             agentRepository: agentRepository,
             sendPromptUseCase: sendPromptUseCase,
             respondToClaudeUseCase: respondToClaudeUseCase,
+            sessionRepository: sessionRepository,
             logCache: logCache,
             diffCache: diffCache
         )

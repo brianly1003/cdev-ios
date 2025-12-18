@@ -40,22 +40,55 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Track if we should attempt reconnection
     private var shouldAutoReconnect = true
 
-    // MARK: - Streams
+    // MARK: - Streams (Broadcast Pattern)
 
-    private var stateStreamContinuation: AsyncStream<ConnectionState>.Continuation?
-    private(set) lazy var connectionStateStream: AsyncStream<ConnectionState> = {
-        AsyncStream { continuation in
-            self.stateStreamContinuation = continuation
+    /// Thread-safe storage for multiple state stream subscribers
+    private var stateStreamContinuations: [UUID: AsyncStream<ConnectionState>.Continuation] = [:]
+    private let continuationsLock = NSLock()
+
+    /// Creates a NEW stream for each subscriber (broadcast pattern)
+    /// Each subscriber receives ALL state updates independently
+    var connectionStateStream: AsyncStream<ConnectionState> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            // Register this continuation
+            self.continuationsLock.lock()
+            self.stateStreamContinuations[id] = continuation
+            self.continuationsLock.unlock()
+
+            // Yield current state immediately to new subscriber
             continuation.yield(self.connectionState)
-        }
-    }()
 
-    private var eventStreamContinuation: AsyncStream<AgentEvent>.Continuation?
-    private(set) lazy var eventStream: AsyncStream<AgentEvent> = {
-        AsyncStream { continuation in
-            self.eventStreamContinuation = continuation
+            // Clean up when stream terminates
+            continuation.onTermination = { [weak self] _ in
+                self?.continuationsLock.lock()
+                self?.stateStreamContinuations.removeValue(forKey: id)
+                self?.continuationsLock.unlock()
+            }
         }
-    }()
+    }
+
+    /// Thread-safe storage for multiple event stream subscribers
+    private var eventStreamContinuations: [UUID: AsyncStream<AgentEvent>.Continuation] = [:]
+    private let eventContinuationsLock = NSLock()
+
+    /// Creates a NEW stream for each subscriber (broadcast pattern)
+    var eventStream: AsyncStream<AgentEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            // Register this continuation
+            self.eventContinuationsLock.lock()
+            self.eventStreamContinuations[id] = continuation
+            self.eventContinuationsLock.unlock()
+
+            // Clean up when stream terminates
+            continuation.onTermination = { [weak self] _ in
+                self?.eventContinuationsLock.lock()
+                self?.eventStreamContinuations.removeValue(forKey: id)
+                self?.eventContinuationsLock.unlock()
+            }
+        }
+    }
 
     // MARK: - Init
 
@@ -423,7 +456,16 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
     private func updateState(_ state: ConnectionState) {
         _connectionState = state
-        stateStreamContinuation?.yield(state)
+
+        // Broadcast to ALL subscribers
+        continuationsLock.lock()
+        let continuations = stateStreamContinuations.values
+        continuationsLock.unlock()
+
+        for continuation in continuations {
+            continuation.yield(state)
+        }
+
         AppLogger.webSocket("State: \(state.statusText)")
     }
 
@@ -479,7 +521,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                     continue
                 }
 
-                eventStreamContinuation?.yield(event)
+                // Broadcast to ALL event stream subscribers
+                eventContinuationsLock.lock()
+                let eventContinuations = eventStreamContinuations.values
+                eventContinuationsLock.unlock()
+
+                for continuation in eventContinuations {
+                    continuation.yield(event)
+                }
+
                 AppLogger.webSocket("Received event: \(event.type.rawValue)")
             } catch {
                 AppLogger.webSocket("Parse error for line: \(error)", type: .warning)
