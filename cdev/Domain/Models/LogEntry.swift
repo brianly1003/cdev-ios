@@ -44,12 +44,39 @@ struct LogEntry: Identifiable, Equatable {
             sessionId: payload.sessionId
         )
     }
+
+    /// Create from session message (for history loading)
+    static func from(sessionMessage: SessionMessagesResponse.SessionMessage, sessionId: String) -> LogEntry? {
+        // Parse timestamp from ISO8601 format with fractional seconds
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.date(from: sessionMessage.timestamp ?? "") ?? Date()
+
+        // Get text content - skip tool_use and tool_result messages (no text to display)
+        let textContent = sessionMessage.textContent
+        guard !textContent.isEmpty else { return nil }
+
+        // Determine stream type based on message type
+        let stream: LogStream = sessionMessage.type == "user" ? .user : .stdout
+
+        // For user messages, prefix with "> " to match live input display
+        let content = sessionMessage.type == "user" ? "> \(textContent)" : textContent
+
+        return LogEntry(
+            id: sessionMessage.id,
+            timestamp: timestamp,
+            content: content,
+            stream: stream,
+            sessionId: sessionId
+        )
+    }
 }
 
 enum LogStream: String {
     case stdout
     case stderr
     case system
+    case user  // User's prompts/messages
 }
 
 // MARK: - Log Formatting

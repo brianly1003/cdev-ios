@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.syntaxHighlighting) private var syntaxHighlighting = true
+    @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = false
     @AppStorage(Constants.UserDefaults.hapticFeedback) private var hapticFeedback = true
     @AppStorage(Constants.UserDefaults.autoReconnect) private var autoReconnect = true
 
@@ -15,6 +16,7 @@ struct SettingsView: View {
                 Section("Display") {
                     Toggle("Show Timestamps", isOn: $showTimestamps)
                     Toggle("Syntax Highlighting", isOn: $syntaxHighlighting)
+                    Toggle("Show Session ID", isOn: $showSessionId)
                 }
 
                 // Behavior

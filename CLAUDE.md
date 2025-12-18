@@ -57,19 +57,89 @@ Presentation → Domain ← Data
 3. **AsyncStream** - Real-time event streaming from WebSocket
 4. **Protocol-based interfaces** - Enables testing and flexibility
 
+## cdev-agent API Communication
+
+### Architecture: HTTP + WebSocket Hybrid
+
+| Operation | Protocol | Endpoint | Reason |
+|-----------|----------|----------|--------|
+| Run Claude | HTTP POST | `/api/claude/run` | Command with response confirmation |
+| Stop Claude | HTTP POST | `/api/claude/stop` | Command with response confirmation |
+| Respond to Claude | HTTP POST | `/api/claude/respond` | Interactive response |
+| List Sessions | HTTP GET | `/api/claude/sessions` | Data fetch |
+| Get Session Messages | HTTP GET | `/api/claude/sessions/messages?session_id=` | History loading |
+| Get Status | HTTP GET | `/api/status` | Initial status |
+| Get Git Status | HTTP GET | `/api/git/status` | File changes |
+| **Real-time logs** | WebSocket | Event stream | Streaming output |
+| **Status changes** | WebSocket | Event stream | Push notifications |
+| **Permissions** | WebSocket | Event stream | Interactive prompts |
+
+### Session Modes for `/api/claude/run`
+
+```json
+// Start new conversation
+{"prompt": "Hello", "mode": "new"}
+
+// Continue most recent conversation (no session_id)
+{"prompt": "Follow up", "mode": "continue"}
+
+// Continue specific session (with session_id) - RECOMMENDED
+{"prompt": "Follow up", "mode": "continue", "session_id": "uuid"}
+
+// Resume specific session by ID
+{"prompt": "Continue", "mode": "resume", "session_id": "uuid"}
+```
+
+**Best Practice:** Use `mode: "continue"` with `session_id` for explicit session context. The app tracks sessionId from events and passes it automatically.
+
+### WebSocket Events
+
+Events streamed via WebSocket (`ws://host:port/ws`):
+
+| Event Type | Description |
+|------------|-------------|
+| `claude_log` | Claude CLI output (stdout/stderr) |
+| `claude_status` | State changes (idle, running, waiting) |
+| `claude_waiting` | Claude asking a question |
+| `claude_permission` | Permission request (tool use) |
+| `git_diff` | File change with diff content |
+| `file_changed` | File modified notification |
+| `session_end` | Claude session ended |
+
+### Performance Optimizations
+
+1. **Optimistic UI** - Clear input immediately, show user message before API response
+2. **HTTP for commands** - Stateless, reliable, doesn't depend on WebSocket state
+3. **WebSocket for streaming** - Low latency push for real-time logs
+4. **Background history loading** - Don't block UI on app launch
+5. **Continue mode** - Let Claude CLI manage session, no manual tracking
+
 ## UI Design Principles
 
-**CRITICAL: Compact UI for Developer Productivity**
+**CRITICAL: Compact UI is HIGH PRIORITY**
 
-This app is designed for developers doing "vibe coding" on mobile - monitoring Claude while away from desk.
+This app is designed for developers doing "vibe coding" on mobile - monitoring Claude while away from desk. Every UI element must be as compact as possible while remaining functional.
 
 ### Core Principles
 
-1. **Terminal First** - CLI output is the hero, not hidden
-2. **Minimal Taps** - One-tap approve/deny, quick prompt input
-3. **Information Density** - Show more, chrome less
-4. **Real-time** - Auto-scroll logs, instant updates
-5. **Glanceable** - Status visible at all times
+1. **Compact First** - Minimize padding, use smaller fonts, single-line where possible
+2. **Terminal First** - CLI output is the hero, not hidden
+3. **Minimal Taps** - One-tap approve/deny, quick prompt input
+4. **Information Density** - Show more data, less chrome
+5. **Real-time** - Auto-scroll logs, instant updates
+6. **Glanceable** - Status visible at all times
+
+### Compact UI Guidelines
+
+| Element | Guideline |
+|---------|-----------|
+| Padding | Use `Spacing.xs` (8pt) or smaller, avoid `Spacing.md`+ |
+| Fonts | Prefer `Typography.terminal` (12pt) or `terminalSmall` (10pt) |
+| Row height | Single line preferred, max 2 lines |
+| Icons | 10-14pt, not larger |
+| Timestamps | Compact format: "5m", "2h", "3d" not "5 minutes ago" |
+| Lists | No separators between items, use subtle background changes |
+| Sheets | Use `.presentationDetents([.medium, .large])` for adjustable height |
 
 ### UI Hierarchy
 

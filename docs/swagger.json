@@ -1,0 +1,761 @@
+{
+  "schemes": ["http"],
+  "swagger": "2.0",
+  "info": {
+      "description": "Mobile AI Coding Monitor & Controller Agent API.\nEnables remote monitoring and control of Claude Code CLI sessions from mobile devices.",
+      "title": "cdev-agent API",
+      "contact": {
+          "name": "Brian Ly",
+          "url": "https://github.com/brianly1003/cdev"
+      },
+      "license": {
+          "name": "MIT",
+          "url": "https://opensource.org/licenses/MIT"
+      },
+      "version": "1.0"
+  },
+  "host": "localhost:8766",
+  "basePath": "/",
+  "paths": {
+      "/api/claude/respond": {
+          "post": {
+              "description": "Send a response to Claude's interactive prompt or permission request",
+              "consumes": [
+                  "application/json"
+              ],
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "claude"
+              ],
+              "summary": "Respond to Claude",
+              "parameters": [
+                  {
+                      "description": "Response to send to Claude",
+                      "name": "request",
+                      "in": "body",
+                      "required": true,
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.RespondToClaudeRequest"
+                      }
+                  }
+              ],
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.RespondToClaudeResponse"
+                      }
+                  },
+                  "400": {
+                      "description": "Invalid request",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "409": {
+                      "description": "Claude not waiting for input",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "503": {
+                      "description": "Claude manager not available",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/claude/run": {
+          "post": {
+              "description": "Spawns a Claude CLI process with the given prompt. Supports session modes: \"new\" (default), \"continue\" (most recent), \"resume\" (specific session).",
+              "consumes": [
+                  "application/json"
+              ],
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "claude"
+              ],
+              "summary": "Start Claude CLI",
+              "parameters": [
+                  {
+                      "description": "Prompt and session options",
+                      "name": "request",
+                      "in": "body",
+                      "required": true,
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.RunClaudeRequest"
+                      }
+                  }
+              ],
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.RunClaudeResponse"
+                      }
+                  },
+                  "400": {
+                      "description": "Invalid request",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "409": {
+                      "description": "Claude already running",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "503": {
+                      "description": "Claude manager not available",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/claude/sessions": {
+          "get": {
+              "description": "Returns a list of available Claude sessions for the repository that can be resumed",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "claude"
+              ],
+              "summary": "List Claude sessions",
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.SessionsResponse"
+                      }
+                  },
+                  "500": {
+                      "description": "Failed to list sessions",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/claude/sessions/messages": {
+          "get": {
+              "description": "Returns all messages for a specific Claude session",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "claude"
+              ],
+              "summary": "Get session messages",
+              "parameters": [
+                  {
+                      "type": "string",
+                      "description": "Session ID",
+                      "name": "session_id",
+                      "in": "query",
+                      "required": true
+                  }
+              ],
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.SessionMessagesResponse"
+                      }
+                  },
+                  "400": {
+                      "description": "Missing session_id",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "404": {
+                      "description": "Session not found",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/claude/stop": {
+          "post": {
+              "description": "Gracefully stops the running Claude CLI process",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "claude"
+              ],
+              "summary": "Stop Claude CLI",
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.StopClaudeResponse"
+                      }
+                  },
+                  "409": {
+                      "description": "Claude not running",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "503": {
+                      "description": "Claude manager not available",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/file": {
+          "get": {
+              "description": "Returns the content of a file in the repository",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "file"
+              ],
+              "summary": "Get file content",
+              "parameters": [
+                  {
+                      "type": "string",
+                      "description": "Relative path to the file",
+                      "name": "path",
+                      "in": "query",
+                      "required": true
+                  }
+              ],
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.FileContentResponse"
+                      }
+                  },
+                  "400": {
+                      "description": "Missing path parameter",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "404": {
+                      "description": "File not found",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "503": {
+                      "description": "Git tracker not available",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/git/diff": {
+          "get": {
+              "description": "Returns the git diff for a specific file or all files if no path is provided",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "git"
+              ],
+              "summary": "Get git diff",
+              "parameters": [
+                  {
+                      "type": "string",
+                      "description": "Relative path to the file (optional, returns all diffs if not provided)",
+                      "name": "path",
+                      "in": "query"
+                  }
+              ],
+              "responses": {
+                  "200": {
+                      "description": "All diffs (when path not provided)",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.GitDiffAllResponse"
+                      }
+                  },
+                  "404": {
+                      "description": "Not a git repository",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "500": {
+                      "description": "Git command failed",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/git/status": {
+          "get": {
+              "description": "Returns the git status of the repository showing modified, added, and deleted files",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "git"
+              ],
+              "summary": "Get git status",
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.GitStatusResponse"
+                      }
+                  },
+                  "404": {
+                      "description": "Not a git repository",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  },
+                  "500": {
+                      "description": "Git command failed",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.ErrorResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/api/status": {
+          "get": {
+              "description": "Returns the current status of the cdev-agent including Claude state, connected clients, and repository info",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "status"
+              ],
+              "summary": "Get agent status",
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.StatusResponse"
+                      }
+                  }
+              }
+          }
+      },
+      "/health": {
+          "get": {
+              "description": "Returns the health status of the agent",
+              "produces": [
+                  "application/json"
+              ],
+              "tags": [
+                  "health"
+              ],
+              "summary": "Health check",
+              "responses": {
+                  "200": {
+                      "description": "OK",
+                      "schema": {
+                          "$ref": "#/definitions/internal_server_http.HealthResponse"
+                      }
+                  }
+              }
+          }
+      }
+  },
+  "definitions": {
+      "internal_server_http.ErrorResponse": {
+          "type": "object",
+          "properties": {
+              "error": {
+                  "type": "string",
+                  "example": "Something went wrong"
+              },
+              "path": {
+                  "type": "string",
+                  "example": "src/main.ts"
+              }
+          }
+      },
+      "internal_server_http.FileContentResponse": {
+          "type": "object",
+          "properties": {
+              "content": {
+                  "type": "string",
+                  "example": "console.log('hello');"
+              },
+              "encoding": {
+                  "type": "string",
+                  "example": "utf-8"
+              },
+              "path": {
+                  "type": "string",
+                  "example": "src/main.ts"
+              },
+              "size": {
+                  "type": "integer",
+                  "example": 25
+              },
+              "truncated": {
+                  "type": "boolean",
+                  "example": false
+              }
+          }
+      },
+      "internal_server_http.GitDiffAllResponse": {
+          "type": "object",
+          "properties": {
+              "diffs": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/definitions/internal_server_http.GitDiffItem"
+                  }
+              }
+          }
+      },
+      "internal_server_http.GitDiffItem": {
+          "type": "object",
+          "properties": {
+              "diff": {
+                  "type": "string",
+                  "example": "@@ -1,3 +1,4 @@\n+new line"
+              },
+              "path": {
+                  "type": "string",
+                  "example": "src/main.ts"
+              }
+          }
+      },
+      "internal_server_http.GitDiffResponse": {
+          "type": "object",
+          "properties": {
+              "diff": {
+                  "type": "string",
+                  "example": "@@ -1,3 +1,4 @@\n+new line"
+              },
+              "path": {
+                  "type": "string",
+                  "example": "src/main.ts"
+              }
+          }
+      },
+      "internal_server_http.GitFileStatus": {
+          "type": "object",
+          "properties": {
+              "is_staged": {
+                  "type": "boolean",
+                  "example": true
+              },
+              "is_untracked": {
+                  "type": "boolean",
+                  "example": false
+              },
+              "path": {
+                  "type": "string",
+                  "example": "src/main.ts"
+              },
+              "status": {
+                  "type": "string",
+                  "example": "M "
+              }
+          }
+      },
+      "internal_server_http.GitStatusResponse": {
+          "type": "object",
+          "properties": {
+              "files": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/definitions/internal_server_http.GitFileStatus"
+                  }
+              },
+              "repo_name": {
+                  "type": "string",
+                  "example": "myproject"
+              },
+              "repo_root": {
+                  "type": "string",
+                  "example": "/Users/dev/myproject"
+              }
+          }
+      },
+      "internal_server_http.HealthResponse": {
+          "type": "object",
+          "properties": {
+              "status": {
+                  "type": "string",
+                  "example": "ok"
+              },
+              "time": {
+                  "type": "string",
+                  "example": "2024-01-15T10:30:00Z"
+              }
+          }
+      },
+      "internal_server_http.RespondToClaudeRequest": {
+          "type": "object",
+          "required": [
+              "tool_use_id"
+          ],
+          "properties": {
+              "is_error": {
+                  "type": "boolean",
+                  "example": false
+              },
+              "response": {
+                  "type": "string",
+                  "example": "Yes, proceed with the changes"
+              },
+              "tool_use_id": {
+                  "type": "string",
+                  "example": "toolu_abc123"
+              }
+          }
+      },
+      "internal_server_http.RespondToClaudeResponse": {
+          "type": "object",
+          "properties": {
+              "status": {
+                  "type": "string",
+                  "example": "sent"
+              },
+              "tool_use_id": {
+                  "type": "string",
+                  "example": "toolu_abc123"
+              }
+          }
+      },
+      "internal_server_http.RunClaudeRequest": {
+          "type": "object",
+          "required": [
+              "prompt"
+          ],
+          "properties": {
+              "mode": {
+                  "enum": [
+                      "new",
+                      "continue",
+                      "resume"
+                  ],
+                  "allOf": [
+                      {
+                          "$ref": "#/definitions/internal_server_http.SessionMode"
+                      }
+                  ],
+                  "example": "new"
+              },
+              "prompt": {
+                  "type": "string",
+                  "example": "Create a hello world function"
+              },
+              "session_id": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+              }
+          }
+      },
+      "internal_server_http.RunClaudeResponse": {
+          "type": "object",
+          "properties": {
+              "pid": {
+                  "type": "integer",
+                  "example": 12345
+              },
+              "prompt": {
+                  "type": "string",
+                  "example": "Create a hello world function"
+              },
+              "session_id": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+              },
+              "status": {
+                  "type": "string",
+                  "example": "started"
+              }
+          }
+      },
+      "internal_server_http.SessionInfo": {
+          "type": "object",
+          "properties": {
+              "last_updated": {
+                  "type": "string",
+                  "example": "2024-01-15T10:30:00Z"
+              },
+              "message_count": {
+                  "type": "integer",
+                  "example": 5
+              },
+              "session_id": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+              },
+              "summary": {
+                  "type": "string",
+                  "example": "Create a hello world function"
+              }
+          }
+      },
+      "internal_server_http.SessionMessage": {
+          "type": "object",
+          "properties": {
+              "content": {
+                  "type": "string",
+                  "example": "Create a hello world function"
+              },
+              "role": {
+                  "type": "string",
+                  "example": "user"
+              },
+              "timestamp": {
+                  "type": "string",
+                  "example": "2024-01-15T10:30:00Z"
+              },
+              "type": {
+                  "type": "string",
+                  "example": "user"
+              }
+          }
+      },
+      "internal_server_http.SessionMessagesResponse": {
+          "type": "object",
+          "properties": {
+              "count": {
+                  "type": "integer",
+                  "example": 10
+              },
+              "messages": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/definitions/internal_server_http.SessionMessage"
+                  }
+              },
+              "session_id": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+              }
+          }
+      },
+      "internal_server_http.SessionMode": {
+          "type": "string",
+          "enum": [
+              "new",
+              "continue",
+              "resume"
+          ],
+          "x-enum-varnames": [
+              "SessionModeNew",
+              "SessionModeContinue",
+              "SessionModeResume"
+          ]
+      },
+      "internal_server_http.SessionsResponse": {
+          "type": "object",
+          "properties": {
+              "current": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+              },
+              "sessions": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/definitions/internal_server_http.SessionInfo"
+                  }
+              }
+          }
+      },
+      "internal_server_http.StatusResponse": {
+          "type": "object",
+          "properties": {
+              "claude_state": {
+                  "type": "string",
+                  "example": "idle"
+              },
+              "connected_clients": {
+                  "type": "integer",
+                  "example": 1
+              },
+              "git_enabled": {
+                  "type": "boolean",
+                  "example": true
+              },
+              "is_git_repo": {
+                  "type": "boolean",
+                  "example": true
+              },
+              "repo_name": {
+                  "type": "string",
+                  "example": "myproject"
+              },
+              "repo_path": {
+                  "type": "string",
+                  "example": "/Users/dev/myproject"
+              },
+              "session_id": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+              },
+              "uptime_seconds": {
+                  "type": "integer",
+                  "example": 3600
+              },
+              "version": {
+                  "type": "string",
+                  "example": "1.0.0"
+              },
+              "watcher_enabled": {
+                  "type": "boolean",
+                  "example": true
+              }
+          }
+      },
+      "internal_server_http.StopClaudeResponse": {
+          "type": "object",
+          "properties": {
+              "status": {
+                  "type": "string",
+                  "example": "stopped"
+              }
+          }
+      }
+  },
+  "tags": [
+      {
+          "description": "Health check endpoints",
+          "name": "health"
+      },
+      {
+          "description": "Agent status endpoints",
+          "name": "status"
+      },
+      {
+          "description": "Claude CLI management endpoints",
+          "name": "claude"
+      },
+      {
+          "description": "Git operations endpoints",
+          "name": "git"
+      },
+      {
+          "description": "File operations endpoints",
+          "name": "file"
+      }
+  ]
+}

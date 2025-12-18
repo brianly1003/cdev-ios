@@ -207,14 +207,14 @@ enum FileChangeType: String, Codable {
 }
 
 struct GitDiffPayload: Codable {
-    let file: String?
+    let file: String?  // Maps to "path" in API response
     let diff: String?
     let additions: Int?
     let deletions: Int?
     let isNew: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case file
+        case file = "path"  // API returns "path" not "file"
         case diff
         case additions
         case deletions

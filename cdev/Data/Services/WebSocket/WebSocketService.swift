@@ -148,22 +148,36 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
               !isReconnecting else { return }
 
         isReconnecting = true
-        defer { isReconnecting = false }
 
         reconnectAttempts += 1
 
         guard reconnectAttempts <= Constants.Network.maxReconnectAttempts else {
+            isReconnecting = false
             updateState(.failed(reason: "Max reconnect attempts reached"))
             throw AppError.connectionFailed(underlying: nil)
         }
 
         updateState(.reconnecting(attempt: reconnectAttempts))
 
+        // Clean up old connection first
+        pingTimer?.invalidate()
+        pingTimer = nil
+        webSocket?.cancel(with: .goingAway, reason: nil)
+        webSocket = nil
+        session?.invalidateAndCancel()
+        session = nil
+
         // Exponential backoff
         let delay = Constants.Network.reconnectDelay * pow(2, Double(reconnectAttempts - 1))
         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
-        try await connect(to: connectionInfo)
+        do {
+            try await connect(to: connectionInfo)
+            isReconnecting = false
+        } catch {
+            isReconnecting = false
+            throw error
+        }
     }
 
     func ping() async throws -> Bool {
@@ -238,19 +252,33 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     private func parseEvent(from text: String) {
-        guard let data = text.data(using: .utf8) else { return }
+        // Handle newline-delimited JSON (NDJSON) - server may send multiple events
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
 
-        do {
-            let decoder = JSONDecoder()
-            let event = try decoder.decode(AgentEvent.self, from: data)
-            eventStreamContinuation?.yield(event)
-            AppLogger.webSocket("Received event: \(event.type.rawValue)")
-        } catch {
-            AppLogger.webSocket("Parse error: \(error)", type: .warning)
+        let decoder = JSONDecoder()
+
+        for line in lines {
+            guard let data = line.data(using: .utf8) else { continue }
+
+            do {
+                let event = try decoder.decode(AgentEvent.self, from: data)
+                eventStreamContinuation?.yield(event)
+                AppLogger.webSocket("Received event: \(event.type.rawValue)")
+            } catch {
+                AppLogger.webSocket("Parse error for line: \(error)", type: .warning)
+            }
         }
     }
 
     private func handleDisconnect(error: Error) {
+        // Ignore disconnect callbacks during reconnection - old socket cleanup
+        guard !isReconnecting else {
+            AppLogger.webSocket("Ignoring disconnect during reconnection")
+            return
+        }
+
         let errorMessage = Self.friendlyErrorMessage(from: error)
 
         switch connectionState {
@@ -260,9 +288,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             Task {
                 try? await reconnect()
             }
-        case .connecting, .reconnecting:
+        case .connecting:
             // Connection failed during initial connect - update state
             updateState(.failed(reason: errorMessage))
+        case .reconnecting:
+            // Ignore during reconnection - will be handled by reconnect flow
+            break
         case .disconnected, .failed:
             // Already in terminal state, ignore
             break
@@ -301,9 +332,14 @@ extension WebSocketService: URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
+        // Ignore callbacks from old sessions during reconnection
+        guard !isReconnecting else { return }
+
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) }
         AppLogger.webSocket("WebSocket closed: \(closeCode.rawValue)")
-        if let reason = reasonString {
+
+        // Only update state if not empty reason
+        if let reason = reasonString, !reason.isEmpty {
             updateState(.failed(reason: reason))
         } else {
             updateState(.disconnected)

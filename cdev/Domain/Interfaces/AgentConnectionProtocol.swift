@@ -47,6 +47,9 @@ protocol HTTPServiceProtocol: AnyObject {
     /// POST request without response
     func post<B: Encodable>(path: String, body: B?) async throws
 
+    /// DELETE request
+    func delete<T: Decodable>(path: String, queryItems: [URLQueryItem]?) async throws -> T
+
     /// Health check
     func healthCheck() async throws -> Bool
 }
