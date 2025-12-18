@@ -38,7 +38,8 @@ struct DashboardView: View {
                 TabView(selection: $viewModel.selectedTab) {
                     LogListView(
                         logs: viewModel.logs,
-                        onClear: { Task { await viewModel.clearLogs() } }
+                        onClear: { Task { await viewModel.clearLogs() } },
+                        isVisible: viewModel.selectedTab == .logs
                     )
                     .tag(DashboardTab.logs)
 

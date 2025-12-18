@@ -4,6 +4,7 @@ import SwiftUI
 struct LogListView: View {
     let logs: [LogEntry]
     let onClear: () -> Void
+    var isVisible: Bool = true  // Track if tab is visible
 
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
 
@@ -29,25 +30,50 @@ struct LogListView: View {
                                 )
                                 .id(entry.id)
                             }
+                            // MARK: Bottom Scroll Anchor
+                            // Invisible spacer at the end of the list.
+                            // We scroll to this instead of the last log item to ensure
+                            // the last message is fully visible above the ActionBarView.
+                            // Adjust frame height if more/less spacing is needed.
+                            Color.clear
+                                .frame(height: 1)  // Adjust this value for more bottom spacing
+                                .id("bottom")
                         }
                         .padding(.horizontal, Spacing.xs)
-                        .padding(.top, Spacing.xxs)
-                        .padding(.bottom, Spacing.sm)
+                        .padding(.top, Spacing.xs)
+                        .padding(.bottom, Spacing.xs)
+                    }
+                    // MARK: Auto-Scroll Triggers
+                    // All scroll actions target "bottom" anchor to ensure last message is visible
+
+                    .onAppear {
+                        // Trigger 1: Initial load - scroll after LazyVStack renders
+                        guard !logs.isEmpty else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {  // Delay for render
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
                     }
                     .onChange(of: logs.count) { oldCount, newCount in
-                        // Auto-scroll to bottom when logs change
-                        guard let lastLog = logs.last else { return }
-
-                        if oldCount > 0 && newCount > oldCount {
-                            // Incremental update - scroll with animation
-                            withAnimation(Animations.logAppear) {
-                                proxy.scrollTo(lastLog.id, anchor: .bottom)
+                        // Trigger 2: New logs arrive - scroll with animation
+                        guard newCount > oldCount else { return }
+                        withAnimation(Animations.logAppear) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                    .onKeyboardShow {
+                        // Trigger 3: Keyboard appears - scroll after keyboard animation
+                        guard !logs.isEmpty else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {  // Wait for keyboard
+                            withAnimation {
+                                proxy.scrollTo("bottom", anchor: .bottom)
                             }
-                        } else if newCount > 0 {
-                            // Initial load or bulk update - wait for LazyVStack to render
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                proxy.scrollTo(lastLog.id, anchor: .bottom)
-                            }
+                        }
+                    }
+                    .onChange(of: isVisible) { _, visible in
+                        // Trigger 4: Tab switch - scroll when Terminal tab becomes visible
+                        guard visible, !logs.isEmpty else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {  // Delay for tab animation
+                            proxy.scrollTo("bottom", anchor: .bottom)
                         }
                     }
                 }

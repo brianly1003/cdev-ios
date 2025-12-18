@@ -122,6 +122,11 @@ extension View {
     func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
+
+    /// Execute action when keyboard shows
+    func onKeyboardShow(perform action: @escaping () -> Void) -> some View {
+        modifier(KeyboardShowModifier(onShow: action))
+    }
 }
 
 struct DismissKeyboardModifier: ViewModifier {
@@ -129,6 +134,17 @@ struct DismissKeyboardModifier: ViewModifier {
         content
             .onTapGesture {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+    }
+}
+
+struct KeyboardShowModifier: ViewModifier {
+    let onShow: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                onShow()
             }
     }
 }
