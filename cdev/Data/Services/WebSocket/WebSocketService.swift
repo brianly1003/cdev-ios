@@ -446,8 +446,30 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         do {
             try await webSocket.send(.string(jsonString))
+
+            // Log outgoing command to debug store
+            Task { @MainActor in
+                DebugLogStore.shared.logWebSocket(
+                    direction: .outgoing,
+                    title: command.command.rawValue,
+                    eventType: command.command.rawValue,
+                    payload: jsonString
+                )
+            }
         } catch {
             AppLogger.webSocket("Send failed: \(error)", type: .error)
+
+            // Log send error to debug store
+            Task { @MainActor in
+                DebugLogStore.shared.logWebSocket(
+                    direction: .outgoing,
+                    title: "Send failed: \(command.command.rawValue)",
+                    eventType: command.command.rawValue,
+                    payload: "\(error)",
+                    level: .error
+                )
+            }
+
             throw AppError.webSocketMessageFailed(underlying: error)
         }
     }
@@ -467,6 +489,23 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         AppLogger.webSocket("State: \(state.statusText)")
+
+        // Log to debug store
+        let level: DebugLogLevel = {
+            switch state {
+            case .connected: return .success
+            case .failed: return .error
+            case .disconnected: return .warning
+            default: return .info
+            }
+        }()
+        Task { @MainActor in
+            DebugLogStore.shared.logWebSocket(
+                direction: .status,
+                title: state.statusText,
+                level: level
+            )
+        }
     }
 
     private func receiveMessage() {
@@ -518,6 +557,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 // Handle heartbeat events - don't forward to event stream
                 if event.type == .heartbeat {
                     AppLogger.webSocket("Heartbeat received")
+                    // Log heartbeat to debug store but don't clutter main log
+                    Task { @MainActor in
+                        DebugLogStore.shared.logWebSocket(
+                            direction: .incoming,
+                            title: "heartbeat",
+                            eventType: "heartbeat",
+                            payload: nil
+                        )
+                    }
                     continue
                 }
 
@@ -531,8 +579,29 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 }
 
                 AppLogger.webSocket("Received event: \(event.type.rawValue)")
+
+                // Log to debug store with payload for inspection
+                Task { @MainActor in
+                    DebugLogStore.shared.logWebSocket(
+                        direction: .incoming,
+                        title: event.type.rawValue,
+                        eventType: event.type.rawValue,
+                        payload: line.count < 2000 ? line : String(line.prefix(2000)) + "..."
+                    )
+                }
             } catch {
                 AppLogger.webSocket("Parse error for line: \(error)", type: .warning)
+
+                // Log parse errors to debug store
+                Task { @MainActor in
+                    DebugLogStore.shared.logWebSocket(
+                        direction: .incoming,
+                        title: "Parse error",
+                        eventType: nil,
+                        payload: "\(error)\n\nRaw: \(line.prefix(500))",
+                        level: .error
+                    )
+                }
             }
         }
     }

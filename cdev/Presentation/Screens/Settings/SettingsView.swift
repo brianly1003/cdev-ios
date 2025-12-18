@@ -9,6 +9,8 @@ struct SettingsView: View {
     @AppStorage(Constants.UserDefaults.hapticFeedback) private var hapticFeedback = true
     @AppStorage(Constants.UserDefaults.autoReconnect) private var autoReconnect = true
 
+    @State private var showAdminTools = false
+
     var body: some View {
         NavigationStack {
             List {
@@ -30,6 +32,32 @@ struct SettingsView: View {
                     Button("Disconnect", role: .destructive) {
                         // TODO: Implement disconnect
                     }
+                }
+
+                // Developer Tools
+                Section("Developer") {
+                    Button {
+                        showAdminTools = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "ant.circle")
+                                .foregroundStyle(ColorSystem.primary)
+                            Text("Debug Logs")
+                            Spacer()
+                            // Show log count badge
+                            Text("\(DebugLogStore.shared.logs.count)")
+                                .font(Typography.badge)
+                                .foregroundStyle(ColorSystem.textTertiary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(ColorSystem.terminalBgHighlight)
+                                .clipShape(Capsule())
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
                 }
 
                 // About
@@ -60,6 +88,9 @@ struct SettingsView: View {
                         dismiss()
                     }
                 }
+            }
+            .fullScreenCover(isPresented: $showAdminTools) {
+                AdminToolsView()
             }
         }
     }

@@ -16,6 +16,16 @@ enum AppLogger {
         case success
         case warning
         case error
+
+        /// Convert to DebugLogLevel
+        var debugLevel: DebugLogLevel {
+            switch self {
+            case .info: return .info
+            case .success: return .success
+            case .warning: return .warning
+            case .error: return .error
+            }
+        }
     }
 
     /// General application logging
@@ -32,6 +42,11 @@ enum AppLogger {
             generalLog.error("[ERROR] \(message)")
         }
         #endif
+
+        // Also send to debug store (works in release for admin tool)
+        Task { @MainActor in
+            DebugLogStore.shared.logApp(message, level: type.debugLevel)
+        }
     }
 
     /// Network-related logging

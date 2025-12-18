@@ -38,6 +38,11 @@ enum ColorSystem {
     static let accentDim = Color(hex: "#651FFF")
     static let accentGlow = Color(hex: "#7C4DFF").opacity(0.3)
 
+    /// Info Blue - Informational messages, neutral status
+    static let info = Color(hex: "#58A6FF")
+    static let infoDim = Color(hex: "#388BFD")
+    static let infoGlow = Color(hex: "#58A6FF").opacity(0.3)
+
     // MARK: - Terminal Background Palette
 
     /// Deep dark - Primary terminal background
