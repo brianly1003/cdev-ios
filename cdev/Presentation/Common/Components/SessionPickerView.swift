@@ -1,11 +1,13 @@
 import SwiftUI
 
 /// Session picker sheet for /resume command - Compact UI
+/// Now with navigation to session history detail view
 struct SessionPickerView: View {
     let sessions: [SessionsResponse.SessionInfo]
     let currentSessionId: String?
     let hasMore: Bool
     let isLoadingMore: Bool
+    let agentRepository: AgentRepositoryProtocol
     let onSelect: (String) -> Void
     let onDelete: (String) -> Void
     let onDeleteAll: () -> Void
@@ -14,6 +16,7 @@ struct SessionPickerView: View {
 
     @State private var searchText: String = ""
     @State private var showDeleteAllAlert = false
+    @State private var selectedSession: SessionsResponse.SessionInfo?
 
     var filteredSessions: [SessionsResponse.SessionInfo] {
         if searchText.isEmpty {
@@ -25,7 +28,7 @@ struct SessionPickerView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 0) {
                 // Compact search bar
                 HStack(spacing: Spacing.xs) {
@@ -58,13 +61,23 @@ struct SessionPickerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(ColorSystem.terminalBg)
                 } else {
-                    // Session list with native swipe actions
+                    // Session list with navigation to history
                     List {
                         ForEach(filteredSessions) { session in
-                            SessionRowView(
-                                session: session,
-                                isCurrentSession: session.sessionId == currentSessionId
-                            )
+                            NavigationLink {
+                                SessionHistoryView(
+                                    session: session,
+                                    agentRepository: agentRepository,
+                                    onResume: {
+                                        onSelect(session.sessionId)
+                                    }
+                                )
+                            } label: {
+                                SessionRowView(
+                                    session: session,
+                                    isCurrentSession: session.sessionId == currentSessionId
+                                )
+                            }
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                             .listRowBackground(
                                 session.sessionId == currentSessionId
@@ -72,11 +85,6 @@ struct SessionPickerView: View {
                                     : ColorSystem.terminalBg
                             )
                             .listRowSeparator(.hidden)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                Haptics.selection()
-                                onSelect(session.sessionId)
-                            }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     onDelete(session.sessionId)
@@ -84,6 +92,16 @@ struct SessionPickerView: View {
                                     Image(systemName: "trash")
                                 }
                                 .tint(ColorSystem.error)
+                            }
+                            // Quick resume on swipe left
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                Button {
+                                    Haptics.selection()
+                                    onSelect(session.sessionId)
+                                } label: {
+                                    Image(systemName: "arrow.uturn.backward")
+                                }
+                                .tint(ColorSystem.primary)
                             }
                         }
 
@@ -195,13 +213,9 @@ struct SessionRowView: View {
                 .font(Typography.terminalSmall)
                 .foregroundStyle(ColorSystem.textQuaternary)
             }
-
-            // Chevron
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(ColorSystem.textQuaternary)
         }
-        .padding(.horizontal, Spacing.sm)
+        .padding(.leading, Spacing.sm)
+        .padding(.trailing, Spacing.md)  // More trailing space for chevron
         .padding(.vertical, Spacing.sm)
         .frame(minHeight: 44)
         .overlay(

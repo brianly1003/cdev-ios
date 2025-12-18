@@ -4,6 +4,7 @@ import Foundation
 /// Matches the agent's domain/events types
 enum AgentEventType: String, Codable {
     case claudeLog = "claude_log"
+    case claudeMessage = "claude_message"  // NEW: Structured message with content blocks
     case claudeStatus = "claude_status"
     case claudeWaiting = "claude_waiting"
     case claudePermission = "claude_permission"
@@ -57,6 +58,7 @@ struct AgentEvent: Codable, Identifiable {
 /// Event payload union type
 enum AgentEventPayload: Codable {
     case claudeLog(ClaudeLogPayload)
+    case claudeMessage(ClaudeMessagePayload)  // NEW: Structured message
     case claudeStatus(ClaudeStatusPayload)
     case claudeWaiting(ClaudeWaitingPayload)
     case claudePermission(ClaudePermissionPayload)
@@ -73,8 +75,12 @@ enum AgentEventPayload: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
-        // Try each payload type
-        if let payload = try? container.decode(ClaudeLogPayload.self), payload.line != nil {
+        // Try each payload type - claude_message first (new structured format)
+        // Check for message OR content field (cdev-agent sends content at payload level)
+        if let payload = try? container.decode(ClaudeMessagePayload.self),
+           (payload.message != nil || payload.content != nil) {
+            self = .claudeMessage(payload)
+        } else if let payload = try? container.decode(ClaudeLogPayload.self), payload.line != nil {
             self = .claudeLog(payload)
         } else if let payload = try? container.decode(ClaudeStatusPayload.self), payload.state != nil {
             self = .claudeStatus(payload)
@@ -105,6 +111,8 @@ enum AgentEventPayload: Codable {
         var container = encoder.singleValueContainer()
         switch self {
         case .claudeLog(let payload):
+            try container.encode(payload)
+        case .claudeMessage(let payload):
             try container.encode(payload)
         case .claudeStatus(let payload):
             try container.encode(payload)
@@ -145,6 +153,229 @@ struct ClaudeLogPayload: Codable {
         case line
         case stream
         case sessionId = "session_id"
+    }
+}
+
+/// NEW: Structured message payload for claude_message events
+/// Supports both cdev-agent format and session API format
+struct ClaudeMessagePayload: Codable {
+    let type: String?           // "user" or "assistant"
+    let uuid: String?
+    let sessionId: String?      // Supports both sessionId and session_id
+    let timestamp: String?
+    let message: MessageContent?
+    let role: String?           // cdev-agent sends role at payload level
+    let content: ContentValue?  // cdev-agent sends content at payload level
+    let stopReason: String?     // cdev-agent sends stop_reason
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case uuid
+        case sessionId
+        case sessionIdSnake = "session_id"  // cdev-agent format
+        case timestamp
+        case message
+        case role
+        case content
+        case stopReason = "stop_reason"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        uuid = try container.decodeIfPresent(String.self, forKey: .uuid)
+        timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
+        message = try container.decodeIfPresent(MessageContent.self, forKey: .message)
+        role = try container.decodeIfPresent(String.self, forKey: .role)
+        content = try container.decodeIfPresent(ContentValue.self, forKey: .content)
+        stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+
+        // Handle both sessionId and session_id
+        if let sid = try container.decodeIfPresent(String.self, forKey: .sessionId) {
+            sessionId = sid
+        } else if let sid = try container.decodeIfPresent(String.self, forKey: .sessionIdSnake) {
+            sessionId = sid
+        } else {
+            sessionId = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(uuid, forKey: .uuid)
+        try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        try container.encodeIfPresent(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(message, forKey: .message)
+        try container.encodeIfPresent(role, forKey: .role)
+        try container.encodeIfPresent(content, forKey: .content)
+        try container.encodeIfPresent(stopReason, forKey: .stopReason)
+    }
+
+    /// Unified access to role (from message or payload level)
+    var effectiveRole: String? {
+        role ?? message?.role ?? type
+    }
+
+    /// Unified access to content (from message or payload level)
+    var effectiveContent: ContentValue? {
+        content ?? message?.content
+    }
+
+    /// Message content with role and content blocks
+    struct MessageContent: Codable {
+        let role: String?
+        let content: ContentValue?
+        let model: String?
+    }
+
+    /// Content can be string (user) or array of blocks (assistant)
+    enum ContentValue: Codable {
+        case text(String)
+        case blocks([ContentBlock])
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let text = try? container.decode(String.self) {
+                self = .text(text)
+            } else if let blocks = try? container.decode([ContentBlock].self) {
+                self = .blocks(blocks)
+            } else {
+                self = .text("")
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .text(let text):
+                try container.encode(text)
+            case .blocks(let blocks):
+                try container.encode(blocks)
+            }
+        }
+
+        /// Extract text content
+        var textContent: String {
+            switch self {
+            case .text(let text):
+                return text
+            case .blocks(let blocks):
+                return blocks
+                    .compactMap { $0.text }
+                    .joined(separator: "\n")
+            }
+        }
+    }
+
+    /// Content block types: text, thinking, tool_use, tool_result
+    /// Supports both cdev-agent format (tool_name, tool_id, tool_input) and API format (name, id, input)
+    struct ContentBlock: Codable, Identifiable {
+        var id: String { effectiveId }
+
+        let type: String        // "text", "thinking", "tool_use", "tool_result"
+        let text: String?       // For text/thinking blocks
+
+        // API format
+        let blockId: String?    // id field
+        let name: String?       // Tool name
+        let input: [String: AnyCodableValue]?  // Tool input params
+
+        // cdev-agent format
+        let toolId: String?     // tool_id field
+        let toolName: String?   // tool_name field
+        let toolInput: [String: AnyCodableValue]?  // tool_input field
+
+        // Tool result fields
+        let toolUseId: String?  // Reference to tool_use (for tool_result)
+        let content: String?    // Result content (for tool_result)
+        let isError: Bool?      // Whether tool result is error
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case text
+            case blockId = "id"
+            case name
+            case input
+            case toolId = "tool_id"
+            case toolName = "tool_name"
+            case toolInput = "tool_input"
+            case toolUseId = "tool_use_id"
+            case content
+            case isError = "is_error"
+        }
+
+        /// Unified access to tool ID (supports both formats)
+        var effectiveId: String {
+            blockId ?? toolId ?? UUID().uuidString
+        }
+
+        /// Unified access to tool name (supports both formats)
+        var effectiveName: String? {
+            name ?? toolName
+        }
+
+        /// Unified access to tool input (supports both formats)
+        var effectiveInput: [String: AnyCodableValue]? {
+            input ?? toolInput
+        }
+    }
+}
+
+/// Helper for encoding/decoding arbitrary JSON values
+struct AnyCodableValue: Codable {
+    let value: Any
+
+    init(_ value: Any) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            value = string
+        } else if let int = try? container.decode(Int.self) {
+            value = int
+        } else if let double = try? container.decode(Double.self) {
+            value = double
+        } else if let bool = try? container.decode(Bool.self) {
+            value = bool
+        } else if let dict = try? container.decode([String: AnyCodableValue].self) {
+            value = dict.mapValues { $0.value }
+        } else if let array = try? container.decode([AnyCodableValue].self) {
+            value = array.map { $0.value }
+        } else {
+            value = ""
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        if let string = value as? String {
+            try container.encode(string)
+        } else if let int = value as? Int {
+            try container.encode(int)
+        } else if let double = value as? Double {
+            try container.encode(double)
+        } else if let bool = value as? Bool {
+            try container.encode(bool)
+        } else {
+            try container.encodeNil()
+        }
+    }
+
+    /// String representation for display
+    var stringValue: String {
+        if let string = value as? String {
+            return string
+        } else if let dict = value as? [String: Any] {
+            // Format as JSON-like string
+            let pairs = dict.map { "\($0.key): \($0.value)" }
+            return pairs.joined(separator: ", ")
+        } else {
+            return String(describing: value)
+        }
     }
 }
 

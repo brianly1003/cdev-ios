@@ -38,6 +38,7 @@ struct DashboardView: View {
                 TabView(selection: $viewModel.selectedTab) {
                     LogListView(
                         logs: viewModel.logs,
+                        elements: viewModel.chatElements,  // NEW: Elements API UI
                         onClear: { Task { await viewModel.clearLogs() } },
                         isVisible: viewModel.selectedTab == .logs
                     )
@@ -94,6 +95,7 @@ struct DashboardView: View {
                     currentSessionId: viewModel.agentStatus.sessionId,
                     hasMore: viewModel.sessionsHasMore,
                     isLoadingMore: viewModel.isLoadingMoreSessions,
+                    agentRepository: viewModel.agentRepository,
                     onSelect: { sessionId in
                         Task { await viewModel.resumeSession(sessionId) }
                     },
@@ -500,5 +502,11 @@ struct ActionBarView: View {
         .background(ColorSystem.terminalBg)
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
+        // Dismiss keyboard when Claude starts running - don't auto-focus when done
+        .onChange(of: claudeState) { _, newState in
+            if newState == .running {
+                isFocused = false
+            }
+        }
     }
 }

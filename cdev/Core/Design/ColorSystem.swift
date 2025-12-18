@@ -101,14 +101,35 @@ enum ColorSystem {
         static let addedBg = Color(hex: "#0D4429")
         static let addedText = Color(hex: "#7EE787")
         static let addedGutter = Color(hex: "#238636")
+        static let added = addedText  // Convenience alias
 
         static let removedBg = Color(hex: "#4C1D16")
         static let removedText = Color(hex: "#FF7B72")
         static let removedGutter = Color(hex: "#DA3633")
+        static let removed = removedText  // Convenience alias
 
         static let contextText = Color(hex: "#8B949E")
         static let headerBg = Color(hex: "#161B22")
         static let headerText = Color(hex: "#58A6FF")
+    }
+
+    // MARK: - Tool Colors (for tool call UI)
+
+    enum Tool {
+        /// Tool name highlighting
+        static let name = ColorSystem.primary
+        /// Running tool indicator
+        static let running = ColorSystem.info
+        /// Completed tool indicator
+        static let completed = ColorSystem.primary
+        /// Error tool indicator
+        static let error = ColorSystem.error
+        /// Interrupted tool indicator
+        static let interrupted = ColorSystem.warning
+        /// Tool result text
+        static let result = ColorSystem.textSecondary
+        /// Tool result error
+        static let resultError = ColorSystem.error
     }
 
     // MARK: - Log Stream Colors

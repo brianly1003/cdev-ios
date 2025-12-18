@@ -64,5 +64,6 @@ enum Constants {
         static let showSessionId = "show_session_id"
         static let diffZoomScale = "diff_zoom_scale"
         static let selectedSessionId = "selected_session_id"
+        static let useElementsView = "use_elements_view"  // Feature flag for Elements API UI
     }
 }

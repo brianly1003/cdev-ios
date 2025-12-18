@@ -19,10 +19,17 @@ final class DashboardViewModel: ObservableObject {
     @Published var diffs: [DiffEntry] = []
     @Published var selectedTab: DashboardTab = .logs
 
+    // Chat Messages (unified view with tool calls)
+    @Published var chatMessages: [ChatMessage] = []
+    @Published var isLoadingChatMessages: Bool = false
+
+    // Chat Elements (Elements API style - sophisticated UI)
+    @Published var chatElements: [ChatElement] = []
+
     /// Log count excluding system messages (for badge display)
     /// System messages like "Started new session" are still shown but not counted
     var logsCountForBadge: Int {
-        logs.filter { $0.stream != .system }.count
+        chatElements.count > 0 ? chatElements.count : logs.filter { $0.stream != .system }.count
     }
 
     // UI State
@@ -42,10 +49,13 @@ final class DashboardViewModel: ObservableObject {
     // MARK: - Dependencies
 
     private let webSocketService: WebSocketServiceProtocol
-    private let agentRepository: AgentRepositoryProtocol
+    private let _agentRepository: AgentRepositoryProtocol
     private let sendPromptUseCase: SendPromptUseCase
     private let respondToClaudeUseCase: RespondToClaudeUseCase
     private let sessionRepository: SessionRepository
+
+    /// Public accessor for agentRepository (needed for SessionHistoryView)
+    var agentRepository: AgentRepositoryProtocol { _agentRepository }
 
     private let logCache: LogCache
     private let diffCache: DiffCache
@@ -85,7 +95,7 @@ final class DashboardViewModel: ObservableObject {
         diffCache: DiffCache
     ) {
         self.webSocketService = webSocketService
-        self.agentRepository = agentRepository
+        self._agentRepository = agentRepository
         self.sendPromptUseCase = sendPromptUseCase
         self.respondToClaudeUseCase = respondToClaudeUseCase
         self.sessionRepository = sessionRepository
@@ -193,6 +203,10 @@ final class DashboardViewModel: ObservableObject {
         )
         await logCache.add(userEntry)
         await forceLogUpdate() // Immediate for user action
+
+        // Also add as ChatElement for sophisticated UI
+        let userElement = ChatElement.userInput(userMessage)
+        chatElements.append(userElement)
 
         do {
             // If Claude is waiting for a response, use respondToClaude
@@ -326,7 +340,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             // Reset pagination state
             sessionsNextOffset = 0
-            let response = try await agentRepository.getSessions(limit: sessionsPageSize, offset: 0)
+            let response = try await _agentRepository.getSessions(limit: sessionsPageSize, offset: 0)
             sessions = response.sessions
             sessionsHasMore = response.hasMore
             sessionsNextOffset = response.nextOffset
@@ -342,7 +356,7 @@ final class DashboardViewModel: ObservableObject {
 
         isLoadingMoreSessions = true
         do {
-            let response = try await agentRepository.getSessions(limit: sessionsPageSize, offset: sessionsNextOffset)
+            let response = try await _agentRepository.getSessions(limit: sessionsPageSize, offset: sessionsNextOffset)
             sessions.append(contentsOf: response.sessions)
             sessionsHasMore = response.hasMore
             sessionsNextOffset = response.nextOffset
@@ -359,9 +373,10 @@ final class DashboardViewModel: ObservableObject {
         isLoading = true
         Haptics.medium()
 
-        // Clear current logs
+        // Clear current logs and elements
         await logCache.clear()
         logs = []
+        chatElements = []
 
         // Update sessionId - this is a TRUSTED source (user explicit selection)
         setSelectedSession(sessionId)
@@ -370,10 +385,15 @@ final class DashboardViewModel: ObservableObject {
 
         // Load session messages
         do {
-            let messagesResponse = try await agentRepository.getSessionMessages(sessionId: sessionId)
+            let messagesResponse = try await _agentRepository.getSessionMessages(sessionId: sessionId)
             for message in messagesResponse.messages {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
+                }
+                // Also create ChatElement from session message
+                let chatMessage = ChatMessage.from(sessionMessage: message)
+                if let element = convertChatMessageToElement(chatMessage) {
+                    chatElements.append(element)
                 }
             }
             await forceLogUpdate()
@@ -388,9 +408,10 @@ final class DashboardViewModel: ObservableObject {
 
     /// Start a new session (clear current context)
     func startNewSession() async {
-        // Clear logs and session state
+        // Clear logs, elements, and session state
         await logCache.clear()
         logs = []
+        chatElements = []
         setSelectedSession(nil)
         hasActiveConversation = false
         AppLogger.log("[Dashboard] Started new session - cleared session state")
@@ -409,6 +430,7 @@ final class DashboardViewModel: ObservableObject {
     private func clearAndStartNew() async {
         await logCache.clear()
         logs = []
+        chatElements = []
         setSelectedSession(nil)
         hasActiveConversation = false
         AppLogger.log("[Dashboard] Cleared & started new - cleared session state")
@@ -425,7 +447,7 @@ final class DashboardViewModel: ObservableObject {
     /// Delete a specific session
     func deleteSession(_ sessionId: String) async {
         do {
-            _ = try await agentRepository.deleteSession(sessionId: sessionId)
+            _ = try await _agentRepository.deleteSession(sessionId: sessionId)
             // Remove from local list
             sessions.removeAll { $0.sessionId == sessionId }
             Haptics.success()
@@ -439,13 +461,14 @@ final class DashboardViewModel: ObservableObject {
     /// Delete all sessions
     func deleteAllSessions() async {
         do {
-            let response = try await agentRepository.deleteAllSessions()
+            let response = try await _agentRepository.deleteAllSessions()
             sessions = []
             AppLogger.log("[Dashboard] Deleted \(response.deleted) sessions")
 
-            // Also clear current logs and session state
+            // Also clear current logs, elements, and session state
             await logCache.clear()
             logs = []
+            chatElements = []
             setSelectedSession(nil)
             hasActiveConversation = false
 
@@ -486,7 +509,7 @@ final class DashboardViewModel: ObservableObject {
         Haptics.medium()
 
         do {
-            try await agentRepository.stopClaude()
+            try await _agentRepository.stopClaude()
             Haptics.success()
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
@@ -547,7 +570,7 @@ final class DashboardViewModel: ObservableObject {
     /// Refresh status
     func refreshStatus() async {
         do {
-            let newStatus = try await agentRepository.fetchStatus()
+            let newStatus = try await _agentRepository.fetchStatus()
 
             // IMPORTANT: Re-read sessionId AFTER await to avoid race condition
             // During the await, loadRecentSessionHistory may have set the sessionId
@@ -578,7 +601,7 @@ final class DashboardViewModel: ObservableObject {
     /// Refresh git status from API
     func refreshGitStatus() async {
         do {
-            let gitStatus = try await agentRepository.getGitStatus()
+            let gitStatus = try await _agentRepository.getGitStatus()
             // Clear existing entries and add fresh ones from API
             await diffCache.clear()
             for file in gitStatus.files {
@@ -591,10 +614,11 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Clear logs
+    /// Clear logs and chat elements
     func clearLogs() async {
         await logCache.clear()
         logs = []
+        chatElements = []
         Haptics.light()
     }
 
@@ -625,7 +649,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             // First get list of sessions to find the most recent one (just need 1)
             AppLogger.log("[Dashboard] Calling getSessions API...")
-            let sessionsResponse = try await agentRepository.getSessions(limit: 1, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(limit: 1, offset: 0)
             AppLogger.log("[Dashboard] Sessions response: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
 
             // Use current session ID if available and not empty, otherwise use most recent
@@ -645,8 +669,9 @@ final class DashboardViewModel: ObservableObject {
 
             AppLogger.log("[Dashboard] Loading history for session: \(sessionId)")
 
-            // Clear existing logs before loading new session
+            // Clear existing logs and elements before loading new session
             await logCache.clear()
+            chatElements = []
 
             // Store sessionId - this is a TRUSTED source (from sessions API)
             setSelectedSession(sessionId)
@@ -657,7 +682,7 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Fetching messages for session: \(sessionId)")
             let messagesResponse: SessionMessagesResponse
             do {
-                messagesResponse = try await agentRepository.getSessionMessages(sessionId: sessionId)
+                messagesResponse = try await _agentRepository.getSessionMessages(sessionId: sessionId)
                 AppLogger.log("[Dashboard] Got \(messagesResponse.count) messages")
             } catch {
                 AppLogger.error(error, context: "Fetch session messages")
@@ -671,15 +696,21 @@ final class DashboardViewModel: ObservableObject {
                 return
             }
 
-            // Convert to log entries and add to cache (skip tool messages with no text)
+            // Convert to log entries and ChatElements (skip tool messages with no text)
             var entriesAdded = 0
             for message in messagesResponse.messages {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
                 }
+                // Also create ChatElement from session message
+                let chatMessage = ChatMessage.from(sessionMessage: message)
+                let element = convertChatMessageToElement(chatMessage)
+                if let element = element {
+                    chatElements.append(element)
+                }
             }
-            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries from \(messagesResponse.count) messages")
+            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(chatElements.count) elements from \(messagesResponse.count) messages")
 
             // Update logs array
             await forceLogUpdate()
@@ -725,10 +756,26 @@ final class DashboardViewModel: ObservableObject {
 
     private func handleEvent(_ event: AgentEvent) async {
         switch event.type {
+        case .claudeMessage:
+            // NEW: Structured message with content blocks
+            // Convert to ChatElements for sophisticated UI
+            if case .claudeMessage(let payload) = event.payload {
+                let elements = ChatElement.from(payload: payload)
+                for element in elements {
+                    chatElements.append(element)
+                }
+                AppLogger.log("[Dashboard] Added \(elements.count) chat elements from claude_message")
+            }
+
         case .claudeLog:
             if let entry = LogEntry.from(event: event) {
                 await logCache.add(entry)
                 scheduleLogUpdate() // Debounced - prevents UI lag with rapid logs
+
+                // NOTE: Don't convert claude_log to ChatElements
+                // claude_log is plain text output - not structured messages
+                // ChatElements should only come from claude_message events (structured)
+                // The legacy LogListView handles claude_log display properly
             }
             // NOTE: Do NOT update sessionId from log events!
             // Session ID should only come from trusted sources:
@@ -851,7 +898,7 @@ final class DashboardViewModel: ObservableObject {
     private func validateSessionExists(_ sessionId: String) async -> Bool {
         do {
             // Load a larger batch for validation since we need to search
-            let sessionsResponse = try await agentRepository.getSessions(limit: 100, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(limit: 100, offset: 0)
             let exists = sessionsResponse.sessions.contains { $0.sessionId == sessionId }
             if !exists {
                 AppLogger.log("[Dashboard] Session \(sessionId) not found in first 100 sessions (deleted or old)")
@@ -864,12 +911,31 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    /// Convert ChatMessage to ChatElement for unified rendering
+    private func convertChatMessageToElement(_ message: ChatMessage) -> ChatElement? {
+        switch message.type {
+        case .user:
+            return ChatElement.userInput(message.textContent)
+
+        case .assistant:
+            // For assistant messages, we need to create multiple elements for different blocks
+            // For simplicity, just create one element with the text content
+            if !message.textContent.isEmpty {
+                return ChatElement.assistantText(message.textContent, model: message.model)
+            }
+            return nil
+
+        case .system:
+            return ChatElement.assistantText(message.textContent)
+        }
+    }
+
     /// Get the most recent session ID from the server
     /// Returns the current session if available, otherwise the first session in the list
     private func getMostRecentSessionId() async -> String? {
         do {
             // Just need the first session, so limit to 1
-            let sessionsResponse = try await agentRepository.getSessions(limit: 1, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(limit: 1, offset: 0)
             AppLogger.log("[Dashboard] getMostRecentSessionId: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
 
             // Prefer current session if available
