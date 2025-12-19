@@ -57,6 +57,9 @@ final class DashboardViewModel: ObservableObject {
     private var searchDebounceTask: Task<Void, Never>?
     private var searchStateCancellable: AnyCancellable?
 
+    // Scroll Request (for floating toolkit long-press gesture)
+    @Published var scrollRequest: ScrollDirection?
+
     // Sessions (for /resume command)
     @Published var sessions: [SessionsResponse.SessionInfo] = []
     @Published var showSessionPicker: Bool = false
@@ -1456,6 +1459,16 @@ final class DashboardViewModel: ObservableObject {
     /// Scroll to current search match
     func scrollToCurrentMatch() -> String? {
         return terminalSearchState.currentMatchId
+    }
+
+    /// Request scroll to top or bottom (triggered by floating toolkit long-press)
+    func requestScroll(direction: ScrollDirection) {
+        scrollRequest = direction
+        // Auto-reset after a short delay (the view will observe and handle it)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            scrollRequest = nil
+        }
     }
 
     // MARK: - Session Watching

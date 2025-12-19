@@ -90,7 +90,8 @@ struct DashboardView: View {
                             onLoadMore: { await viewModel.loadMoreMessages() },
                             searchText: searchText,
                             matchingElementIds: matchingIds,
-                            currentMatchIndex: matchIndex
+                            currentMatchIndex: matchIndex,
+                            scrollRequest: viewModel.scrollRequest
                         )
                         .tag(DashboardTab.logs)
 
@@ -199,7 +200,10 @@ struct DashboardView: View {
             }
 
             // Floating toolkit button (AssistiveTouch-style)
-            FloatingToolkitButton(items: toolkitItems)
+            FloatingToolkitButton(items: toolkitItems) { direction in
+                // Request scroll to top or bottom
+                viewModel.requestScroll(direction: direction)
+            }
         }
         .errorAlert($viewModel.error)
         .onAppear {

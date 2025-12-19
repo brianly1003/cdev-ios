@@ -178,13 +178,25 @@ final class ToolkitBuilder {
     }
 }
 
+// MARK: - Scroll Direction
+
+/// Direction for scroll gesture
+enum ScrollDirection {
+    case top
+    case bottom
+}
+
 // MARK: - Floating Toolkit Button
 
 /// AssistiveTouch-style floating button with expandable toolkit menu
 /// Draggable, remembers position, compact design
 /// Automatically hides when keyboard is visible
+/// Long-press + swipe up/down for scroll to top/bottom
 struct FloatingToolkitButton: View {
     let items: [ToolkitItem]
+
+    /// Callback for scroll actions (triggered by long-press + swipe)
+    var onScrollRequest: ((ScrollDirection) -> Void)?
 
     @State private var isExpanded = false
     @State private var position: CGPoint = .zero
@@ -194,6 +206,11 @@ struct FloatingToolkitButton: View {
     @GestureState private var dragOffset: CGSize = .zero
     @State private var isDragging = false
 
+    // Long-press scroll state
+    @State private var isLongPressActive = false
+    @State private var longPressDragOffset: CGSize = .zero
+    @State private var hoveredScrollDirection: ScrollDirection?
+
     // Idle state - fade to 0.5 opacity after 4 seconds of inactivity
     @State private var isIdle = false
     @State private var idleTimer: Timer?
@@ -202,6 +219,10 @@ struct FloatingToolkitButton: View {
 
     // Threshold to distinguish tap from drag (in points)
     private let tapThreshold: CGFloat = 10
+
+    // Long press scroll thresholds
+    private let scrollArrowDistance: CGFloat = 70  // Distance from button to arrow
+    private let scrollActivationThreshold: CGFloat = 40  // How far to drag to activate
 
     // Observer tokens for proper cleanup (prevent memory leaks)
     @State private var keyboardShowObserver: NSObjectProtocol?
@@ -250,21 +271,50 @@ struct FloatingToolkitButton: View {
                         }
                     }
 
+                    // Scroll guide arrows (visible during long-press)
+                    if isLongPressActive {
+                        let btnPos = currentPosition(in: geometry)
+
+                        // Up arrow
+                        ScrollGuideArrow(
+                            direction: .top,
+                            isHovered: hoveredScrollDirection == .top,
+                            size: 44
+                        )
+                        .position(x: btnPos.x, y: btnPos.y - scrollArrowDistance)
+                        .transition(.scale.combined(with: .opacity))
+                        .zIndex(3)
+
+                        // Down arrow
+                        ScrollGuideArrow(
+                            direction: .bottom,
+                            isHovered: hoveredScrollDirection == .bottom,
+                            size: 44
+                        )
+                        .position(x: btnPos.x, y: btnPos.y + scrollArrowDistance)
+                        .transition(.scale.combined(with: .opacity))
+                        .zIndex(3)
+                    }
+
                     // Main floating button - tap/drag detected in single gesture
                     MainButtonView(
                         isExpanded: isExpanded,
                         isDragging: isDragging,
+                        isLongPressActive: isLongPressActive,
                         size: buttonSize
                     )
-                    .opacity(isIdle && !isExpanded && !isDragging ? idleOpacity : 1.0)
+                    .opacity(isIdle && !isExpanded && !isDragging && !isLongPressActive ? idleOpacity : 1.0)
                     .animation(.easeInOut(duration: 0.3), value: isIdle)
                     .position(currentPosition(in: geometry))
-                    .gesture(dragGesture(in: geometry))
+                    .gesture(longPressScrollGesture(in: geometry))
+                    .simultaneousGesture(dragGesture(in: geometry))
                     .zIndex(2)
                     .transition(.scale.combined(with: .opacity))
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isExpanded)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isLongPressActive)
+            .animation(.easeInOut(duration: 0.15), value: hoveredScrollDirection)
             .animation(.easeInOut(duration: 0.2), value: isKeyboardVisible)
             .onAppear {
                 AppLogger.log("[FloatingToolkit] onAppear called")
@@ -539,6 +589,9 @@ struct FloatingToolkitButton: View {
         DragGesture(minimumDistance: 0)
             // GestureState for smooth 120Hz finger tracking
             .updating($dragOffset) { value, state, _ in
+                // Skip if long press is active
+                guard !isLongPressActive else { return }
+
                 state = value.translation
 
                 // Mark as dragging once past threshold
@@ -555,7 +608,73 @@ struct FloatingToolkitButton: View {
                 }
             }
             .onEnded { value in
+                // Skip if long press is active
+                guard !isLongPressActive else { return }
                 handleGestureEnd(translation: value.translation, in: geometry)
+            }
+    }
+
+    // MARK: - Long Press Scroll Gesture
+
+    /// Long press + drag gesture for scroll to top/bottom
+    private func longPressScrollGesture(in geometry: GeometryProxy) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.4)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    // Long press started
+                    if !isLongPressActive {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                            isLongPressActive = true
+                            isExpanded = false
+                        }
+                        Haptics.medium()
+                        cancelIdleTimer()
+                    }
+
+                case .second(true, let drag):
+                    // Dragging after long press
+                    if let drag = drag {
+                        longPressDragOffset = drag.translation
+
+                        // Determine which arrow is hovered based on vertical drag
+                        let newDirection: ScrollDirection?
+                        if drag.translation.height < -scrollActivationThreshold {
+                            newDirection = .top
+                        } else if drag.translation.height > scrollActivationThreshold {
+                            newDirection = .bottom
+                        } else {
+                            newDirection = nil
+                        }
+
+                        // Haptic feedback when crossing threshold
+                        if newDirection != hoveredScrollDirection {
+                            if newDirection != nil {
+                                Haptics.selection()
+                            }
+                            hoveredScrollDirection = newDirection
+                        }
+                    }
+
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                // Check if we should trigger scroll
+                if let direction = hoveredScrollDirection {
+                    Haptics.success()
+                    onScrollRequest?(direction)
+                }
+
+                // Reset state
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                    isLongPressActive = false
+                    hoveredScrollDirection = nil
+                }
+                longPressDragOffset = .zero
+                startIdleTimer()
             }
     }
 
@@ -635,21 +754,82 @@ struct FloatingToolkitButton: View {
     }
 }
 
+// MARK: - Scroll Guide Arrow Component
+
+/// Blur circle with arrow icon for scroll guide
+private struct ScrollGuideArrow: View {
+    let direction: ScrollDirection
+    let isHovered: Bool
+    let size: CGFloat
+
+    private var iconName: String {
+        direction == .top ? "chevron.up" : "chevron.down"
+    }
+
+    private var label: String {
+        direction == .top ? "Top" : "Bottom"
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            // Label (only when hovered)
+            if direction == .top && isHovered {
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
+            // Arrow circle with blur background
+            ZStack {
+                // Blur background
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .frame(width: size, height: size)
+                    .shadow(color: .black.opacity(0.3), radius: isHovered ? 12 : 6)
+
+                // Highlight ring when hovered
+                if isHovered {
+                    Circle()
+                        .stroke(Color.white.opacity(0.8), lineWidth: 2)
+                        .frame(width: size, height: size)
+                }
+
+                // Arrow icon
+                Image(systemName: iconName)
+                    .font(.system(size: size * 0.4, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .scaleEffect(isHovered ? 1.2 : 1.0)
+
+            // Label (only when hovered)
+            if direction == .bottom && isHovered {
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+    }
+}
+
 // MARK: - Main Button Component
 
 /// Visual-only button view - tap/drag handled by parent gesture
 private struct MainButtonView: View {
     let isExpanded: Bool
     let isDragging: Bool
+    var isLongPressActive: Bool = false
     let size: CGFloat
 
     var body: some View {
         ZStack {
-            // Outer glow
+            // Outer glow (intensified during long press)
             Circle()
-                .fill(ColorSystem.primary.opacity(0.2))
-                .frame(width: size + 8, height: size + 8)
-                .blur(radius: 4)
+                .fill(ColorSystem.primary.opacity(isLongPressActive ? 0.4 : 0.2))
+                .frame(width: size + (isLongPressActive ? 16 : 8), height: size + (isLongPressActive ? 16 : 8))
+                .blur(radius: isLongPressActive ? 8 : 4)
 
             // Main circle
             Circle()
@@ -661,16 +841,17 @@ private struct MainButtonView: View {
                     )
                 )
                 .frame(width: size, height: size)
-                .shadow(color: ColorSystem.primaryGlow, radius: isDragging ? 12 : 6)
+                .shadow(color: ColorSystem.primaryGlow, radius: isDragging || isLongPressActive ? 12 : 6)
 
-            // Icon
-            Image(systemName: isExpanded ? "xmark" : "wrench.and.screwdriver.fill")
+            // Icon (changes during long press)
+            Image(systemName: isLongPressActive ? "arrow.up.arrow.down" : (isExpanded ? "xmark" : "wrench.and.screwdriver.fill"))
                 .font(.system(size: size * 0.4, weight: .bold))
                 .foregroundStyle(.white)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
         }
-        .scaleEffect(isDragging ? 1.15 : 1.0)
+        .scaleEffect(isLongPressActive ? 1.1 : (isDragging ? 1.15 : 1.0))
         .animation(.spring(response: 0.2), value: isDragging)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isLongPressActive)
         .contentShape(Circle()) // Ensure the entire circle is tappable
     }
 }

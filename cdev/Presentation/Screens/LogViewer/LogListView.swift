@@ -21,10 +21,13 @@ struct LogListView: View {
     var matchingElementIds: [String] = []
     var currentMatchIndex: Int = 0
 
+    // Scroll request (from floating toolkit long-press)
+    var scrollRequest: ScrollDirection?
+
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0, scrollRequest: ScrollDirection? = nil) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
@@ -38,6 +41,7 @@ struct LogListView: View {
         self.searchText = searchText
         self.matchingElementIds = matchingElementIds
         self.currentMatchIndex = currentMatchIndex
+        self.scrollRequest = scrollRequest
     }
 
     var body: some View {
@@ -83,7 +87,8 @@ struct LogListView: View {
             onLoadMore: onLoadMore,
             searchText: searchText,
             matchingElementIds: matchingElementIds,
-            currentMatchIndex: currentMatchIndex
+            currentMatchIndex: currentMatchIndex,
+            scrollRequest: scrollRequest
         )
     }
 
@@ -515,6 +520,9 @@ private struct ElementsScrollView: View {
     var matchingElementIds: [String] = []
     var currentMatchIndex: Int = 0
 
+    // Scroll request (from floating toolkit long-press)
+    var scrollRequest: ScrollDirection?
+
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
     @State private var didTriggerLoadMore = false  // Track if we triggered load more (persists across re-renders)
@@ -628,6 +636,11 @@ private struct ElementsScrollView: View {
                         scrollToMatch(proxy: proxy, matchId: matchId)
                     }
                 }
+                .onChange(of: scrollRequest) { _, direction in
+                    // Handle scroll request from floating toolkit
+                    guard let direction = direction else { return }
+                    handleScrollRequest(direction: direction, proxy: proxy)
+                }
             }
 
             // Streaming indicator - fixed at bottom
@@ -702,6 +715,34 @@ private struct ElementsScrollView: View {
 
             withAnimation(.easeInOut(duration: 0.3)) {
                 proxy.scrollTo(matchId, anchor: .center)
+            }
+        }
+    }
+
+    /// Handle scroll request from floating toolkit long-press
+    private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            guard !Task.isCancelled else { return }
+
+            switch direction {
+            case .top:
+                // Scroll to first element or load more indicator
+                let targetId = hasMoreMessages ? "loadMore" : elements.first?.id
+                if let id = targetId {
+                    withAnimation(.easeInOut(duration: 0.4)) {
+                        proxy.scrollTo(id, anchor: .top)
+                    }
+                }
+                AppLogger.log("[ElementsScrollView] Scrolled to top")
+
+            case .bottom:
+                // Scroll to bottom anchor
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+                AppLogger.log("[ElementsScrollView] Scrolled to bottom")
             }
         }
     }
