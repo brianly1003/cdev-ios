@@ -189,7 +189,7 @@ final class AgentRepository: AgentRepositoryProtocol {
 
     func getSessionMessages(
         sessionId: String,
-        limit: Int = 50,
+        limit: Int = 20,
         offset: Int = 0,
         order: String = "desc"
     ) async throws -> SessionMessagesResponse {

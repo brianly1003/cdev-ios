@@ -9,6 +9,9 @@ struct SearchResultsView: View {
     let onSelect: (FileEntry) -> Void
     let onRetry: () -> Void
 
+    // Scroll request (from floating toolkit long-press)
+    var scrollRequest: ScrollDirection?
+
     var body: some View {
         Group {
             if isSearching && results.isEmpty {
@@ -28,38 +31,67 @@ struct SearchResultsView: View {
     // MARK: - Results List
 
     private var resultsList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                // Results header
-                HStack {
-                    Text("\(results.count) result\(results.count == 1 ? "" : "s")")
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(ColorSystem.textTertiary)
-                    Spacer()
-                }
-                .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, Spacing.xs)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    // Top anchor for scroll to top
+                    Color.clear
+                        .frame(height: 1)
+                        .id("searchResultsTop")
 
-                // Result rows
-                ForEach(results) { entry in
-                    SearchResultRow(
-                        entry: entry,
-                        query: query,
-                        onTap: {
-                            onSelect(entry)
-                            Haptics.selection()
-                        }
-                    )
-
-                    if entry.id != results.last?.id {
-                        Divider()
-                            .background(ColorSystem.terminalBgHighlight)
-                            .padding(.leading, Spacing.sm + 20 + Spacing.xs)
+                    // Results header
+                    HStack {
+                        Text("\(results.count) result\(results.count == 1 ? "" : "s")")
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                        Spacer()
                     }
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.vertical, Spacing.xs)
+
+                    // Result rows
+                    ForEach(results) { entry in
+                        SearchResultRow(
+                            entry: entry,
+                            query: query,
+                            onTap: {
+                                onSelect(entry)
+                                Haptics.selection()
+                            }
+                        )
+
+                        if entry.id != results.last?.id {
+                            Divider()
+                                .background(ColorSystem.terminalBgHighlight)
+                                .padding(.leading, Spacing.sm + 20 + Spacing.xs)
+                        }
+                    }
+
+                    // Bottom anchor for scroll to bottom
+                    Color.clear
+                        .frame(height: 1)
+                        .id("searchResultsBottom")
                 }
             }
+            .background(ColorSystem.terminalBg)
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
+            }
         }
-        .background(ColorSystem.terminalBg)
+    }
+
+    private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        switch direction {
+        case .top:
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("searchResultsTop", anchor: .top)
+            }
+        case .bottom:
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("searchResultsBottom", anchor: .bottom)
+            }
+        }
     }
 
     // MARK: - Searching State

@@ -8,6 +8,9 @@ struct SourceControlView: View {
     @ObservedObject var viewModel: SourceControlViewModel
     let onRefresh: () async -> Void
 
+    // Scroll request (from floating toolkit long-press)
+    var scrollRequest: ScrollDirection?
+
     @State private var selectedFile: GitFileEntry?
     @State private var showCommitSheet = false
     @State private var showDiscardAlert = false
@@ -55,86 +58,113 @@ struct SourceControlView: View {
     // MARK: - Content View
 
     private var contentView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                // Branch & Sync Header
-                BranchHeaderView(
-                    branch: viewModel.state.currentBranch,
-                    onPull: { Task { await viewModel.pull() } },
-                    onPush: { Task { await viewModel.push() } },
-                    onRefresh: { Task { await onRefresh() } }
-                )
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    // Top anchor for scroll to top
+                    Color.clear
+                        .frame(height: 1)
+                        .id("sourceControlTop")
 
-                // Commit Input Section
-                CommitInputView(
-                    message: $viewModel.state.commitMessage,
-                    canCommit: viewModel.state.canCommit,
-                    stagedCount: viewModel.state.stagedCount,
-                    isLoading: viewModel.isCommitting,
-                    onCommit: { Task { await viewModel.commit() } },
-                    onCommitAndPush: { Task { await viewModel.commitAndPush() } }
-                )
-
-                // Staged Changes Section
-                if !viewModel.state.stagedFiles.isEmpty {
-                    FileChangesSection(
-                        title: "Staged Changes",
-                        files: viewModel.state.stagedFiles,
-                        isStaged: true,
-                        isExpanded: $viewModel.stagedExpanded,
-                        onStageAll: nil,
-                        onUnstageAll: { Task { await viewModel.unstageAll() } },
-                        onFileAction: { file, action in
-                            handleFileAction(file: file, action: action)
-                        },
-                        onFileTap: { file in
-                            selectedFile = file
-                            Haptics.selection()
-                        }
+                    // Branch & Sync Header
+                    BranchHeaderView(
+                        branch: viewModel.state.currentBranch,
+                        onPull: { Task { await viewModel.pull() } },
+                        onPush: { Task { await viewModel.push() } },
+                        onRefresh: { Task { await onRefresh() } }
                     )
-                }
 
-                // Unstaged Changes Section (Modified + Untracked combined)
-                if !viewModel.state.allUnstagedFiles.isEmpty {
-                    FileChangesSection(
-                        title: "Changes",
-                        files: viewModel.state.allUnstagedFiles,
-                        isStaged: false,
-                        isExpanded: $viewModel.changesExpanded,
-                        onStageAll: { Task { await viewModel.stageAll() } },
-                        onUnstageAll: nil,
-                        onFileAction: { file, action in
-                            handleFileAction(file: file, action: action)
-                        },
-                        onFileTap: { file in
-                            selectedFile = file
-                            Haptics.selection()
-                        }
+                    // Commit Input Section
+                    CommitInputView(
+                        message: $viewModel.state.commitMessage,
+                        canCommit: viewModel.state.canCommit,
+                        stagedCount: viewModel.state.stagedCount,
+                        isLoading: viewModel.isCommitting,
+                        onCommit: { Task { await viewModel.commit() } },
+                        onCommitAndPush: { Task { await viewModel.commitAndPush() } }
                     )
-                }
 
-                // Conflicts Section (if any)
-                if !viewModel.state.conflictedFiles.isEmpty {
-                    FileChangesSection(
-                        title: "Merge Conflicts",
-                        files: viewModel.state.conflictedFiles,
-                        isStaged: false,
-                        isExpanded: .constant(true),
-                        isConflict: true,
-                        onStageAll: nil,
-                        onUnstageAll: nil,
-                        onFileAction: { file, action in
-                            handleFileAction(file: file, action: action)
-                        },
-                        onFileTap: { file in
-                            selectedFile = file
-                            Haptics.selection()
-                        }
-                    )
-                }
+                    // Staged Changes Section
+                    if !viewModel.state.stagedFiles.isEmpty {
+                        FileChangesSection(
+                            title: "Staged Changes",
+                            files: viewModel.state.stagedFiles,
+                            isStaged: true,
+                            isExpanded: $viewModel.stagedExpanded,
+                            onStageAll: nil,
+                            onUnstageAll: { Task { await viewModel.unstageAll() } },
+                            onFileAction: { file, action in
+                                handleFileAction(file: file, action: action)
+                            },
+                            onFileTap: { file in
+                                selectedFile = file
+                                Haptics.selection()
+                            }
+                        )
+                    }
 
-                // Bottom spacing
-                Color.clear.frame(height: Spacing.xl)
+                    // Unstaged Changes Section (Modified + Untracked combined)
+                    if !viewModel.state.allUnstagedFiles.isEmpty {
+                        FileChangesSection(
+                            title: "Changes",
+                            files: viewModel.state.allUnstagedFiles,
+                            isStaged: false,
+                            isExpanded: $viewModel.changesExpanded,
+                            onStageAll: { Task { await viewModel.stageAll() } },
+                            onUnstageAll: nil,
+                            onFileAction: { file, action in
+                                handleFileAction(file: file, action: action)
+                            },
+                            onFileTap: { file in
+                                selectedFile = file
+                                Haptics.selection()
+                            }
+                        )
+                    }
+
+                    // Conflicts Section (if any)
+                    if !viewModel.state.conflictedFiles.isEmpty {
+                        FileChangesSection(
+                            title: "Merge Conflicts",
+                            files: viewModel.state.conflictedFiles,
+                            isStaged: false,
+                            isExpanded: .constant(true),
+                            isConflict: true,
+                            onStageAll: nil,
+                            onUnstageAll: nil,
+                            onFileAction: { file, action in
+                                handleFileAction(file: file, action: action)
+                            },
+                            onFileTap: { file in
+                                selectedFile = file
+                                Haptics.selection()
+                            }
+                        )
+                    }
+
+                    // Bottom spacing
+                    Color.clear.frame(height: Spacing.xl)
+                        .id("sourceControlBottom")
+                }
+            }
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
+            }
+        }
+    }
+
+    // MARK: - Scroll Request Handler
+
+    private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        switch direction {
+        case .top:
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("sourceControlTop", anchor: .top)
+            }
+        case .bottom:
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("sourceControlBottom", anchor: .bottom)
             }
         }
     }
@@ -151,52 +181,68 @@ struct SourceControlView: View {
                 onRefresh: { Task { await onRefresh() } }
             )
 
-            ScrollView {
-                VStack(spacing: Spacing.lg) {
-                    Spacer(minLength: 60)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: Spacing.lg) {
+                        // Top anchor for scroll to top
+                        Color.clear
+                            .frame(height: 1)
+                            .id("sourceControlTop")
 
-                    Image(systemName: "checkmark.circle")
-                        .font(.system(size: 48))
-                        .foregroundStyle(ColorSystem.success)
+                        Spacer(minLength: 60)
 
-                    Text("No Changes")
-                        .font(Typography.title3)
-                        .foregroundStyle(ColorSystem.textPrimary)
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 48))
+                            .foregroundStyle(ColorSystem.success)
 
-                    Text("Your working directory is clean")
-                        .font(Typography.terminal)
-                        .foregroundStyle(ColorSystem.textTertiary)
+                        Text("No Changes")
+                            .font(Typography.title3)
+                            .foregroundStyle(ColorSystem.textPrimary)
 
-                    // Sync status hint
-                    if let branch = viewModel.state.currentBranch {
-                        if branch.ahead > 0 {
-                            HStack(spacing: Spacing.xs) {
-                                Image(systemName: "arrow.up.circle")
-                                    .font(.system(size: 14))
-                                Text("\(branch.ahead) commit\(branch.ahead == 1 ? "" : "s") to push")
-                                    .font(Typography.terminal)
+                        Text("Your working directory is clean")
+                            .font(Typography.terminal)
+                            .foregroundStyle(ColorSystem.textTertiary)
+
+                        // Sync status hint
+                        if let branch = viewModel.state.currentBranch {
+                            if branch.ahead > 0 {
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "arrow.up.circle")
+                                        .font(.system(size: 14))
+                                    Text("\(branch.ahead) commit\(branch.ahead == 1 ? "" : "s") to push")
+                                        .font(Typography.terminal)
+                                }
+                                .foregroundStyle(ColorSystem.primary)
+                                .padding(.top, Spacing.sm)
                             }
-                            .foregroundStyle(ColorSystem.primary)
-                            .padding(.top, Spacing.sm)
-                        }
-                        if branch.behind > 0 {
-                            HStack(spacing: Spacing.xs) {
-                                Image(systemName: "arrow.down.circle")
-                                    .font(.system(size: 14))
-                                Text("\(branch.behind) commit\(branch.behind == 1 ? "" : "s") to pull")
-                                    .font(Typography.terminal)
+                            if branch.behind > 0 {
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "arrow.down.circle")
+                                        .font(.system(size: 14))
+                                    Text("\(branch.behind) commit\(branch.behind == 1 ? "" : "s") to pull")
+                                        .font(Typography.terminal)
+                                }
+                                .foregroundStyle(ColorSystem.info)
+                                .padding(.top, Spacing.xs)
                             }
-                            .foregroundStyle(ColorSystem.info)
-                            .padding(.top, Spacing.xs)
                         }
+
+                        Spacer()
+
+                        // Bottom anchor for scroll to bottom
+                        Color.clear
+                            .frame(height: 1)
+                            .id("sourceControlBottom")
                     }
-
-                    Spacer()
+                    .frame(maxWidth: .infinity, minHeight: 300)
                 }
-                .frame(maxWidth: .infinity, minHeight: 300)
-            }
-            .refreshable {
-                await onRefresh()
+                .refreshable {
+                    await onRefresh()
+                }
+                .onChange(of: scrollRequest) { _, direction in
+                    guard let direction = direction else { return }
+                    handleScrollRequest(direction: direction, proxy: proxy)
+                }
             }
         }
     }
@@ -336,7 +382,6 @@ struct CommitInputView: View {
     @State private var showCommitOptions = false
 
     var body: some View {
-        let _ = AppLogger.log("[CommitInputView] body rendered - canCommit:\(canCommit), stagedCount:\(stagedCount), isLoading:\(isLoading)")
         VStack(spacing: 0) {
             HStack(spacing: Spacing.xs) {
                 // Commit message input

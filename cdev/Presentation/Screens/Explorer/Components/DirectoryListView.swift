@@ -8,34 +8,66 @@ struct DirectoryListView: View {
     let onSelect: (FileEntry) -> Void
     let onBack: () -> Void
 
+    // Scroll request (from floating toolkit long-press)
+    var scrollRequest: ScrollDirection?
+
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                // Parent directory row (if not at root)
-                if !currentPath.isEmpty {
-                    ParentDirectoryRow(onTap: onBack)
-                }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    // Top anchor for scroll to top
+                    Color.clear
+                        .frame(height: 1)
+                        .id("explorerTop")
 
-                // File entries
-                ForEach(entries) { entry in
-                    Button {
-                        Haptics.selection()
-                        onSelect(entry)
-                    } label: {
-                        FileRowView(entry: entry)
+                    // Parent directory row (if not at root)
+                    if !currentPath.isEmpty {
+                        ParentDirectoryRow(onTap: onBack)
                     }
-                    .buttonStyle(.plain)
 
-                    // Subtle separator
-                    if entry.id != entries.last?.id {
-                        Divider()
-                            .background(ColorSystem.terminalBgHighlight)
-                            .padding(.leading, Spacing.sm + 3 + Spacing.xs + 20)  // Align with text
+                    // File entries
+                    ForEach(entries) { entry in
+                        Button {
+                            Haptics.selection()
+                            onSelect(entry)
+                        } label: {
+                            FileRowView(entry: entry)
+                        }
+                        .buttonStyle(.plain)
+
+                        // Subtle separator
+                        if entry.id != entries.last?.id {
+                            Divider()
+                                .background(ColorSystem.terminalBgHighlight)
+                                .padding(.leading, Spacing.sm + 3 + Spacing.xs + 20)  // Align with text
+                        }
                     }
+
+                    // Bottom anchor for scroll to bottom
+                    Color.clear
+                        .frame(height: 1)
+                        .id("explorerBottom")
                 }
             }
+            .background(ColorSystem.terminalBg)
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
+            }
         }
-        .background(ColorSystem.terminalBg)
+    }
+
+    private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        switch direction {
+        case .top:
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("explorerTop", anchor: .top)
+            }
+        case .bottom:
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("explorerBottom", anchor: .bottom)
+            }
+        }
     }
 }
 

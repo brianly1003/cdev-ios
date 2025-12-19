@@ -5,6 +5,9 @@ import SwiftUI
 struct ExplorerView: View {
     @ObservedObject var viewModel: ExplorerViewModel
 
+    // Scroll request (from floating toolkit long-press)
+    var scrollRequest: ScrollDirection?
+
     // Sheet presentation state - use isPresented instead of item to avoid race conditions
     @State private var isShowingFileViewer = false
     @State private var isDismissing = false
@@ -22,9 +25,10 @@ struct ExplorerView: View {
                     viewModel.clearSearch()
                 }
             )
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
-            .background(ColorSystem.terminalBgElevated)
+
+            // Bottom border (matches Terminal search bar)
+            Divider()
+                .background(ColorSystem.terminalBgHighlight)
 
             // Breadcrumb navigation bar (hidden when searching)
             if !viewModel.isSearchActive {
@@ -102,7 +106,8 @@ struct ExplorerView: View {
                 },
                 onRetry: {
                     viewModel.retrySearch()
-                }
+                },
+                scrollRequest: scrollRequest
             )
         } else if viewModel.isLoading && viewModel.entries.isEmpty {
             // Loading skeleton
@@ -120,7 +125,8 @@ struct ExplorerView: View {
                 },
                 onBack: {
                     Task { await viewModel.navigateBack() }
-                }
+                },
+                scrollRequest: scrollRequest
             )
         }
     }

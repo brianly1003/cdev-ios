@@ -1,4 +1,311 @@
 import SwiftUI
+import UIKit
+
+// MARK: - Force Touch Button Wrapper
+
+/// UIViewRepresentable that wraps the button and handles ALL touch events
+/// Detects force touch (3D Touch) or long press (Haptic Touch fallback), normal taps, and drags
+private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
+    let content: Content
+    let buttonSize: CGFloat
+    let onTap: () -> Void
+    let onDragStart: () -> Void
+    let onDragChange: (CGSize) -> Void
+    let onDragEnd: (CGSize) -> Void
+    let onForceActivated: () -> Void
+    let onForceEnded: () -> Void
+    let onForceDrag: (CGPoint) -> Void
+
+    /// Force threshold (0.0 - 1.0, where 1.0 is maximum force)
+    private let forceThreshold: CGFloat = 0.4
+
+    /// Long press duration for devices without 3D Touch (Haptic Touch fallback)
+    private let longPressDuration: TimeInterval = 0.4
+
+    /// Distance threshold to distinguish tap from drag
+    private let dragThreshold: CGFloat = 10
+
+    func makeUIView(context: Context) -> ForceTouchContainerView {
+        let size = buttonSize + 20
+        let view = ForceTouchContainerView(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        view.backgroundColor = .clear
+        view.delegate = context.coordinator
+
+        // Add SwiftUI content as hosted view
+        let hostingController = UIHostingController(rootView: content)
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        hostingController.view.isUserInteractionEnabled = false // Let container handle touches
+
+        view.addSubview(hostingController.view)
+
+        context.coordinator.hostingController = hostingController
+        context.coordinator.containerSize = size
+
+        return view
+    }
+
+    func updateUIView(_ uiView: ForceTouchContainerView, context: Context) {
+        context.coordinator.hostingController?.rootView = content
+        // Update frame when SwiftUI layout changes
+        let size = context.coordinator.containerSize
+        uiView.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        context.coordinator.hostingController?.view.frame = CGRect(x: 0, y: 0, width: size, height: size)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ForceTouchContainerView, context: Context) -> CGSize? {
+        let size = buttonSize + 20
+        return CGSize(width: size, height: size)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            forceThreshold: forceThreshold,
+            longPressDuration: longPressDuration,
+            dragThreshold: dragThreshold,
+            onTap: onTap,
+            onDragStart: onDragStart,
+            onDragChange: onDragChange,
+            onDragEnd: onDragEnd,
+            onForceActivated: onForceActivated,
+            onForceEnded: onForceEnded,
+            onForceDrag: onForceDrag
+        )
+    }
+
+    class Coordinator: NSObject, ForceTouchContainerDelegate {
+        var hostingController: UIHostingController<Content>?
+
+        let forceThreshold: CGFloat
+        let longPressDuration: TimeInterval
+        let dragThreshold: CGFloat
+        let onTap: () -> Void
+        let onDragStart: () -> Void
+        let onDragChange: (CGSize) -> Void
+        let onDragEnd: (CGSize) -> Void
+        let onForceActivated: () -> Void
+        let onForceEnded: () -> Void
+        let onForceDrag: (CGPoint) -> Void
+
+        // Touch state
+        var isForceActive = false
+        var isDragging = false
+        var initialTouchLocation: CGPoint = .zero
+        var currentTranslation: CGSize = .zero
+        var touchStartTime: Date?
+        var longPressTimer: Timer?
+        var has3DTouch = false  // Will be determined on first touch
+        var containerSize: CGFloat = 68  // Default size, will be updated
+
+        init(forceThreshold: CGFloat,
+             longPressDuration: TimeInterval,
+             dragThreshold: CGFloat,
+             onTap: @escaping () -> Void,
+             onDragStart: @escaping () -> Void,
+             onDragChange: @escaping (CGSize) -> Void,
+             onDragEnd: @escaping (CGSize) -> Void,
+             onForceActivated: @escaping () -> Void,
+             onForceEnded: @escaping () -> Void,
+             onForceDrag: @escaping (CGPoint) -> Void) {
+            self.forceThreshold = forceThreshold
+            self.longPressDuration = longPressDuration
+            self.dragThreshold = dragThreshold
+            self.onTap = onTap
+            self.onDragStart = onDragStart
+            self.onDragChange = onDragChange
+            self.onDragEnd = onDragEnd
+            self.onForceActivated = onForceActivated
+            self.onForceEnded = onForceEnded
+            self.onForceDrag = onForceDrag
+        }
+
+        func touchBegan(at location: CGPoint, force: CGFloat, maximumForce: CGFloat) {
+            initialTouchLocation = location
+            currentTranslation = .zero
+            isDragging = false
+            isForceActive = false
+            touchStartTime = Date()
+
+            // Determine if device has 3D Touch (maximumForce > 0)
+            has3DTouch = maximumForce > 0
+
+            if has3DTouch {
+                // 3D Touch device - check force immediately
+                checkForce(force: force, maximumForce: maximumForce, location: location)
+            } else {
+                // No 3D Touch - start long press timer as fallback
+                startLongPressTimer(at: location)
+            }
+        }
+
+        func touchMoved(at location: CGPoint, force: CGFloat, maximumForce: CGFloat) {
+            let dx = location.x - initialTouchLocation.x
+            let dy = location.y - initialTouchLocation.y
+            let distance = sqrt(dx * dx + dy * dy)
+
+            // If moved too far before long press, cancel the timer
+            if !isForceActive && !isDragging && distance > dragThreshold {
+                cancelLongPressTimer()
+            }
+
+            if has3DTouch {
+                // 3D Touch device - check force
+                checkForce(force: force, maximumForce: maximumForce, location: location)
+            }
+
+            if isForceActive {
+                // Force/long press mode - report drag offset for scroll direction
+                DispatchQueue.main.async {
+                    self.onForceDrag(CGPoint(x: dx, y: dy))
+                }
+            } else if !isForceActive {
+                // Normal drag mode
+                if !isDragging && distance > dragThreshold {
+                    isDragging = true
+                    cancelLongPressTimer()
+                    DispatchQueue.main.async {
+                        self.onDragStart()
+                    }
+                }
+
+                if isDragging {
+                    currentTranslation = CGSize(width: dx, height: dy)
+                    DispatchQueue.main.async {
+                        self.onDragChange(self.currentTranslation)
+                    }
+                }
+            }
+        }
+
+        func touchEnded(at location: CGPoint) {
+            cancelLongPressTimer()
+
+            if isForceActive {
+                isForceActive = false
+                DispatchQueue.main.async {
+                    self.onForceEnded()
+                }
+            } else if isDragging {
+                isDragging = false
+                DispatchQueue.main.async {
+                    self.onDragEnd(self.currentTranslation)
+                }
+            } else {
+                // It's a tap
+                DispatchQueue.main.async {
+                    self.onTap()
+                }
+            }
+
+            currentTranslation = .zero
+            touchStartTime = nil
+        }
+
+        func touchCancelled() {
+            cancelLongPressTimer()
+
+            if isForceActive {
+                isForceActive = false
+                DispatchQueue.main.async {
+                    self.onForceEnded()
+                }
+            } else if isDragging {
+                isDragging = false
+                DispatchQueue.main.async {
+                    self.onDragEnd(self.currentTranslation)
+                }
+            }
+
+            currentTranslation = .zero
+            touchStartTime = nil
+        }
+
+        private func checkForce(force: CGFloat, maximumForce: CGFloat, location: CGPoint) {
+            guard maximumForce > 0, !isForceActive else { return }
+
+            let normalizedForce = force / maximumForce
+
+            if normalizedForce >= forceThreshold {
+                activateForceMode(at: location)
+            }
+        }
+
+        private func startLongPressTimer(at location: CGPoint) {
+            cancelLongPressTimer()
+            longPressTimer = Timer.scheduledTimer(withTimeInterval: longPressDuration, repeats: false) { [weak self] _ in
+                guard let self = self, !self.isDragging, !self.isForceActive else { return }
+                self.activateForceMode(at: location)
+            }
+        }
+
+        private func cancelLongPressTimer() {
+            longPressTimer?.invalidate()
+            longPressTimer = nil
+        }
+
+        private func activateForceMode(at location: CGPoint) {
+            isForceActive = true
+            isDragging = false
+            initialTouchLocation = location
+            cancelLongPressTimer()
+            DispatchQueue.main.async {
+                self.onForceActivated()
+            }
+        }
+    }
+}
+
+/// Protocol for force touch container delegate
+private protocol ForceTouchContainerDelegate: AnyObject {
+    func touchBegan(at location: CGPoint, force: CGFloat, maximumForce: CGFloat)
+    func touchMoved(at location: CGPoint, force: CGFloat, maximumForce: CGFloat)
+    func touchEnded(at location: CGPoint)
+    func touchCancelled()
+}
+
+/// Custom UIView container that captures all touch events
+private class ForceTouchContainerView: UIView {
+    weak var delegate: ForceTouchContainerDelegate?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // Ensure the view can receive touches
+        isUserInteractionEnabled = true
+        isMultipleTouchEnabled = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    // Expand hit test area slightly for better touch detection
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let expandedBounds = bounds.insetBy(dx: -10, dy: -10)
+        return expandedBounds.contains(point)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        delegate?.touchBegan(at: location, force: touch.force, maximumForce: touch.maximumPossibleForce)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        delegate?.touchMoved(at: location, force: touch.force, maximumForce: touch.maximumPossibleForce)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        delegate?.touchEnded(at: location)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        delegate?.touchCancelled()
+    }
+}
 
 // MARK: - Toolkit Item Protocol
 
@@ -191,24 +498,24 @@ enum ScrollDirection {
 /// AssistiveTouch-style floating button with expandable toolkit menu
 /// Draggable, remembers position, compact design
 /// Automatically hides when keyboard is visible
-/// Long-press + swipe up/down for scroll to top/bottom
+/// 3D Touch (force press) + swipe up/down for scroll to top/bottom
 struct FloatingToolkitButton: View {
     let items: [ToolkitItem]
 
-    /// Callback for scroll actions (triggered by long-press + swipe)
+    /// Callback for scroll actions (triggered by force touch + swipe)
     var onScrollRequest: ((ScrollDirection) -> Void)?
 
     @State private var isExpanded = false
     @State private var position: CGPoint = .zero
     @State private var isKeyboardVisible = false
 
-    // Drag state - GestureState for smooth 120Hz tracking
-    @GestureState private var dragOffset: CGSize = .zero
+    // Drag state - managed by UIKit touch handler
+    @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
 
-    // Long-press scroll state
-    @State private var isLongPressActive = false
-    @State private var longPressDragOffset: CGSize = .zero
+    // Force touch scroll state
+    @State private var isForceTouchActive = false
+    @State private var forceTouchDragOffset: CGPoint = .zero
     @State private var hoveredScrollDirection: ScrollDirection?
 
     // Idle state - fade to 0.5 opacity after 4 seconds of inactivity
@@ -220,7 +527,7 @@ struct FloatingToolkitButton: View {
     // Threshold to distinguish tap from drag (in points)
     private let tapThreshold: CGFloat = 10
 
-    // Long press scroll thresholds
+    // Force touch scroll thresholds
     private let scrollArrowDistance: CGFloat = 70  // Distance from button to arrow
     private let scrollActivationThreshold: CGFloat = 40  // How far to drag to activate
 
@@ -271,8 +578,8 @@ struct FloatingToolkitButton: View {
                         }
                     }
 
-                    // Scroll guide arrows (visible during long-press)
-                    if isLongPressActive {
+                    // Scroll guide arrows (visible during force touch)
+                    if isForceTouchActive {
                         let btnPos = currentPosition(in: geometry)
 
                         // Up arrow
@@ -296,24 +603,24 @@ struct FloatingToolkitButton: View {
                         .zIndex(3)
                     }
 
-                    // Main floating button - tap/drag detected in single gesture
+                    // Main floating button with SwiftUI gestures
                     MainButtonView(
                         isExpanded: isExpanded,
                         isDragging: isDragging,
-                        isLongPressActive: isLongPressActive,
+                        isForceTouchActive: isForceTouchActive,
                         size: buttonSize
                     )
-                    .opacity(isIdle && !isExpanded && !isDragging && !isLongPressActive ? idleOpacity : 1.0)
+                    .opacity(isIdle && !isExpanded && !isDragging && !isForceTouchActive ? idleOpacity : 1.0)
                     .animation(.easeInOut(duration: 0.3), value: isIdle)
                     .position(currentPosition(in: geometry))
-                    .gesture(longPressScrollGesture(in: geometry))
-                    .simultaneousGesture(dragGesture(in: geometry))
+                    .gesture(longPressScrollGesture())
+                    .simultaneousGesture(tapAndDragGesture(in: geometry))
                     .zIndex(2)
                     .transition(.scale.combined(with: .opacity))
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isExpanded)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isLongPressActive)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isForceTouchActive)
             .animation(.easeInOut(duration: 0.15), value: hoveredScrollDirection)
             .animation(.easeInOut(duration: 0.2), value: isKeyboardVisible)
             .onAppear {
@@ -585,138 +892,108 @@ struct FloatingToolkitButton: View {
         return -90                                   // Default: up
     }
 
-    private func dragGesture(in geometry: GeometryProxy) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            // GestureState for smooth 120Hz finger tracking
-            .updating($dragOffset) { value, state, _ in
-                // Skip if long press is active
-                guard !isLongPressActive else { return }
+    // MARK: - Drag Handlers (called by UIKit wrapper)
 
-                state = value.translation
-
-                // Mark as dragging once past threshold
-                if !isDragging && (abs(value.translation.width) > tapThreshold ||
-                                   abs(value.translation.height) > tapThreshold) {
-                    DispatchQueue.main.async {
-                        isDragging = true
-                        if isExpanded {
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                isExpanded = false
-                            }
-                        }
-                    }
-                }
+    private func handleDragStart() {
+        isDragging = true
+        resetIdleState()
+        if isExpanded {
+            withAnimation(.easeOut(duration: 0.15)) {
+                isExpanded = false
             }
-            .onEnded { value in
-                // Skip if long press is active
-                guard !isLongPressActive else { return }
-                handleGestureEnd(translation: value.translation, in: geometry)
-            }
+        }
+        AppLogger.log("[FloatingToolkit] Drag started")
     }
 
-    // MARK: - Long Press Scroll Gesture
-
-    /// Long press + drag gesture for scroll to top/bottom
-    private func longPressScrollGesture(in geometry: GeometryProxy) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.4)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onChanged { value in
-                switch value {
-                case .first(true):
-                    // Long press started
-                    if !isLongPressActive {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                            isLongPressActive = true
-                            isExpanded = false
-                        }
-                        Haptics.medium()
-                        cancelIdleTimer()
-                    }
-
-                case .second(true, let drag):
-                    // Dragging after long press
-                    if let drag = drag {
-                        longPressDragOffset = drag.translation
-
-                        // Determine which arrow is hovered based on vertical drag
-                        let newDirection: ScrollDirection?
-                        if drag.translation.height < -scrollActivationThreshold {
-                            newDirection = .top
-                        } else if drag.translation.height > scrollActivationThreshold {
-                            newDirection = .bottom
-                        } else {
-                            newDirection = nil
-                        }
-
-                        // Haptic feedback when crossing threshold
-                        if newDirection != hoveredScrollDirection {
-                            if newDirection != nil {
-                                Haptics.selection()
-                            }
-                            hoveredScrollDirection = newDirection
-                        }
-                    }
-
-                default:
-                    break
-                }
-            }
-            .onEnded { value in
-                // Check if we should trigger scroll
-                if let direction = hoveredScrollDirection {
-                    Haptics.success()
-                    onScrollRequest?(direction)
-                }
-
-                // Reset state
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                    isLongPressActive = false
-                    hoveredScrollDirection = nil
-                }
-                longPressDragOffset = .zero
-                startIdleTimer()
-            }
+    private func handleDragChange(translation: CGSize) {
+        // Update position directly during drag for smooth movement
+        // Don't use dragOffset since UIViewRepresentable position doesn't update smoothly
+        // Instead, we update position temporarily and finalize on drag end
+        dragOffset = translation
+        AppLogger.log("[FloatingToolkit] Drag change: \(translation)")
     }
 
-    /// Handle gesture end - detect tap vs drag based on translation distance
-    private func handleGestureEnd(translation: CGSize, in geometry: GeometryProxy) {
-        let distance = sqrt(translation.width * translation.width +
-                           translation.height * translation.height)
+    private func handleDragEnd(translation: CGSize, in geometry: GeometryProxy) {
+        isDragging = false
+        dragOffset = .zero
+        finalizeDrag(with: translation, in: geometry)
+        AppLogger.log("[FloatingToolkit] Drag ended: \(translation)")
+    }
 
-        if distance < tapThreshold {
-            // It's a TAP - toggle menu
-            isDragging = false
-            toggleMenu()
-            Haptics.light()
+    // MARK: - Force Touch Handlers
+
+    /// Called when force touch is activated (user pressed hard)
+    private func handleForceActivated() {
+        guard !isForceTouchActive else { return }
+
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+            isForceTouchActive = true
+            isExpanded = false
+        }
+        Haptics.medium()
+        cancelIdleTimer()
+        AppLogger.log("[FloatingToolkit] Force touch activated")
+    }
+
+    /// Called when force touch ends
+    private func handleForceEnded() {
+        // Trigger scroll if direction is hovered
+        if let direction = hoveredScrollDirection {
+            Haptics.success()
+            AppLogger.log("[FloatingToolkit] Force touch ended - triggering scroll direction=\(direction), forceTouchDragOffset=\(forceTouchDragOffset)")
+            onScrollRequest?(direction)
+            AppLogger.log("[FloatingToolkit] onScrollRequest callback completed")
         } else {
-            // It's a DRAG - update position
-            finalizeDrag(with: translation, in: geometry)
+            AppLogger.log("[FloatingToolkit] Force touch ended - no scroll (hoveredScrollDirection=nil, forceTouchDragOffset=\(forceTouchDragOffset))")
+        }
+
+        // Reset state
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+            isForceTouchActive = false
+            hoveredScrollDirection = nil
+        }
+        forceTouchDragOffset = .zero
+        startIdleTimer()
+    }
+
+    /// Called when user drags after force touch activation
+    private func handleForceDrag(offset: CGPoint) {
+        guard isForceTouchActive else { return }
+
+        forceTouchDragOffset = offset
+
+        // Determine which arrow is hovered based on vertical drag
+        let newDirection: ScrollDirection?
+        if offset.y < -scrollActivationThreshold {
+            newDirection = .top
+        } else if offset.y > scrollActivationThreshold {
+            newDirection = .bottom
+        } else {
+            newDirection = nil
+        }
+
+        // Haptic feedback when crossing threshold
+        if newDirection != hoveredScrollDirection {
+            if newDirection != nil {
+                Haptics.selection()
+            }
+            hoveredScrollDirection = newDirection
         }
     }
 
-    /// Finalize drag with proper state transitions to prevent visual jump-back
+    /// Finalize drag with proper state transitions
     private func finalizeDrag(with translation: CGSize, in geometry: GeometryProxy) {
         // Calculate final snapped position
         let finalPosition = calculateFinalPosition(with: translation, in: geometry)
 
-        // GestureState resets automatically, so we need to update position
-        // to where the finger was released BEFORE the reset causes a jump
-        // IMPORTANT: Reset idle state within the same transaction to prevent
-        // animation interference (idle animation would otherwise cause jump)
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            // Reset idle state first (no animation due to transaction)
-            isIdle = false
+        // Update position to release point first
+        position = CGPoint(
+            x: position.x + translation.width,
+            y: position.y + translation.height
+        )
 
-            position = CGPoint(
-                x: position.x + translation.width,
-                y: position.y + translation.height
-            )
-            isDragging = false
-        }
-
-        // Restart idle timer after transaction completes
+        // Reset idle state
+        isIdle = false
         startIdleTimer()
 
         // Animate from release point to snapped final position
@@ -752,65 +1029,163 @@ struct FloatingToolkitButton: View {
 
         return CGPoint(x: newX, y: newY)
     }
+
+    // MARK: - SwiftUI Gestures
+
+    /// Long press gesture to activate scroll mode (Haptic Touch fallback)
+    private func longPressScrollGesture() -> some Gesture {
+        LongPressGesture(minimumDuration: 0.4)
+            .onEnded { _ in
+                handleForceActivated()
+            }
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                switch value {
+                case .second(true, let drag):
+                    // Long press succeeded, now tracking drag for scroll direction
+                    if let drag = drag {
+                        handleForceDrag(offset: CGPoint(x: drag.translation.width, y: drag.translation.height))
+                    }
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                switch value {
+                case .second(true, _):
+                    // Long press + drag ended
+                    handleForceEnded()
+                default:
+                    break
+                }
+            }
+    }
+
+    /// Combined tap and drag gesture for menu toggle and repositioning
+    private func tapAndDragGesture(in geometry: GeometryProxy) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                // Only start drag if moved past threshold
+                let distance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
+
+                if distance > tapThreshold {
+                    if !isDragging {
+                        handleDragStart()
+                    }
+                    handleDragChange(translation: value.translation)
+                }
+            }
+            .onEnded { value in
+                let distance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
+
+                if isDragging {
+                    // Was dragging - finalize position
+                    handleDragEnd(translation: value.translation, in: geometry)
+                } else if distance <= tapThreshold && !isForceTouchActive {
+                    // Small movement and not in force touch mode - it's a tap
+                    toggleMenu()
+                }
+            }
+    }
 }
 
 // MARK: - Scroll Guide Arrow Component
 
-/// Blur circle with arrow icon for scroll guide
+/// Sophisticated blurred chevron arrows - smaller than floating button
+/// Style inspired by modern glassmorphism with white color and blur effects
 private struct ScrollGuideArrow: View {
     let direction: ScrollDirection
     let isHovered: Bool
     let size: CGFloat
 
-    private var iconName: String {
-        direction == .top ? "chevron.up" : "chevron.down"
-    }
-
-    private var label: String {
-        direction == .top ? "Top" : "Bottom"
-    }
+    // Chevron configuration - compact size (smaller than 48pt button)
+    private let chevronWidth: CGFloat = 28
+    private let chevronHeight: CGFloat = 10
+    private let chevronSpacing: CGFloat = 6
+    private let strokeWidth: CGFloat = 2.5
 
     var body: some View {
-        VStack(spacing: 4) {
-            // Label (only when hovered)
-            if direction == .top && isHovered {
-                Text(label)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+        ZStack {
+            // Blurred background layers (creates the sophisticated blur effect)
+            ForEach(0..<2, id: \.self) { layer in
+                BlurredChevronLayer(
+                    direction: direction,
+                    width: chevronWidth + CGFloat(layer) * 8,
+                    height: chevronHeight + CGFloat(layer) * 4,
+                    spacing: chevronSpacing + CGFloat(layer) * 2,
+                    blurRadius: CGFloat(layer + 1) * 8,
+                    opacity: isHovered ? 0.6 - Double(layer) * 0.2 : 0.3 - Double(layer) * 0.1
+                )
             }
 
-            // Arrow circle with blur background
-            ZStack {
-                // Blur background
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .frame(width: size, height: size)
-                    .shadow(color: .black.opacity(0.3), radius: isHovered ? 12 : 6)
+            // Sharp chevron on top (the crisp outline)
+            VStack(spacing: chevronSpacing) {
+                // First chevron (outer/dimmer)
+                ChevronShape()
+                    .stroke(
+                        Color.white.opacity(isHovered ? 0.5 : 0.3),
+                        style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
+                    )
+                    .frame(width: chevronWidth, height: chevronHeight)
 
-                // Highlight ring when hovered
-                if isHovered {
-                    Circle()
-                        .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                        .frame(width: size, height: size)
-                }
-
-                // Arrow icon
-                Image(systemName: iconName)
-                    .font(.system(size: size * 0.4, weight: .bold))
-                    .foregroundStyle(.white)
+                // Second chevron (inner/brighter)
+                ChevronShape()
+                    .stroke(
+                        Color.white.opacity(isHovered ? 0.9 : 0.6),
+                        style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
+                    )
+                    .frame(width: chevronWidth - 4, height: chevronHeight - 2)
             }
-            .scaleEffect(isHovered ? 1.2 : 1.0)
-
-            // Label (only when hovered)
-            if direction == .bottom && isHovered {
-                Text(label)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            .rotationEffect(.degrees(direction == .top ? 180 : 0))
         }
+        .frame(width: 40, height: 40)
+        .scaleEffect(isHovered ? 1.1 : 1.0)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+    }
+}
+
+/// Blurred chevron background layer for glow effect
+private struct BlurredChevronLayer: View {
+    let direction: ScrollDirection
+    let width: CGFloat
+    let height: CGFloat
+    let spacing: CGFloat
+    let blurRadius: CGFloat
+    let opacity: Double
+
+    var body: some View {
+        VStack(spacing: spacing) {
+            ChevronShape()
+                .stroke(Color.white, lineWidth: 3)
+                .frame(width: width, height: height)
+
+            ChevronShape()
+                .stroke(Color.white, lineWidth: 3)
+                .frame(width: width - 4, height: height - 2)
+        }
+        .rotationEffect(.degrees(direction == .top ? 180 : 0))
+        .blur(radius: blurRadius)
+        .opacity(opacity)
+    }
+}
+
+/// Custom chevron shape (V shape pointing down)
+private struct ChevronShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+
+        let midX = rect.midX
+        let topY = rect.minY
+        let bottomY = rect.maxY
+        let leftX = rect.minX
+        let rightX = rect.maxX
+
+        // Draw V shape pointing down
+        path.move(to: CGPoint(x: leftX, y: topY))
+        path.addLine(to: CGPoint(x: midX, y: bottomY))
+        path.addLine(to: CGPoint(x: rightX, y: topY))
+
+        return path
     }
 }
 
@@ -820,16 +1195,16 @@ private struct ScrollGuideArrow: View {
 private struct MainButtonView: View {
     let isExpanded: Bool
     let isDragging: Bool
-    var isLongPressActive: Bool = false
+    var isForceTouchActive: Bool = false
     let size: CGFloat
 
     var body: some View {
         ZStack {
-            // Outer glow (intensified during long press)
+            // Outer glow (intensified during force touch)
             Circle()
-                .fill(ColorSystem.primary.opacity(isLongPressActive ? 0.4 : 0.2))
-                .frame(width: size + (isLongPressActive ? 16 : 8), height: size + (isLongPressActive ? 16 : 8))
-                .blur(radius: isLongPressActive ? 8 : 4)
+                .fill(ColorSystem.primary.opacity(isForceTouchActive ? 0.4 : 0.2))
+                .frame(width: size + (isForceTouchActive ? 16 : 8), height: size + (isForceTouchActive ? 16 : 8))
+                .blur(radius: isForceTouchActive ? 8 : 4)
 
             // Main circle
             Circle()
@@ -841,17 +1216,17 @@ private struct MainButtonView: View {
                     )
                 )
                 .frame(width: size, height: size)
-                .shadow(color: ColorSystem.primaryGlow, radius: isDragging || isLongPressActive ? 12 : 6)
+                .shadow(color: ColorSystem.primaryGlow, radius: isDragging || isForceTouchActive ? 12 : 6)
 
-            // Icon (changes during long press)
-            Image(systemName: isLongPressActive ? "arrow.up.arrow.down" : (isExpanded ? "xmark" : "wrench.and.screwdriver.fill"))
+            // Icon (changes during force touch)
+            Image(systemName: isForceTouchActive ? "arrow.up.arrow.down" : (isExpanded ? "xmark" : "wrench.and.screwdriver.fill"))
                 .font(.system(size: size * 0.4, weight: .bold))
                 .foregroundStyle(.white)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
         }
-        .scaleEffect(isLongPressActive ? 1.1 : (isDragging ? 1.15 : 1.0))
+        .scaleEffect(isForceTouchActive ? 1.1 : (isDragging ? 1.15 : 1.0))
         .animation(.spring(response: 0.2), value: isDragging)
-        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isLongPressActive)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isForceTouchActive)
         .contentShape(Circle()) // Ensure the entire circle is tappable
     }
 }

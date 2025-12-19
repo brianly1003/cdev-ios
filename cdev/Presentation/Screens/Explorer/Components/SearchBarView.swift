@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Compact search bar for file explorer
-/// Always visible, with loading indicator and clear button
+/// Style matches TerminalSearchBar for consistency
 struct ExplorerSearchBar: View {
     @Binding var query: String
     let isSearching: Bool
@@ -16,18 +16,16 @@ struct ExplorerSearchBar: View {
     var body: some View {
         HStack(spacing: Spacing.xs) {
             // Search icon or loading indicator
-            Group {
-                if isSearching {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .tint(ColorSystem.textTertiary)
-                } else {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isFocused ? ColorSystem.primary : ColorSystem.textTertiary)
-                }
+            if isSearching {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .tint(ColorSystem.textTertiary)
+                    .frame(width: 20)
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.textTertiary)
             }
-            .frame(width: 20)
 
             // Text field
             TextField(placeholder, text: $query)
@@ -51,30 +49,24 @@ struct ExplorerSearchBar: View {
                         .font(.system(size: 14))
                         .foregroundStyle(ColorSystem.textTertiary)
                 }
-                .transition(.opacity.combined(with: .scale))
+                .buttonStyle(.plain)
             }
 
-            // Keyboard shortcut hint (iPad only)
-            if !isCompact && !isFocused && query.isEmpty {
-                Text("K")
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(ColorSystem.textQuaternary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(ColorSystem.terminalBgHighlight)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            // Cancel button (always visible)
+            Button {
+                onClear()
+                isFocused = false
+                Haptics.light()
+            } label: {
+                Text("Cancel")
+                    .font(Typography.buttonLabel)
+                    .foregroundStyle(ColorSystem.primary)
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
-        .background(ColorSystem.terminalBgHighlight)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isFocused ? ColorSystem.primary.opacity(0.5) : .clear, lineWidth: 1)
-        )
-        .animation(Animations.stateChange, value: query.isEmpty)
-        .animation(Animations.stateChange, value: isFocused)
+        .background(ColorSystem.terminalBgElevated)
     }
 
     private var placeholder: String {

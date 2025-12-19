@@ -539,10 +539,10 @@ final class SessionHistoryViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            // Load all messages for session history view (use high limit)
+            // Load messages for session history view
             let response = try await agentRepository.getSessionMessages(
                 sessionId: sessionId,
-                limit: 500,
+                limit: 20,
                 offset: 0,
                 order: "desc"
             )

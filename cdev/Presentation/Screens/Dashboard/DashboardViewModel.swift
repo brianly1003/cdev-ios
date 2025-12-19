@@ -73,7 +73,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var isLoadingMoreMessages: Bool = false
     @Published var messagesTotalCount: Int = 0
     private var messagesNextOffset: Int = 0
-    private let messagesPageSize: Int = 50
+    private let messagesPageSize: Int = 20
 
     // MARK: - Dependencies
 

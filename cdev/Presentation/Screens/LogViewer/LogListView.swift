@@ -544,6 +544,11 @@ private struct ElementsScrollView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        // Top anchor - always present for stable scroll-to-top
+                        Color.clear
+                            .frame(height: 1)
+                            .id("top")
+
                         // Load more indicator at top (pull down to load older messages)
                         if hasMoreMessages {
                             LoadMoreIndicator(isLoading: isLoadingMore)
@@ -567,7 +572,7 @@ private struct ElementsScrollView: View {
                                 .frame(height: 40)
                         }
 
-                        // Bottom anchor
+                        // Bottom anchor - always present for stable scroll-to-bottom
                         Color.clear
                             .frame(height: 1)
                             .id("bottom")
@@ -591,13 +596,16 @@ private struct ElementsScrollView: View {
                     }
                 }
                 .onAppear {
-                    AppLogger.log("[ElementsScrollView] onAppear with \(elements.count) elements, isLoadingMore=\(isLoadingMore)")
+                    AppLogger.log("[ElementsScrollView] onAppear - elementsCount=\(elements.count), isLoadingMore=\(isLoadingMore), isVisible=\(isVisible)")
                     // Skip auto-scroll if we're in the middle of loading more messages
                     guard !isLoadingMore && !didTriggerLoadMore else {
                         AppLogger.log("[ElementsScrollView] Skipping onAppear scroll during load more")
                         return
                     }
                     scheduleScroll(proxy: proxy, animated: false)
+                }
+                .onDisappear {
+                    AppLogger.log("[ElementsScrollView] onDisappear - elementsCount=\(elements.count)")
                 }
                 .onChange(of: elements.count) { oldCount, newCount in
                     // Only scroll if count actually increased and we haven't just scrolled
@@ -611,8 +619,13 @@ private struct ElementsScrollView: View {
                     }
                     scheduleScroll(proxy: proxy, animated: true)
                 }
-                .onChange(of: isVisible) { _, visible in
-                    guard visible, !elements.isEmpty else { return }
+                .onChange(of: isVisible) { oldVisible, newVisible in
+                    AppLogger.log("[ElementsScrollView] isVisible changed - old=\(oldVisible), new=\(newVisible), elementsCount=\(elements.count)")
+                    guard newVisible, !elements.isEmpty else {
+                        AppLogger.log("[ElementsScrollView] Skipping scroll - visible=\(newVisible), elementsCount=\(elements.count)")
+                        return
+                    }
+                    AppLogger.log("[ElementsScrollView] Tab became visible, scheduling scroll")
                     scheduleScroll(proxy: proxy, animated: false)
                 }
                 .onChange(of: isInputFocused) { _, focused in
@@ -636,9 +649,13 @@ private struct ElementsScrollView: View {
                         scrollToMatch(proxy: proxy, matchId: matchId)
                     }
                 }
-                .onChange(of: scrollRequest) { _, direction in
+                .onChange(of: scrollRequest) { oldValue, newValue in
                     // Handle scroll request from floating toolkit
-                    guard let direction = direction else { return }
+                    AppLogger.log("[ElementsScrollView] scrollRequest onChange - old=\(String(describing: oldValue)), new=\(String(describing: newValue))")
+                    guard let direction = newValue else {
+                        AppLogger.log("[ElementsScrollView] scrollRequest is nil, ignoring")
+                        return
+                    }
                     handleScrollRequest(direction: direction, proxy: proxy)
                 }
             }
@@ -656,7 +673,11 @@ private struct ElementsScrollView: View {
 
     /// Debounced scroll - cancels previous scroll task and schedules new one
     private func scheduleScroll(proxy: ScrollViewProxy, animated: Bool) {
-        guard !elements.isEmpty else { return }
+        AppLogger.log("[ElementsScrollView] scheduleScroll called - animated=\(animated), elementsCount=\(elements.count)")
+        guard !elements.isEmpty else {
+            AppLogger.log("[ElementsScrollView] scheduleScroll - SKIPPED (elements empty)")
+            return
+        }
 
         // Cancel any pending scroll
         scrollTask?.cancel()
@@ -664,16 +685,25 @@ private struct ElementsScrollView: View {
         // Schedule new scroll after brief delay to coalesce multiple updates
         scrollTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                AppLogger.log("[ElementsScrollView] scheduleScroll task cancelled")
+                return
+            }
 
             lastScrolledCount = elements.count
+
+            // Scroll to last element ID to force content realization in LazyVStack
+            // Using element ID instead of "bottom" anchor to work around SwiftUI bug
+            let targetId = elements.last?.id ?? "bottom"
+            AppLogger.log("[ElementsScrollView] scheduleScroll executing - targetId=\(targetId), animated=\(animated), elementsCount=\(elements.count)")
             if animated {
                 withAnimation(Animations.logAppear) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                    proxy.scrollTo(targetId, anchor: .bottom)
                 }
             } else {
-                proxy.scrollTo("bottom", anchor: .bottom)
+                proxy.scrollTo(targetId, anchor: .bottom)
             }
+            AppLogger.log("[ElementsScrollView] scheduleScroll completed")
         }
     }
 
@@ -685,8 +715,10 @@ private struct ElementsScrollView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
 
+            // Scroll to last element ID to force content realization
+            let targetId = elements.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo("bottom", anchor: .bottom)
+                proxy.scrollTo(targetId, anchor: .bottom)
             }
         }
     }
@@ -699,9 +731,10 @@ private struct ElementsScrollView: View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
 
-            // Scroll to bottom to adjust content position
+            // Scroll to last element ID to force content realization
+            let targetId = elements.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.15)) {
-                proxy.scrollTo("bottom", anchor: .bottom)
+                proxy.scrollTo(targetId, anchor: .bottom)
             }
         }
     }
@@ -721,29 +754,45 @@ private struct ElementsScrollView: View {
 
     /// Handle scroll request from floating toolkit long-press
     private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        AppLogger.log("[ElementsScrollView] handleScrollRequest called - direction=\(direction), elementsCount=\(elements.count)")
+
         scrollTask?.cancel()
         scrollTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                AppLogger.log("[ElementsScrollView] Scroll task was cancelled")
+                return
+            }
 
+            AppLogger.log("[ElementsScrollView] Executing scroll - direction=\(direction)")
+
+            // Use instant scroll (no animation) to prevent inertia issues with LazyVStack
             switch direction {
             case .top:
-                // Scroll to first element or load more indicator
-                let targetId = hasMoreMessages ? "loadMore" : elements.first?.id
-                if let id = targetId {
-                    withAnimation(.easeInOut(duration: 0.4)) {
-                        proxy.scrollTo(id, anchor: .top)
-                    }
+                // Scroll to first element to force content realization
+                if let firstId = elements.first?.id {
+                    AppLogger.log("[ElementsScrollView] Scrolling to TOP - targetId=\(firstId), anchor=.top")
+                    proxy.scrollTo(firstId, anchor: .top)
+                    AppLogger.log("[ElementsScrollView] scrollTo completed for TOP")
+                } else {
+                    AppLogger.log("[ElementsScrollView] WARNING: No first element, using 'top' anchor")
+                    proxy.scrollTo("top", anchor: .top)
                 }
-                AppLogger.log("[ElementsScrollView] Scrolled to top")
 
             case .bottom:
-                // Scroll to bottom anchor
-                withAnimation(.easeInOut(duration: 0.4)) {
+                // Scroll to last element to force content realization
+                if let lastId = elements.last?.id {
+                    AppLogger.log("[ElementsScrollView] Scrolling to BOTTOM - targetId=\(lastId), anchor=.top, elementsCount=\(elements.count)")
+                    proxy.scrollTo(lastId, anchor: .top)
+                    AppLogger.log("[ElementsScrollView] scrollTo completed for BOTTOM")
+                } else {
+                    AppLogger.log("[ElementsScrollView] WARNING: No last element, using 'bottom' anchor")
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
-                AppLogger.log("[ElementsScrollView] Scrolled to bottom")
             }
+
+            // Log state after scroll
+            AppLogger.log("[ElementsScrollView] Post-scroll state - elementsCount=\(elements.count), hasMore=\(hasMoreMessages)")
         }
     }
 }

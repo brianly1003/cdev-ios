@@ -100,13 +100,17 @@ struct DashboardView: View {
                             viewModel: viewModel.sourceControlViewModel,
                             onRefresh: {
                                 await viewModel.sourceControlViewModel.refresh()
-                            }
+                            },
+                            scrollRequest: viewModel.scrollRequest
                         )
                         .tag(DashboardTab.diffs)
 
                         // File Explorer
-                        ExplorerView(viewModel: viewModel.explorerViewModel)
-                            .tag(DashboardTab.explorer)
+                        ExplorerView(
+                            viewModel: viewModel.explorerViewModel,
+                            scrollRequest: viewModel.scrollRequest
+                        )
+                        .tag(DashboardTab.explorer)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .dismissKeyboardOnTap()
