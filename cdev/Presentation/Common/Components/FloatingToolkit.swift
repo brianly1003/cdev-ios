@@ -206,6 +206,10 @@ struct FloatingToolkitButton: View {
     // Observer tokens for proper cleanup (prevent memory leaks)
     @State private var keyboardShowObserver: NSObjectProtocol?
     @State private var keyboardHideObserver: NSObjectProtocol?
+    @State private var orientationObserver: NSObjectProtocol?
+
+    // Track screen size to detect orientation changes
+    @State private var lastScreenSize: CGSize = .zero
 
     @AppStorage("toolkit_position_x") private var savedX: Double = -1
     @AppStorage("toolkit_position_y") private var savedY: Double = -1
@@ -267,11 +271,62 @@ struct FloatingToolkitButton: View {
                 initializePosition(in: geometry)
                 setupKeyboardObservers()
                 startIdleTimer()
+                lastScreenSize = geometry.size
             }
             .onDisappear {
                 AppLogger.log("[FloatingToolkit] onDisappear called")
                 removeKeyboardObservers()
                 cancelIdleTimer()
+            }
+            .onChange(of: geometry.size) { oldSize, newSize in
+                // Detect orientation change (screen size changed significantly)
+                if lastScreenSize != .zero && lastScreenSize != newSize {
+                    AppLogger.log("[FloatingToolkit] Screen size changed: \(oldSize) -> \(newSize)")
+                    handleScreenSizeChange(newSize: newSize, in: geometry)
+                }
+                lastScreenSize = newSize
+            }
+        }
+    }
+
+    // MARK: - Orientation Handling
+
+    /// Handle screen size change (rotation) - clamp position to valid bounds or reset to default
+    private func handleScreenSizeChange(newSize: CGSize, in geometry: GeometryProxy) {
+        let padding: CGFloat = 10
+        let minX = buttonSize / 2 + padding
+        let maxX = newSize.width - buttonSize / 2 - padding
+        let minY = buttonSize / 2 + padding + geometry.safeAreaInsets.top
+        let maxY = newSize.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50
+
+        // Check if current position is outside new bounds
+        let isOutOfBounds = position.x < minX || position.x > maxX ||
+                           position.y < minY || position.y > maxY
+
+        if isOutOfBounds {
+            AppLogger.log("[FloatingToolkit] Position out of bounds after rotation, resetting to default")
+            // Reset to default position (bottom-left corner)
+            let defaultX = buttonSize / 2 + 20
+            let defaultY = newSize.height - buttonSize / 2 - 120
+
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                position = CGPoint(x: defaultX, y: defaultY)
+            }
+
+            // Save new position
+            savedX = defaultX
+            savedY = defaultY
+        } else {
+            // Position is still valid, just ensure it's clamped
+            let clampedX = max(minX, min(maxX, position.x))
+            let clampedY = max(minY, min(maxY, position.y))
+
+            if clampedX != position.x || clampedY != position.y {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    position = CGPoint(x: clampedX, y: clampedY)
+                }
+                savedX = clampedX
+                savedY = clampedY
             }
         }
     }

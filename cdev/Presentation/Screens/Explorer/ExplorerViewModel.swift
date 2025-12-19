@@ -21,11 +21,20 @@ final class ExplorerViewModel: ObservableObject {
     @Published private(set) var fileContent: String?
     @Published private(set) var isLoadingFile = false
 
-    // MARK: - Search State (Future)
+    // MARK: - Search State
 
     @Published var searchQuery = ""
     @Published private(set) var searchResults: [FileEntry] = []
     @Published private(set) var isSearching = false
+    @Published var searchError: AppError?
+
+    /// Whether search mode is active (has query or results)
+    var isSearchActive: Bool {
+        !searchQuery.isEmpty || !searchResults.isEmpty
+    }
+
+    /// Minimum characters required before searching
+    private let minSearchLength = 2
 
     // MARK: - Dependencies
 
@@ -36,6 +45,12 @@ final class ExplorerViewModel: ObservableObject {
 
     /// Current directory loading task - cancelled when starting a new load
     private var loadingTask: Task<Void, Never>?
+
+    /// Search debounce task - cancelled when query changes
+    private var searchDebounceTask: Task<Void, Never>?
+
+    /// Current search task - cancelled when starting a new search
+    private var currentSearchTask: Task<Void, Never>?
 
     // MARK: - Computed Properties
 
@@ -322,30 +337,109 @@ final class ExplorerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Search (Future)
+    // MARK: - Search
 
-    /// Search for files
-    func search() async {
-        guard !searchQuery.isEmpty else {
-            searchResults = []
+    /// Update search query with debouncing
+    /// Call this when the search text field changes
+    func updateSearchQuery(_ query: String) {
+        searchQuery = query
+        searchError = nil
+
+        // Cancel any pending debounce
+        searchDebounceTask?.cancel()
+
+        // If query is empty or too short, clear results immediately
+        guard query.count >= minSearchLength else {
+            clearSearchResults()
             return
         }
 
-        isSearching = true
-
-        do {
-            searchResults = try await fileRepository.searchFiles(query: searchQuery)
-        } catch {
-            self.error = error as? AppError ?? .unknown(underlying: error)
-            searchResults = []
+        // Debounce: wait 300ms before searching
+        searchDebounceTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)  // 300ms
+                guard !Task.isCancelled else { return }
+                await self?.performSearch(query: query)
+            } catch {
+                // Task was cancelled - expected behavior
+            }
         }
-
-        isSearching = false
     }
 
-    /// Clear search
+    /// Perform the actual search request
+    private func performSearch(query: String) async {
+        // Cancel any in-flight search
+        currentSearchTask?.cancel()
+
+        let searchId = query  // Use query as identifier
+        currentSearchTask = Task { [weak self] in
+            guard let self = self else { return }
+
+            self.isSearching = true
+
+            do {
+                try Task.checkCancellation()
+                let results = try await self.fileRepository.searchFiles(query: query)
+                try Task.checkCancellation()
+
+                // Only update if query hasn't changed
+                guard self.searchQuery == searchId else { return }
+                self.searchResults = results
+                self.searchError = nil
+                AppLogger.log("[ExplorerViewModel] Search found \(results.count) results for '\(query)'")
+            } catch is CancellationError {
+                // Expected - user typed again
+                AppLogger.log("[ExplorerViewModel] Search cancelled for '\(query)'")
+            } catch {
+                // Only show error if this is still the current query
+                if self.searchQuery == searchId {
+                    self.searchError = error as? AppError ?? .unknown(underlying: error)
+                    self.searchResults = []
+                    AppLogger.error(error, context: "Search for '\(query)'")
+                }
+            }
+
+            // Only update loading state if this is still the current query
+            if self.searchQuery == searchId {
+                self.isSearching = false
+            }
+        }
+
+        await currentSearchTask?.value
+    }
+
+    /// Clear search results (but keep query for UI)
+    private func clearSearchResults() {
+        currentSearchTask?.cancel()
+        searchResults = []
+        isSearching = false
+        searchError = nil
+    }
+
+    /// Clear search completely and exit search mode
     func clearSearch() {
+        searchDebounceTask?.cancel()
+        currentSearchTask?.cancel()
         searchQuery = ""
         searchResults = []
+        isSearching = false
+        searchError = nil
+    }
+
+    /// Retry search after an error
+    func retrySearch() {
+        guard !searchQuery.isEmpty else { return }
+        searchError = nil
+        updateSearchQuery(searchQuery)
+    }
+
+    // MARK: - Cleanup
+
+    /// Cancel all tasks - call when view disappears or on deinit
+    func cancelAllTasks() {
+        loadingTask?.cancel()
+        fileLoadingTask?.cancel()
+        searchDebounceTask?.cancel()
+        currentSearchTask?.cancel()
     }
 }

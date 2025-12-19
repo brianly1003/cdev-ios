@@ -21,7 +21,6 @@ struct SourceControlView: View {
     }
 
     var body: some View {
-        let _ = AppLogger.log("[SCView] body - totalCount:\(viewModel.state.totalCount), isLoading:\(viewModel.state.isLoading), showEmpty:\(viewModel.state.totalCount == 0)")
         Group {
             // Only switch views based on totalCount - NOT isLoading
             // This prevents the CommitInputView from flashing when refreshing from empty state
@@ -56,8 +55,7 @@ struct SourceControlView: View {
     // MARK: - Content View
 
     private var contentView: some View {
-        let _ = AppLogger.log("[SCView] contentView rendered")
-        return ScrollView {
+        ScrollView {
             LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                 // Branch & Sync Header
                 BranchHeaderView(
@@ -144,8 +142,7 @@ struct SourceControlView: View {
     // MARK: - Empty State
 
     private var emptyStateView: some View {
-        let _ = AppLogger.log("[SCView] emptyStateView rendered")
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             // Always show branch header with push/pull buttons
             BranchHeaderView(
                 branch: viewModel.state.currentBranch,

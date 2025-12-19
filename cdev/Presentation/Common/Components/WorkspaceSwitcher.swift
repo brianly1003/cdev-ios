@@ -51,7 +51,7 @@ struct WorkspaceSwitcherSheet: View {
 
                 VStack(spacing: 0) {
                     // Search bar
-                    SearchBarView(
+                    WorkspaceSearchBar(
                         text: $searchText,
                         placeholder: "Search \(workspaceStore.workspaces.count) workspaces...",
                         isFocused: $isSearchFocused
@@ -188,7 +188,7 @@ struct WorkspaceSwitcherSheet: View {
 
 // MARK: - Search Bar
 
-private struct SearchBarView: View {
+private struct WorkspaceSearchBar: View {
     @Binding var text: String
     let placeholder: String
     var isFocused: FocusState<Bool>.Binding

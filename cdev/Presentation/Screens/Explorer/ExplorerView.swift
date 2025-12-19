@@ -11,18 +11,35 @@ struct ExplorerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Breadcrumb navigation bar
-            BreadcrumbBar(
-                path: viewModel.currentPath,
-                onNavigate: { path in
-                    Task { await viewModel.navigateToBreadcrumb(path: path) }
+            // Search bar (always visible)
+            ExplorerSearchBar(
+                query: $viewModel.searchQuery,
+                isSearching: viewModel.isSearching,
+                onQueryChange: { query in
+                    viewModel.updateSearchQuery(query)
                 },
-                onRoot: {
-                    Task { await viewModel.navigateToRoot() }
+                onClear: {
+                    viewModel.clearSearch()
                 }
             )
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
 
-            // Content area
+            // Breadcrumb navigation bar (hidden when searching)
+            if !viewModel.isSearchActive {
+                BreadcrumbBar(
+                    path: viewModel.currentPath,
+                    onNavigate: { path in
+                        Task { await viewModel.navigateToBreadcrumb(path: path) }
+                    },
+                    onRoot: {
+                        Task { await viewModel.navigateToRoot() }
+                    }
+                )
+            }
+
+            // Content area - switches between directory and search results
             contentView
         }
         .background(ColorSystem.terminalBg)
@@ -59,13 +76,35 @@ struct ExplorerView: View {
                 await viewModel.loadDirectory()
             }
         }
+        .onDisappear {
+            // Clean up tasks when view disappears
+            viewModel.cancelAllTasks()
+        }
     }
 
     // MARK: - Content View
 
     @ViewBuilder
     private var contentView: some View {
-        if viewModel.isLoading && viewModel.entries.isEmpty {
+        if viewModel.isSearchActive {
+            // Search results mode
+            SearchResultsView(
+                results: viewModel.searchResults,
+                query: viewModel.searchQuery,
+                isSearching: viewModel.isSearching,
+                error: viewModel.searchError,
+                onSelect: { entry in
+                    Task {
+                        // Clear search and navigate to the selected entry
+                        viewModel.clearSearch()
+                        await viewModel.selectEntry(entry)
+                    }
+                },
+                onRetry: {
+                    viewModel.retrySearch()
+                }
+            )
+        } else if viewModel.isLoading && viewModel.entries.isEmpty {
             // Loading skeleton
             DirectoryLoadingView()
         } else if viewModel.entries.isEmpty {

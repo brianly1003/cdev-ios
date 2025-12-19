@@ -10,6 +10,7 @@ struct FileEntry: Identifiable, Hashable {
     let modified: Date?
     let childrenCount: Int?    // Number of items (directories only)
     var gitStatus: GitFileStatus?  // Modified/Added/Deleted indicator
+    let matchScore: Double?    // Search relevance score (0.0-1.0)
 
     enum EntryType: String, Codable {
         case file
@@ -55,7 +56,8 @@ struct FileEntry: Identifiable, Hashable {
         size: Int? = nil,
         modified: Date? = nil,
         childrenCount: Int? = nil,
-        gitStatus: GitFileStatus? = nil
+        gitStatus: GitFileStatus? = nil,
+        matchScore: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -65,6 +67,7 @@ struct FileEntry: Identifiable, Hashable {
         self.modified = modified
         self.childrenCount = childrenCount
         self.gitStatus = gitStatus
+        self.matchScore = matchScore
     }
 
     /// Create from API DTO (legacy)
@@ -78,6 +81,7 @@ struct FileEntry: Identifiable, Hashable {
         self.modified = dto.modified.flatMap { ISO8601DateFormatter().date(from: $0) }
         self.childrenCount = dto.childrenCount
         self.gitStatus = nil
+        self.matchScore = nil
     }
 
     /// Create from cdev-agent FileInfo DTO (file)
@@ -90,6 +94,7 @@ struct FileEntry: Identifiable, Hashable {
         self.modified = dto.modifiedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
         self.childrenCount = nil
         self.gitStatus = nil
+        self.matchScore = dto.matchScore
     }
 
     /// Create from cdev-agent DirectoryInfo DTO (directory)
@@ -104,6 +109,7 @@ struct FileEntry: Identifiable, Hashable {
         self.modified = dto.lastModified.flatMap { ISO8601DateFormatter().date(from: $0) }
         self.childrenCount = dto.fileCount
         self.gitStatus = nil
+        self.matchScore = nil
     }
 }
 
