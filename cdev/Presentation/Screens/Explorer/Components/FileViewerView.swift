@@ -12,6 +12,7 @@ struct FileViewerView: View {
     @State private var showCopiedContent = false
     @State private var wordWrap = false
     @State private var showLineNumbers = true
+    @State private var syntaxHighlighting = true
     @State private var activeLineIndex: Int? = nil
 
     var body: some View {
@@ -60,6 +61,21 @@ struct FileViewerView: View {
 
     private var editorToolbar: some View {
         HStack(spacing: Spacing.sm) {
+            // Syntax highlighting toggle
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    syntaxHighlighting.toggle()
+                }
+                Haptics.selection()
+            } label: {
+                Image(systemName: syntaxHighlighting ? "paintbrush.fill" : "paintbrush")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(syntaxHighlighting ? ColorSystem.primary : ColorSystem.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(syntaxHighlighting ? ColorSystem.primaryGlow : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
             // Word wrap toggle
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -93,6 +109,16 @@ struct FileViewerView: View {
             // More options menu
             Menu {
                 Section("Display") {
+                    Button {
+                        syntaxHighlighting.toggle()
+                        Haptics.selection()
+                    } label: {
+                        Label(
+                            syntaxHighlighting ? "Disable Syntax Colors" : "Enable Syntax Colors",
+                            systemImage: syntaxHighlighting ? "paintbrush.fill" : "paintbrush"
+                        )
+                    }
+
                     Button {
                         wordWrap.toggle()
                         Haptics.selection()
@@ -229,6 +255,7 @@ struct FileViewerView: View {
                 fileExtension: file.fileExtension,
                 wordWrap: wordWrap,
                 showLineNumbers: showLineNumbers,
+                syntaxHighlighting: syntaxHighlighting,
                 activeLineIndex: activeLineIndex,
                 onLineTap: { index in
                     withAnimation(.easeOut(duration: 0.15)) {
@@ -337,11 +364,16 @@ struct CodeEditorContentView: View {
     let fileExtension: String?
     var wordWrap: Bool = false
     var showLineNumbers: Bool = true
+    var syntaxHighlighting: Bool = true
     var activeLineIndex: Int? = nil
     var onLineTap: ((Int) -> Void)? = nil
 
     private var lines: [String] {
         content.components(separatedBy: "\n")
+    }
+
+    private var language: SyntaxHighlighter.Language {
+        SyntaxHighlighter.detectLanguage(from: fileExtension)
     }
 
     private var lineNumberWidth: CGFloat {
@@ -438,14 +470,23 @@ struct CodeEditorContentView: View {
                     .frame(width: 1)
             }
 
-            // Code line
-            Text(line.isEmpty ? " " : line)
-                .font(Typography.codeContent)
-                .foregroundStyle(ColorSystem.Syntax.plain)
-                .textSelection(.enabled)
-                .padding(.leading, Spacing.sm)
-                .padding(.trailing, Spacing.sm)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Code line with optional syntax highlighting
+            if syntaxHighlighting && language != .plainText {
+                Text(SyntaxHighlighter.highlight(line: line, language: language))
+                    .font(Typography.codeContent)
+                    .textSelection(.enabled)
+                    .padding(.leading, Spacing.sm)
+                    .padding(.trailing, Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(line.isEmpty ? " " : line)
+                    .font(Typography.codeContent)
+                    .foregroundStyle(ColorSystem.Syntax.plain)
+                    .textSelection(.enabled)
+                    .padding(.leading, Spacing.sm)
+                    .padding(.trailing, Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .frame(minHeight: 20)
         .background(isActive ? ColorSystem.Editor.activeLineBg : Color.clear)
@@ -458,18 +499,25 @@ struct CodeEditorContentView: View {
     private func codeLineContent(index: Int, line: String) -> some View {
         let isActive = activeLineIndex == index
 
-        return Text(line.isEmpty ? " " : line)
-            .font(Typography.codeContent)
-            .foregroundStyle(ColorSystem.Syntax.plain)
-            .frame(height: 20, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, Spacing.sm)
-            .textSelection(.enabled)
-            .background(isActive ? ColorSystem.Editor.activeLineBg : Color.clear)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onLineTap?(index)
+        return Group {
+            if syntaxHighlighting && language != .plainText {
+                Text(SyntaxHighlighter.highlight(line: line, language: language))
+                    .font(Typography.codeContent)
+            } else {
+                Text(line.isEmpty ? " " : line)
+                    .font(Typography.codeContent)
+                    .foregroundStyle(ColorSystem.Syntax.plain)
             }
+        }
+        .frame(height: 20, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, Spacing.sm)
+        .textSelection(.enabled)
+        .background(isActive ? ColorSystem.Editor.activeLineBg : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onLineTap?(index)
+        }
     }
 }
 
