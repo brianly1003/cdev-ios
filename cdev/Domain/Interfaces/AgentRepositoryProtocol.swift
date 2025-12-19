@@ -70,8 +70,18 @@ protocol AgentRepositoryProtocol {
     ///   - offset: Number of sessions to skip (default: 0)
     func getSessions(limit: Int, offset: Int) async throws -> SessionsResponse
 
-    /// Get messages for a specific session
-    func getSessionMessages(sessionId: String) async throws -> SessionMessagesResponse
+    /// Get messages for a specific session (paginated)
+    /// - Parameters:
+    ///   - sessionId: UUID of the session
+    ///   - limit: Max messages to return (default: 50, max: 500)
+    ///   - offset: Starting position for pagination (default: 0)
+    ///   - order: Sort order: "asc" (oldest first) or "desc" (newest first)
+    func getSessionMessages(
+        sessionId: String,
+        limit: Int,
+        offset: Int,
+        order: String
+    ) async throws -> SessionMessagesResponse
 
     /// Delete a specific session
     func deleteSession(sessionId: String) async throws -> DeleteSessionResponse
@@ -199,16 +209,39 @@ struct SessionsResponse: Codable {
     }
 }
 
-/// Session messages response from HTTP API
+/// Session messages response from HTTP API (paginated)
 struct SessionMessagesResponse: Codable {
     let sessionId: String
     let messages: [SessionMessage]
-    let count: Int
+
+    // Pagination fields
+    let total: Int
+    let limit: Int
+    let offset: Int
+    let hasMore: Bool
+
+    // Performance metrics (optional)
+    let cacheHit: Bool?
+    let queryTimeMs: Double?
+
+    /// Computed count for backward compatibility
+    var count: Int { messages.count }
+
+    /// Whether there are more messages to load
+    var canLoadMore: Bool { hasMore }
+
+    /// Next offset for pagination
+    var nextOffset: Int { offset + messages.count }
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case messages
-        case count
+        case total
+        case limit
+        case offset
+        case hasMore = "has_more"
+        case cacheHit = "cache_hit"
+        case queryTimeMs = "query_time_ms"
     }
 
     struct SessionMessage: Codable, Identifiable {
@@ -251,13 +284,62 @@ struct SessionMessagesResponse: Codable {
             struct ContentBlock: Codable {
                 let type: String
                 let text: String?
-                let toolUseId: String?
-                let name: String?
-                let content: String?
+                let toolUseId: String?  // For tool_result: references the tool_use id
+                let id: String?         // For tool_use: the tool call id
+                let name: String?       // Tool name
+                let content: String?    // Tool result content
+                let input: [String: AnyCodableValue]?  // Tool input parameters
+                let isError: Bool?      // For tool_result: whether it's an error
 
                 enum CodingKeys: String, CodingKey {
-                    case type, text, name, content
+                    case type, text, name, content, id, input
                     case toolUseId = "tool_use_id"
+                    case isError = "is_error"
+                }
+            }
+
+            /// Helper for decoding arbitrary JSON values
+            struct AnyCodableValue: Codable {
+                let value: Any
+
+                init(_ value: Any) {
+                    self.value = value
+                }
+
+                init(from decoder: Decoder) throws {
+                    let container = try decoder.singleValueContainer()
+                    if let str = try? container.decode(String.self) {
+                        value = str
+                    } else if let int = try? container.decode(Int.self) {
+                        value = int
+                    } else if let double = try? container.decode(Double.self) {
+                        value = double
+                    } else if let bool = try? container.decode(Bool.self) {
+                        value = bool
+                    } else {
+                        value = ""
+                    }
+                }
+
+                func encode(to encoder: Encoder) throws {
+                    var container = encoder.singleValueContainer()
+                    if let str = value as? String {
+                        try container.encode(str)
+                    } else if let int = value as? Int {
+                        try container.encode(int)
+                    } else if let double = value as? Double {
+                        try container.encode(double)
+                    } else if let bool = value as? Bool {
+                        try container.encode(bool)
+                    }
+                }
+
+                var stringValue: String {
+                    if let str = value as? String { return str }
+                    if let int = value as? Int { return String(int) }
+                    if let double = value as? Double { return String(double) }
+                    if let bool = value as? Bool { return String(bool) }
+                    return String(describing: value)
                 }
             }
 

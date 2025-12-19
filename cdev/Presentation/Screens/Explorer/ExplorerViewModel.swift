@@ -212,10 +212,25 @@ final class ExplorerViewModel: ObservableObject {
     func openFile(_ file: FileEntry) async {
         guard !file.isDirectory else { return }
 
-        // If same file is already selected, ignore
+        // If same file is already selected and has content, just re-trigger the sheet
         if selectedFile?.path == file.path {
-            AppLogger.log("[ExplorerViewModel] Same file already selected: '\(file.name)'")
-            return
+            if fileContent != nil {
+                AppLogger.log("[ExplorerViewModel] Re-opening same file: '\(file.name)'")
+                // Force onChange to trigger by clearing and re-setting
+                let savedFile = selectedFile
+                let savedContent = fileContent
+                selectedFile = nil
+                // Small delay to ensure onChange detects the change
+                try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
+                selectedFile = savedFile
+                fileContent = savedContent
+                return
+            }
+            // If still loading, ignore additional taps
+            if isLoadingFile {
+                AppLogger.log("[ExplorerViewModel] File still loading: '\(file.name)'")
+                return
+            }
         }
 
         // Cancel any existing file loading task

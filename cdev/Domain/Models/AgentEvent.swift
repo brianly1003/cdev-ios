@@ -279,6 +279,16 @@ struct ClaudeMessagePayload: Codable {
                     .joined(separator: "\n")
             }
         }
+
+        /// Check if content contains thinking blocks
+        var containsThinking: Bool {
+            switch self {
+            case .text:
+                return false
+            case .blocks(let blocks):
+                return blocks.contains { $0.type == "thinking" }
+            }
+        }
     }
 
     /// Content block types: text, thinking, tool_use, tool_result

@@ -11,7 +11,7 @@ struct FileViewerView: View {
     // Display options
     @State private var showCopiedPath = false
     @State private var showCopiedContent = false
-    @State private var wordWrap = false
+    @State private var wordWrap = true
     @State private var showLineNumbers = true
     @State private var syntaxHighlighting = true
     @State private var activeLineIndex: Int? = nil
@@ -823,67 +823,20 @@ struct CodeEditorContentView: View {
     }
 
     // MARK: - Horizontal Scroll Layout
-    // Uses native 2D ScrollView for proper scrolling in both directions
-    // Note: Uses VStack (not Lazy) for synchronized horizontal scrolling
+    // Uses UIKit UICollectionView for true lazy loading with synchronized horizontal scroll
 
     private var horizontalScrollLayout: some View {
-        ScrollView([.horizontal, .vertical], showsIndicators: true) {
-            HStack(alignment: .top, spacing: 0) {
-                // Gutter column
-                if showLineNumbers {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        ForEach(0..<lines.count, id: \.self) { index in
-                            let isActive = activeLineIndex == index
-                            let lineMatches = matchesByLine[index] ?? []
-                            let hasMatch = !lineMatches.isEmpty
-                            let hasCurrentMatch = lineMatches.contains { $0 == currentMatch }
-
-                            Text("\(index + 1)")
-                                .font(Typography.codeLineNumber)
-                                .foregroundStyle(
-                                    hasCurrentMatch ? ColorSystem.primary :
-                                    hasMatch ? ColorSystem.warning :
-                                    isActive ? ColorSystem.Editor.lineNumberActive :
-                                    ColorSystem.Editor.lineNumber
-                                )
-                                .frame(width: lineNumberWidth - 12, height: 20, alignment: .trailing)
-                                .padding(.trailing, 8)
-                                .background(isActive ? ColorSystem.Editor.activeLineBg : ColorSystem.Editor.gutterBg)
-                        }
-                    }
-                    .frame(width: lineNumberWidth)
-                    .background(ColorSystem.Editor.gutterBg)
-                    .overlay(
-                        Rectangle()
-                            .fill(ColorSystem.Editor.gutterBorder)
-                            .frame(width: 1),
-                        alignment: .trailing
-                    )
-                }
-
-                // Code content
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                        let isActive = activeLineIndex == index
-
-                        buildHighlightedText(
-                            line: line,
-                            lineMatches: matchesByLine[index] ?? [],
-                            currentMatch: currentMatch,
-                            syntaxHighlighting: syntaxHighlighting,
-                            language: language
-                        )
-                        .font(Typography.codeContent)
-                        .frame(height: 20, alignment: .leading)
-                        .padding(.leading, Spacing.sm)
-                        .background(isActive ? ColorSystem.Editor.activeLineBg : Color.clear)
-                        .id("line-\(index)")
-                    }
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                .padding(.trailing, Spacing.xl)
-            }
-        }
+        VirtualizedCodeView(
+            lines: lines,
+            fileExtension: fileExtension,
+            showLineNumbers: showLineNumbers,
+            syntaxHighlighting: syntaxHighlighting,
+            activeLineIndex: activeLineIndex,
+            matchesByLine: matchesByLine,
+            currentMatch: currentMatch,
+            onLineTap: onLineTap
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
 }

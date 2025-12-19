@@ -44,6 +44,10 @@ final class DashboardViewModel: ObservableObject {
     @Published var error: AppError?
     @Published var showPromptSheet: Bool = false
 
+    // Streaming Indicator State
+    @Published var isStreaming: Bool = false
+    @Published var streamingStartTime: Date?
+
     // Sessions (for /resume command)
     @Published var sessions: [SessionsResponse.SessionInfo] = []
     @Published var showSessionPicker: Bool = false
@@ -51,6 +55,13 @@ final class DashboardViewModel: ObservableObject {
     @Published var isLoadingMoreSessions: Bool = false
     private var sessionsNextOffset: Int = 0
     private let sessionsPageSize: Int = 20
+
+    // Session Messages Pagination
+    @Published var messagesHasMore: Bool = false
+    @Published var isLoadingMoreMessages: Bool = false
+    @Published var messagesTotalCount: Int = 0
+    private var messagesNextOffset: Int = 0
+    private let messagesPageSize: Int = 50
 
     // MARK: - Dependencies
 
@@ -398,6 +409,54 @@ final class DashboardViewModel: ObservableObject {
         isLoadingMoreSessions = false
     }
 
+    /// Load more session messages (infinite scroll)
+    func loadMoreMessages() async {
+        guard messagesHasMore, !isLoadingMoreMessages else { return }
+        guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else { return }
+
+        isLoadingMoreMessages = true
+        do {
+            let response = try await _agentRepository.getSessionMessages(
+                sessionId: sessionId,
+                limit: messagesPageSize,
+                offset: messagesNextOffset,
+                order: "desc"
+            )
+
+            // Update pagination state
+            messagesHasMore = response.hasMore
+            messagesNextOffset = response.nextOffset
+
+            AppLogger.log("[Dashboard] Loaded more messages: +\(response.count), offset=\(messagesNextOffset), hasMore=\(messagesHasMore)")
+
+            // Prepend older messages (API returns desc, so higher offset = older messages)
+            // Reverse to get chronological order, then prepend to existing messages
+            var newElements: [ChatElement] = []
+            // Track existing IDs to prevent duplicates when prepending
+            let existingIds = Set(chatElements.map { $0.id })
+            var seenNewIds = Set<String>()
+            for message in response.messages.reversed() {
+                if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
+                    await logCache.add(entry)
+                }
+                let chatMessage = ChatMessage.from(sessionMessage: message)
+                let elements = convertChatMessageToElements(chatMessage)
+                // Filter out duplicates (both from existing and within new batch)
+                for element in elements {
+                    if !existingIds.contains(element.id) && !seenNewIds.contains(element.id) {
+                        seenNewIds.insert(element.id)
+                        newElements.append(element)
+                    }
+                }
+            }
+            chatElements.insert(contentsOf: newElements, at: 0)
+            await forceLogUpdate()
+        } catch {
+            AppLogger.error(error, context: "Load more messages")
+        }
+        isLoadingMoreMessages = false
+    }
+
     /// Resume a specific session (user explicitly selected)
     func resumeSession(_ sessionId: String) async {
         showSessionPicker = false
@@ -409,22 +468,47 @@ final class DashboardViewModel: ObservableObject {
         logs = []
         chatElements = []
 
+        // Reset pagination state
+        messagesNextOffset = 0
+        messagesHasMore = false
+        messagesTotalCount = 0
+
         // Update sessionId - this is a TRUSTED source (user explicit selection)
         setSelectedSession(sessionId)
         hasActiveConversation = false  // Reset - will be set true on first prompt
         AppLogger.log("[Dashboard] User resumed session: \(sessionId)")
 
-        // Load session messages
+        // Load first page of session messages
         do {
-            let messagesResponse = try await _agentRepository.getSessionMessages(sessionId: sessionId)
-            for message in messagesResponse.messages {
+            let messagesResponse = try await _agentRepository.getSessionMessages(
+                sessionId: sessionId,
+                limit: messagesPageSize,
+                offset: 0,
+                order: "desc"
+            )
+
+            // Update pagination state
+            messagesHasMore = messagesResponse.hasMore
+            messagesNextOffset = messagesResponse.nextOffset
+            messagesTotalCount = messagesResponse.total
+
+            AppLogger.log("[Dashboard] Loaded \(messagesResponse.count) of \(messagesResponse.total) messages, hasMore=\(messagesResponse.hasMore)")
+
+            // Reverse messages since API returns desc (newest first) but UI shows oldest at top
+            var seenElementIds = Set<String>()  // Track seen IDs to prevent duplicates
+            for message in messagesResponse.messages.reversed() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
-                // Also create ChatElement from session message
+                // Also create ChatElements from session message (may have multiple blocks)
                 let chatMessage = ChatMessage.from(sessionMessage: message)
-                if let element = convertChatMessageToElement(chatMessage) {
-                    chatElements.append(element)
+                let elements = convertChatMessageToElements(chatMessage)
+                // Filter out duplicate IDs
+                for element in elements {
+                    if !seenElementIds.contains(element.id) {
+                        seenElementIds.insert(element.id)
+                        chatElements.append(element)
+                    }
                 }
             }
             await forceLogUpdate()
@@ -709,9 +793,17 @@ final class DashboardViewModel: ObservableObject {
             if isNewSession {
                 await logCache.clear()
                 chatElements = []
+                // Reset pagination state
+                messagesNextOffset = 0
+                messagesHasMore = false
+                messagesTotalCount = 0
                 AppLogger.log("[Dashboard] Cleared data for new session")
+            } else if !chatElements.isEmpty {
+                // Same session and already have data - skip reloading to prevent duplicates
+                AppLogger.log("[Dashboard] Same session with \(chatElements.count) elements - skipping reload")
+                return
             } else {
-                AppLogger.log("[Dashboard] Same session - keeping existing data")
+                AppLogger.log("[Dashboard] Same session but empty - loading data")
             }
 
             // Store sessionId - this is a TRUSTED source (from sessions API)
@@ -722,12 +814,23 @@ final class DashboardViewModel: ObservableObject {
             // Yield to let UI thread breathe before network call
             await Task.yield()
 
-            // Get messages for the session
+            // Get first page of messages for the session
             AppLogger.log("[Dashboard] Fetching messages for session: \(sessionId)")
             let messagesResponse: SessionMessagesResponse
             do {
-                messagesResponse = try await _agentRepository.getSessionMessages(sessionId: sessionId)
-                AppLogger.log("[Dashboard] Got \(messagesResponse.count) messages")
+                messagesResponse = try await _agentRepository.getSessionMessages(
+                    sessionId: sessionId,
+                    limit: messagesPageSize,
+                    offset: 0,
+                    order: "desc"
+                )
+
+                // Update pagination state
+                messagesHasMore = messagesResponse.hasMore
+                messagesNextOffset = messagesResponse.nextOffset
+                messagesTotalCount = messagesResponse.total
+
+                AppLogger.log("[Dashboard] Got \(messagesResponse.count) of \(messagesResponse.total) messages, hasMore=\(messagesResponse.hasMore)")
             } catch {
                 AppLogger.error(error, context: "Fetch session messages")
                 throw error
@@ -744,17 +847,24 @@ final class DashboardViewModel: ObservableObject {
             }
 
             // Convert to log entries and ChatElements (skip tool messages with no text)
+            // Reverse messages since API returns desc (newest first) but UI shows oldest at top
+            let chronologicalMessages = Array(messagesResponse.messages.reversed())
             var entriesAdded = 0
-            for (index, message) in messagesResponse.messages.enumerated() {
+            var seenElementIds = Set<String>()  // Track seen IDs to prevent duplicates
+            for (index, message) in chronologicalMessages.enumerated() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
                 }
-                // Also create ChatElement from session message
+                // Also create ChatElements from session message (may have multiple blocks)
                 let chatMessage = ChatMessage.from(sessionMessage: message)
-                let element = convertChatMessageToElement(chatMessage)
-                if let element = element {
-                    chatElements.append(element)
+                let elements = convertChatMessageToElements(chatMessage)
+                // Filter out duplicate IDs (API may return same message UUID multiple times)
+                for element in elements {
+                    if !seenElementIds.contains(element.id) {
+                        seenElementIds.insert(element.id)
+                        chatElements.append(element)
+                    }
                 }
 
                 // Yield every 10 messages to prevent UI starvation
@@ -762,7 +872,7 @@ final class DashboardViewModel: ObservableObject {
                     await Task.yield()
                 }
             }
-            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(chatElements.count) elements from \(messagesResponse.count) messages")
+            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(chatElements.count) elements from \(messagesResponse.count) messages (deduplicated)")
 
             // Update logs array
             await forceLogUpdate()
@@ -822,10 +932,38 @@ final class DashboardViewModel: ObservableObject {
             // Convert to ChatElements for sophisticated UI
             if case .claudeMessage(let payload) = event.payload {
                 let elements = ChatElement.from(payload: payload)
+                // Deduplicate against existing elements
+                let existingIds = Set(chatElements.map { $0.id })
+                var addedCount = 0
                 for element in elements {
-                    chatElements.append(element)
+                    if !existingIds.contains(element.id) {
+                        chatElements.append(element)
+                        addedCount += 1
+                    }
                 }
-                AppLogger.log("[Dashboard] Added \(elements.count) chat elements from claude_message")
+                if addedCount > 0 {
+                    AppLogger.log("[Dashboard] Added \(addedCount) chat elements from claude_message")
+                }
+
+                // Update streaming indicator state
+                // isStreaming when: stopReason is empty/nil AND content contains thinking
+                let hasThinking = payload.effectiveContent?.containsThinking == true
+                let isStillStreaming = (payload.stopReason == nil || payload.stopReason?.isEmpty == true) && hasThinking
+
+                if isStillStreaming && !isStreaming {
+                    // Started streaming
+                    isStreaming = true
+                    streamingStartTime = Date()
+                    AppLogger.log("[Dashboard] Streaming started (thinking)")
+                } else if !isStillStreaming && isStreaming {
+                    // Stopped streaming
+                    isStreaming = false
+                    if let startTime = streamingStartTime {
+                        let duration = Date().timeIntervalSince(startTime)
+                        AppLogger.log("[Dashboard] Streaming stopped after \(String(format: "%.1f", duration))s")
+                    }
+                    streamingStartTime = nil
+                }
             }
 
         case .claudeLog:
@@ -858,9 +996,12 @@ final class DashboardViewModel: ObservableObject {
                 // When Claude finishes (running -> idle/stopped):
                 // 1. Reset hasActiveConversation so next prompt will use resume mode
                 // 2. Refresh git status
+                // 3. Clear streaming indicator
                 if previousState == .running && (state == .idle || state == .stopped) {
                     hasActiveConversation = false
-                    AppLogger.log("[Dashboard] Claude stopped - reset hasActiveConversation")
+                    isStreaming = false
+                    streamingStartTime = nil
+                    AppLogger.log("[Dashboard] Claude stopped - reset hasActiveConversation and streaming")
                     await refreshGitStatus()
                 }
             }
@@ -1035,23 +1176,138 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Convert ChatMessage to ChatElement for unified rendering
-    private func convertChatMessageToElement(_ message: ChatMessage) -> ChatElement? {
+    /// Convert ChatMessage to ChatElements for unified rendering
+    /// Returns multiple elements for messages with tool_use/tool_result blocks
+    private func convertChatMessageToElements(_ message: ChatMessage) -> [ChatElement] {
+        var elements: [ChatElement] = []
+
         switch message.type {
         case .user:
-            return ChatElement.userInput(message.textContent)
+            // User messages may have text or tool_result content
+            for (index, block) in message.contentBlocks.enumerated() {
+                switch block.type {
+                case .text:
+                    if !block.content.isEmpty {
+                        // Use message ID + index for unique ID
+                        let uniqueId = "\(message.id)-text-\(index)"
+                        elements.append(ChatElement(
+                            id: uniqueId,
+                            type: .userInput,
+                            timestamp: message.timestamp,
+                            content: .userInput(UserInputContent(text: block.content))
+                        ))
+                    }
+                case .toolResult:
+                    // Tool result from user message (command output)
+                    // Skip empty tool results
+                    guard !block.content.isEmpty else { continue }
+                    let lines = block.content.components(separatedBy: "\n")
+                    let summary = lines.prefix(3).joined(separator: "\n")
+                    // Use block.id + "_result" suffix to avoid collision with tool_use
+                    let uniqueId = "\(block.id)-result"
+                    elements.append(ChatElement(
+                        id: uniqueId,
+                        type: .toolResult,
+                        timestamp: message.timestamp,
+                        content: .toolResult(ToolResultContent(
+                            toolCallId: block.id,
+                            toolName: block.toolName ?? "",
+                            isError: block.isError,
+                            summary: summary,
+                            fullContent: block.content
+                        ))
+                    ))
+                default:
+                    break
+                }
+            }
 
         case .assistant:
-            // For assistant messages, we need to create multiple elements for different blocks
-            // For simplicity, just create one element with the text content
-            if !message.textContent.isEmpty {
-                return ChatElement.assistantText(message.textContent, model: message.model)
+            // Assistant messages may have text, tool_use, or thinking blocks
+            for (index, block) in message.contentBlocks.enumerated() {
+                switch block.type {
+                case .text:
+                    if !block.content.isEmpty {
+                        // Use message ID + index for unique ID
+                        let uniqueId = "\(message.id)-text-\(index)"
+                        elements.append(ChatElement(
+                            id: uniqueId,
+                            type: .assistantText,
+                            timestamp: message.timestamp,
+                            content: .assistantText(AssistantTextContent(text: block.content, model: message.model))
+                        ))
+                    }
+                case .toolUse:
+                    // Tool call from assistant - parse input params
+                    let toolName = block.toolName ?? "tool"
+                    var params: [String: String] = [:]
+                    if let inputStr = block.toolInput {
+                        // Parse "key: value\nkey2: value2" format
+                        for line in inputStr.components(separatedBy: "\n") {
+                            let parts = line.split(separator: ":", maxSplits: 1)
+                            if parts.count == 2 {
+                                let key = String(parts[0]).trimmingCharacters(in: .whitespaces)
+                                let value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                                params[key] = value
+                            }
+                        }
+                    }
+                    let display = formatToolCallDisplay(tool: toolName, params: params)
+                    // Use block.id directly for tool_use (it's unique)
+                    elements.append(ChatElement(
+                        id: block.id,
+                        type: .toolCall,
+                        timestamp: message.timestamp,
+                        content: .toolCall(ToolCallContent(
+                            tool: toolName,
+                            toolId: block.id,
+                            display: display,
+                            params: params,
+                            status: .completed
+                        ))
+                    ))
+                case .thinking:
+                    if !block.content.isEmpty {
+                        // Use message ID + index for unique ID
+                        let uniqueId = "\(message.id)-thinking-\(index)"
+                        elements.append(ChatElement(
+                            id: uniqueId,
+                            type: .thinking,
+                            timestamp: message.timestamp,
+                            content: .thinking(ThinkingContent(text: block.content))
+                        ))
+                    }
+                default:
+                    break
+                }
             }
-            return nil
 
         case .system:
-            return ChatElement.assistantText(message.textContent)
+            if !message.textContent.isEmpty {
+                elements.append(ChatElement.assistantText(message.textContent))
+            }
         }
+
+        return elements
+    }
+
+    /// Format tool call display string from params dictionary
+    private func formatToolCallDisplay(tool: String, params: [String: String]) -> String {
+        // Priority: command > file_path > pattern > other params
+        if tool == "Bash", let cmd = params["command"] {
+            return cmd
+        } else if ["Read", "Write", "Edit"].contains(tool), let path = params["file_path"] {
+            return path
+        } else if ["Glob", "Grep"].contains(tool), let pattern = params["pattern"] {
+            return "pattern: \"\(pattern)\""
+        }
+
+        // Fallback: show first param value
+        if let firstValue = params.values.first {
+            return firstValue.count > 60 ? String(firstValue.prefix(60)) + "..." : firstValue
+        }
+
+        return ""
     }
 
     /// Get the most recent session ID from the server

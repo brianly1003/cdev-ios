@@ -1,11 +1,12 @@
 import SwiftUI
+import UIKit
 
 /// Lightweight syntax highlighter for code viewing
 /// Uses pattern matching for common code elements - optimized for mobile viewing
 enum SyntaxHighlighter {
     // MARK: - Public API
 
-    /// Highlight a single line of code
+    /// Highlight a single line of code (SwiftUI version)
     /// - Parameters:
     ///   - line: The source code line
     ///   - language: Programming language for keyword highlighting
@@ -25,6 +26,33 @@ enum SyntaxHighlighter {
         applyDecorators(to: &result, line: line, language: language)
         applyKeywords(to: &result, line: line, language: language)
         applyTypes(to: &result, line: line, language: language)
+
+        return result
+    }
+
+    /// Highlight a single line of code (UIKit version)
+    /// - Parameters:
+    ///   - line: The source code line
+    ///   - language: Programming language for keyword highlighting
+    ///   - font: Font to use for the text
+    /// - Returns: NSAttributedString with syntax colors for UIKit
+    static func highlightForUIKit(line: String, language: Language, font: UIFont) -> NSAttributedString {
+        guard !line.isEmpty else {
+            return NSAttributedString(string: " ", attributes: [.font: font])
+        }
+
+        let result = NSMutableAttributedString(string: line, attributes: [
+            .font: font,
+            .foregroundColor: UIColor(ColorSystem.Syntax.plain)
+        ])
+
+        // Apply highlighting in order of priority (most specific first)
+        applyCommentsUIKit(to: result, line: line, language: language)
+        applyStringsUIKit(to: result, line: line, language: language)
+        applyNumbersUIKit(to: result, line: line)
+        applyDecoratorsUIKit(to: result, line: line, language: language)
+        applyKeywordsUIKit(to: result, line: line, language: language)
+        applyTypesUIKit(to: result, line: line, language: language)
 
         return result
     }
@@ -407,6 +435,111 @@ enum SyntaxHighlighter {
             if let attrRange = Range(match.range, in: result) {
                 result[attrRange].foregroundColor = color
             }
+        }
+    }
+
+    // MARK: - UIKit Highlighting Methods
+
+    /// Apply comment highlighting (UIKit)
+    private static func applyCommentsUIKit(to result: NSMutableAttributedString, line: String, language: Language) {
+        if let prefix = language.singleLineComment,
+           let range = line.range(of: prefix) {
+            let startIndex = line.distance(from: line.startIndex, to: range.lowerBound)
+            let nsRange = NSRange(location: startIndex, length: line.count - startIndex)
+            result.addAttribute(.foregroundColor, value: UIColor(ColorSystem.Syntax.comment), range: nsRange)
+            return
+        }
+
+        if let start = language.multiLineCommentStart,
+           let range = line.range(of: start) {
+            let startIndex = line.distance(from: line.startIndex, to: range.lowerBound)
+            let nsRange = NSRange(location: startIndex, length: line.count - startIndex)
+            result.addAttribute(.foregroundColor, value: UIColor(ColorSystem.Syntax.comment), range: nsRange)
+        }
+    }
+
+    /// Apply string highlighting (UIKit)
+    private static func applyStringsUIKit(to result: NSMutableAttributedString, line: String, language: Language) {
+        let patterns = [
+            #"\"\"\"[^\"]*\"\"\""#,
+            #"'''[^']*'''"#,
+            #"\"(?:[^\"\\]|\\.)*\""#,
+            #"'(?:[^'\\]|\\.)*'"#,
+            #"`(?:[^`\\]|\\.)*`"#,
+        ]
+
+        for pattern in patterns {
+            applyPatternUIKit(pattern, color: UIColor(ColorSystem.Syntax.string), to: result, line: line)
+        }
+    }
+
+    /// Apply number highlighting (UIKit)
+    private static func applyNumbersUIKit(to result: NSMutableAttributedString, line: String) {
+        let patterns = [
+            #"0[xX][0-9a-fA-F_]+"#,
+            #"0[bB][01_]+"#,
+            #"0[oO][0-7_]+"#,
+            #"\b\d+\.\d+([eE][+-]?\d+)?\b"#,
+            #"\b\d+[eE][+-]?\d+\b"#,
+            #"\b\d+\b"#,
+        ]
+
+        for pattern in patterns {
+            applyPatternUIKit(pattern, color: UIColor(ColorSystem.Syntax.number), to: result, line: line)
+        }
+    }
+
+    /// Apply decorator/attribute highlighting (UIKit)
+    private static func applyDecoratorsUIKit(to result: NSMutableAttributedString, line: String, language: Language) {
+        switch language {
+        case .swift, .java, .kotlin, .python, .typescript:
+            applyPatternUIKit(#"@\w+"#, color: UIColor(ColorSystem.Syntax.decorator), to: result, line: line)
+        case .rust:
+            applyPatternUIKit(#"#\[[\w:]+(?:\([^\)]*\))?\]"#, color: UIColor(ColorSystem.Syntax.decorator), to: result, line: line)
+        case .csharp:
+            applyPatternUIKit(#"\[\w+(?:\([^\)]*\))?\]"#, color: UIColor(ColorSystem.Syntax.decorator), to: result, line: line)
+        case .php:
+            applyPatternUIKit(#"#\[\w+(?:\([^\)]*\))?\]"#, color: UIColor(ColorSystem.Syntax.decorator), to: result, line: line)
+        default:
+            break
+        }
+    }
+
+    /// Apply keyword highlighting (UIKit)
+    private static func applyKeywordsUIKit(to result: NSMutableAttributedString, line: String, language: Language) {
+        let keywords = language.keywords
+        guard !keywords.isEmpty else { return }
+
+        let caseSensitive = language != .sql
+
+        for keyword in keywords {
+            let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: keyword) + #"\b"#
+            let options: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
+            applyPatternUIKit(pattern, color: UIColor(ColorSystem.Syntax.keyword), to: result, line: line, options: options)
+        }
+    }
+
+    /// Apply type highlighting (UIKit)
+    private static func applyTypesUIKit(to result: NSMutableAttributedString, line: String, language: Language) {
+        guard language.highlightUppercaseTypes else { return }
+        applyPatternUIKit(#"\b[A-Z][a-zA-Z0-9_]*\b"#, color: UIColor(ColorSystem.Syntax.type), to: result, line: line)
+    }
+
+    /// Apply a regex pattern with a color (UIKit)
+    private static func applyPatternUIKit(
+        _ pattern: String,
+        color: UIColor,
+        to result: NSMutableAttributedString,
+        line: String,
+        options: NSRegularExpression.Options = []
+    ) {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return }
+
+        let nsRange = NSRange(location: 0, length: line.utf16.count)
+        let matches = regex.matches(in: line, options: [], range: nsRange)
+
+        for match in matches {
+            result.addAttribute(.foregroundColor, value: color, range: match.range)
         }
     }
 }

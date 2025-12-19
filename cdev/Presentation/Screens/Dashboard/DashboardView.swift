@@ -56,8 +56,12 @@ struct DashboardView: View {
                             elements: viewModel.chatElements,  // NEW: Elements API UI
                             onClear: { Task { await viewModel.clearLogs() } },
                             isVisible: viewModel.selectedTab == .logs,
-                            isInputFocused: isInputFocused
+                            isInputFocused: isInputFocused,
+                            isStreaming: viewModel.isStreaming,
+                            streamingStartTime: viewModel.streamingStartTime
                         )
+                        // Force view refresh when element count changes
+                        .id("terminal-\(viewModel.chatElements.count)")
                         .tag(DashboardTab.logs)
 
                         // Source Control (Mini Repo Management)
@@ -76,19 +80,18 @@ struct DashboardView: View {
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .dismissKeyboardOnTap()
                     .background(ColorSystem.terminalBg)
-                    // Use safeAreaInset so ScrollView accounts for action bar height
-                    .safeAreaInset(edge: .bottom) {
-                        if viewModel.selectedTab == .logs {
-                            ActionBarView(
-                                claudeState: viewModel.claudeState,
-                                promptText: $viewModel.promptText,
-                                isLoading: viewModel.isLoading,
-                                isFocused: $isInputFocused,
-                                onSend: { Task { await viewModel.sendPrompt() } },
-                                onStop: { Task { await viewModel.stopClaude() } }
-                            )
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
+
+                    // Action bar - outside TabView, always visible when on logs tab
+                    if viewModel.selectedTab == .logs {
+                        ActionBarView(
+                            claudeState: viewModel.claudeState,
+                            promptText: $viewModel.promptText,
+                            isLoading: viewModel.isLoading,
+                            isFocused: $isInputFocused,
+                            onSend: { Task { await viewModel.sendPrompt() } },
+                            onStop: { Task { await viewModel.stopClaude() } }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 .background(ColorSystem.terminalBg)

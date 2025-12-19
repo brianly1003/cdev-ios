@@ -187,10 +187,21 @@ final class AgentRepository: AgentRepositoryProtocol {
         return try await httpService.get(path: "/api/claude/sessions", queryItems: queryItems)
     }
 
-    func getSessionMessages(sessionId: String) async throws -> SessionMessagesResponse {
-        try await httpService.get(
+    func getSessionMessages(
+        sessionId: String,
+        limit: Int = 50,
+        offset: Int = 0,
+        order: String = "desc"
+    ) async throws -> SessionMessagesResponse {
+        let queryItems = [
+            URLQueryItem(name: "session_id", value: sessionId),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "order", value: order)
+        ]
+        return try await httpService.get(
             path: "/api/claude/sessions/messages",
-            queryItems: [URLQueryItem(name: "session_id", value: sessionId)]
+            queryItems: queryItems
         )
     }
 

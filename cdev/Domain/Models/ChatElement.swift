@@ -386,11 +386,13 @@ extension ChatElement {
         }
 
         // Assistant message - may have multiple content blocks
+        let baseId = payload.uuid ?? UUID().uuidString
+
         switch effectiveContent {
         case .text(let text):
             if !text.isEmpty {
                 elements.append(ChatElement(
-                    id: payload.uuid ?? UUID().uuidString,
+                    id: "\(baseId)-text-0",
                     type: .assistantText,
                     timestamp: timestamp,
                     content: .assistantText(AssistantTextContent(text: text, model: model))
@@ -398,14 +400,16 @@ extension ChatElement {
             }
 
         case .blocks(let blocks):
-            for block in blocks {
+            for (index, block) in blocks.enumerated() {
                 let blockId = block.effectiveId
 
                 switch block.type {
                 case "text":
                     if let text = block.text, !text.isEmpty {
+                        // Use baseId + index for unique ID (text blocks may not have unique IDs)
+                        let textId = "\(baseId)-text-\(index)"
                         elements.append(ChatElement(
-                            id: blockId,
+                            id: textId,
                             type: .assistantText,
                             timestamp: timestamp,
                             content: .assistantText(AssistantTextContent(text: text, model: model))
@@ -414,8 +418,10 @@ extension ChatElement {
 
                 case "thinking":
                     if let text = block.text, !text.isEmpty {
+                        // Use baseId + index for unique ID
+                        let thinkingId = "\(baseId)-thinking-\(index)"
                         elements.append(ChatElement(
-                            id: blockId,
+                            id: thinkingId,
                             type: .thinking,
                             timestamp: timestamp,
                             content: .thinking(ThinkingContent(text: text))
@@ -452,10 +458,13 @@ extension ChatElement {
                     let resultContent = block.content ?? block.text ?? ""
                     let isError = block.isError ?? false
                     let lines = resultContent.components(separatedBy: "\n")
-                    let summary = lines.first ?? ""
+                    let summary = lines.prefix(3).joined(separator: "\n")
+
+                    // Use tool_use_id + "-result" suffix to avoid collision with tool_use element
+                    let toolResultId = (block.toolUseId ?? blockId) + "-result"
 
                     elements.append(ChatElement(
-                        id: blockId,
+                        id: toolResultId,
                         type: .toolResult,
                         timestamp: timestamp,
                         content: .toolResult(ToolResultContent(

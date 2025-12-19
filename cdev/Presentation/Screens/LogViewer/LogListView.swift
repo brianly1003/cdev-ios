@@ -8,19 +8,24 @@ struct LogListView: View {
     let onClear: () -> Void
     var isVisible: Bool = true  // Track if tab is visible
     var isInputFocused: Bool = false  // Track if input field is focused (for auto-scroll)
+    var isStreaming: Bool = false  // Whether Claude is actively thinking/streaming
+    var streamingStartTime: Date?  // When streaming started (for duration display)
 
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
         self.isVisible = isVisible
         self.isInputFocused = isInputFocused
+        self.isStreaming = isStreaming
+        self.streamingStartTime = streamingStartTime
     }
 
     var body: some View {
+        let _ = AppLogger.log("[LogListView] Rendering: elements=\(elements.count), logs=\(logs.count), useElementsView=\(useElementsView)")
         Group {
             if elements.isEmpty && logs.isEmpty {
                 EmptyStateView(
@@ -50,7 +55,7 @@ struct LogListView: View {
 
     @ViewBuilder
     private var elementsListView: some View {
-        ElementsScrollView(elements: elements, showTimestamps: showTimestamps, isVisible: isVisible, isInputFocused: isInputFocused)
+        ElementsScrollView(elements: elements, showTimestamps: showTimestamps, isVisible: isVisible, isInputFocused: isInputFocused, isStreaming: isStreaming, streamingStartTime: streamingStartTime)
     }
 
     // MARK: - Legacy Logs List View
@@ -468,43 +473,74 @@ private struct ElementsScrollView: View {
     let showTimestamps: Bool
     let isVisible: Bool
     let isInputFocused: Bool
+    let isStreaming: Bool
+    let streamingStartTime: Date?
 
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(elements) { element in
-                        ElementView(element: element, showTimestamp: showTimestamps)
-                            .id(element.id)
-                    }
+        let _ = AppLogger.log("[ElementsScrollView] Rendering \(elements.count) elements, isStreaming=\(isStreaming)")
+        ZStack(alignment: .bottom) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(elements) { element in
+                            ElementView(element: element, showTimestamp: showTimestamps)
+                                .id(element.id)
+                        }
 
-                    // Bottom anchor
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom")
+                        // Extra padding at bottom when streaming indicator is visible
+                        if isStreaming {
+                            Color.clear
+                                .frame(height: 40)
+                        }
+
+                        // Bottom anchor
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                    }
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.vertical, Spacing.xs)
                 }
-                .padding(.horizontal, Spacing.xs)
-                .padding(.vertical, Spacing.xs)
+                .onAppear {
+                    AppLogger.log("[ElementsScrollView] onAppear with \(elements.count) elements")
+                    scheduleScroll(proxy: proxy, animated: false)
+                }
+                .onChange(of: elements.count) { oldCount, newCount in
+                    // Only scroll if count actually increased and we haven't just scrolled
+                    guard newCount > oldCount, newCount != lastScrolledCount else { return }
+                    scheduleScroll(proxy: proxy, animated: true)
+                }
+                .onChange(of: isVisible) { _, visible in
+                    guard visible, !elements.isEmpty else { return }
+                    scheduleScroll(proxy: proxy, animated: false)
+                }
+                .onChange(of: isInputFocused) { _, focused in
+                    // Auto-scroll when keyboard appears or dismisses
+                    guard !elements.isEmpty else { return }
+                    if focused {
+                        scheduleScrollForKeyboard(proxy: proxy)
+                    } else {
+                        // Re-adjust scroll when keyboard dismisses to remove extra space
+                        scheduleScrollAfterKeyboardDismiss(proxy: proxy)
+                    }
+                }
+                .onChange(of: isStreaming) { _, streaming in
+                    // Auto-scroll when streaming starts to show indicator
+                    guard streaming else { return }
+                    scheduleScroll(proxy: proxy, animated: true)
+                }
             }
-            .onAppear {
-                scheduleScroll(proxy: proxy, animated: false)
-            }
-            .onChange(of: elements.count) { oldCount, newCount in
-                // Only scroll if count actually increased and we haven't just scrolled
-                guard newCount > oldCount, newCount != lastScrolledCount else { return }
-                scheduleScroll(proxy: proxy, animated: true)
-            }
-            .onChange(of: isVisible) { _, visible in
-                guard visible, !elements.isEmpty else { return }
-                scheduleScroll(proxy: proxy, animated: false)
-            }
-            .onChange(of: isInputFocused) { _, focused in
-                // Auto-scroll when keyboard appears (input focused)
-                guard focused, !elements.isEmpty else { return }
-                scheduleScrollForKeyboard(proxy: proxy)
+
+            // Streaming indicator - fixed at bottom
+            if isStreaming {
+                StreamingIndicatorView(startTime: streamingStartTime)
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.bottom, Spacing.xs)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.2), value: isStreaming)
             }
         }
     }
@@ -541,6 +577,21 @@ private struct ElementsScrollView: View {
             guard !Task.isCancelled else { return }
 
             withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    /// Scroll adjustment after keyboard dismisses - removes extra space
+    private func scheduleScrollAfterKeyboardDismiss(proxy: ScrollViewProxy) {
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            // Wait for keyboard dismiss animation to complete (250ms)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+
+            // Scroll to bottom to adjust content position
+            withAnimation(.easeOut(duration: 0.15)) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
@@ -638,6 +689,75 @@ private struct LogsScrollView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
+    }
+}
+
+// MARK: - Streaming Indicator
+
+/// Shows when Claude is actively thinking/streaming
+/// Similar to Claude CLI's "Concocting... (esc to interrupt · thought for 2s)"
+struct StreamingIndicatorView: View {
+    let startTime: Date?
+
+    @State private var elapsedSeconds: Int = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            // Pulsing brain icon
+            Image(systemName: "brain")
+                .font(.system(size: 10))
+                .foregroundStyle(ColorSystem.primary)
+                .symbolEffect(.pulse)
+
+            Text("Thinking...")
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textSecondary)
+
+            if elapsedSeconds > 0 {
+                Text("(\(elapsedSeconds)s)")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
+        .background(ColorSystem.terminalBgElevated)
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+        .shadow(color: Color.black.opacity(0.2), radius: 2, y: 1)
+        .onAppear {
+            startTimer()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+        .onChange(of: startTime) { _, _ in
+            elapsedSeconds = 0
+            startTimer()
+        }
+    }
+
+    private func startTimer() {
+        stopTimer()
+        updateElapsed()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            updateElapsed()
+        }
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func updateElapsed() {
+        guard let startTime = startTime else {
+            elapsedSeconds = 0
+            return
+        }
+        elapsedSeconds = max(0, Int(Date().timeIntervalSince(startTime)))
     }
 }
 

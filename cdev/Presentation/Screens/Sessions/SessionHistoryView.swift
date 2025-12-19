@@ -539,9 +539,16 @@ final class SessionHistoryViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let response = try await agentRepository.getSessionMessages(sessionId: sessionId)
-            messages = response.messages
-            AppLogger.log("[SessionHistory] Loaded \(response.count) messages for session \(sessionId)")
+            // Load all messages for session history view (use high limit)
+            let response = try await agentRepository.getSessionMessages(
+                sessionId: sessionId,
+                limit: 500,
+                offset: 0,
+                order: "desc"
+            )
+            // Reverse to show oldest at top, newest at bottom (chronological order)
+            messages = response.messages.reversed()
+            AppLogger.log("[SessionHistory] Loaded \(response.count) of \(response.total) messages for session \(sessionId)")
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
             AppLogger.error(error, context: "Load session messages")

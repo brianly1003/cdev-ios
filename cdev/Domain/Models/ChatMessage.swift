@@ -196,13 +196,23 @@ extension ChatMessage {
                     default: blockType = .text
                     }
 
+                    // For tool_use, use block.id; for tool_result, use block.toolUseId
+                    let blockId = block.id ?? block.toolUseId ?? UUID().uuidString
+
+                    // Format tool input as string for display
+                    var toolInputStr: String?
+                    if let input = block.input {
+                        let pairs = input.map { "\($0.key): \($0.value.stringValue)" }
+                        toolInputStr = pairs.joined(separator: "\n")
+                    }
+
                     blocks.append(ContentBlock(
-                        id: block.toolUseId ?? UUID().uuidString,
+                        id: blockId,
                         type: blockType,
                         content: block.text ?? block.content ?? "",
                         toolName: block.name,
-                        toolInput: nil,  // Could format input if needed
-                        isError: false   // SessionMessage doesn't have isError
+                        toolInput: toolInputStr,
+                        isError: block.isError ?? false
                     ))
                 }
             }
