@@ -14,24 +14,23 @@ struct InteractionBanner: View {
             // Header
             HStack(spacing: Spacing.xs) {
                 Image(systemName: iconName)
-                    .font(.body)
+                    .font(.system(size: 14))
                     .foregroundStyle(iconColor)
 
                 Text(headerText)
-                    .font(Typography.footnote)
-                    .fontWeight(.semibold)
+                    .font(Typography.bodyBold)
 
                 Spacer()
 
                 Text(interaction.timestamp.relativeString)
-                    .font(Typography.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(Typography.terminalTimestamp)
+                    .foregroundStyle(ColorSystem.textTertiary)
             }
 
             // Description
             Text(interaction.description)
-                .font(Typography.callout)
-                .foregroundStyle(.primary)
+                .font(Typography.body)
+                .foregroundStyle(ColorSystem.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(3)
 

@@ -62,6 +62,7 @@ final class DashboardViewModel: ObservableObject {
 
     private let logCache: LogCache
     private let diffCache: DiffCache
+    private weak var appState: AppState?
 
     private var eventTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
@@ -95,7 +96,8 @@ final class DashboardViewModel: ObservableObject {
         respondToClaudeUseCase: RespondToClaudeUseCase,
         sessionRepository: SessionRepository,
         logCache: LogCache,
-        diffCache: DiffCache
+        diffCache: DiffCache,
+        appState: AppState? = nil
     ) {
         self.webSocketService = webSocketService
         self._agentRepository = agentRepository
@@ -104,6 +106,7 @@ final class DashboardViewModel: ObservableObject {
         self.sessionRepository = sessionRepository
         self.logCache = logCache
         self.diffCache = diffCache
+        self.appState = appState
 
         // Initialize Source Control ViewModel
         self.sourceControlViewModel = SourceControlViewModel(agentRepository: agentRepository)
@@ -689,9 +692,15 @@ final class DashboardViewModel: ObservableObject {
 
             AppLogger.log("[Dashboard] Loading history for session: \(sessionId)")
 
-            // Clear existing logs and elements before loading new session
-            await logCache.clear()
-            chatElements = []
+            // Only clear if loading a different session (prevents flashing on reconnect)
+            let isNewSession = userSelectedSessionId != sessionId
+            if isNewSession {
+                await logCache.clear()
+                chatElements = []
+                AppLogger.log("[Dashboard] Cleared data for new session")
+            } else {
+                AppLogger.log("[Dashboard] Same session - keeping existing data")
+            }
 
             // Store sessionId - this is a TRUSTED source (from sessions API)
             setSelectedSession(sessionId)
@@ -1011,6 +1020,74 @@ final class DashboardViewModel: ObservableObject {
             return nil
         }
     }
+
+    // MARK: - Workspace Management
+
+    /// Switch to a different workspace
+    func switchWorkspace(_ workspace: Workspace) async {
+        AppLogger.log("[Dashboard] Switching to workspace: \(workspace.name)")
+
+        // Disconnect current connection
+        webSocketService.disconnect()
+
+        // Don't clear data immediately - let new session data replace it
+        // This prevents flashing when switching workspaces
+        // The loadRecentSessionHistory() will clear when new session loads
+
+        // Clear session tracking so new session will trigger data reload
+        userSelectedSessionId = nil
+        hasActiveConversation = false
+
+        // Update workspace store
+        WorkspaceStore.shared.setActive(workspace)
+
+        // Create connection info from workspace
+        let connectionInfo = ConnectionInfo(
+            webSocketURL: workspace.webSocketURL,
+            httpURL: workspace.httpURL,
+            sessionId: workspace.sessionId ?? "",
+            repoName: workspace.name
+        )
+
+        // Connect to new workspace
+        do {
+            try await webSocketService.connect(to: connectionInfo)
+            await refreshStatus()
+        } catch {
+            self.error = .connectionFailed(underlying: error)
+        }
+    }
+
+    /// Disconnect from current workspace
+    func disconnect() async {
+        AppLogger.log("[Dashboard] Disconnecting from workspace")
+
+        // Disconnect WebSocket
+        webSocketService.disconnect()
+
+        // Clear workspace store active
+        WorkspaceStore.shared.clearActive()
+
+        // Clear state
+        await clearLogsAndDiffs()
+        connectionState = .disconnected
+        claudeState = .idle
+    }
+
+    /// Clear all logs and diffs
+    private func clearLogsAndDiffs() async {
+        logs = []
+        diffs = []
+        chatMessages = []
+        chatElements = []
+        await logCache.clear()
+        await diffCache.clear()
+    }
+
+    /// Create a PairingViewModel for the pairing sheet
+    func makePairingViewModel() -> PairingViewModel? {
+        appState?.makePairingViewModel()
+    }
 }
 
 // MARK: - Tab
@@ -1022,7 +1099,7 @@ enum DashboardTab: String, CaseIterable {
     var icon: String {
         switch self {
         case .logs: return "terminal"
-        case .diffs: return "doc.text.magnifyingglass"
+        case .diffs: return "arrow.triangle.branch"
         }
     }
 }

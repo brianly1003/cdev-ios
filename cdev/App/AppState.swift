@@ -8,6 +8,11 @@ final class AppState: ObservableObject {
 
     @Published var connectionState: ConnectionState = .disconnected
 
+    // MARK: - Cached ViewModels (prevents recreation on state changes)
+
+    private var _dashboardViewModel: DashboardViewModel?
+    private var _pairingViewModel: PairingViewModel?
+
     // MARK: - QR Scan Debouncing (persists across PairingViewModel instances)
 
     var lastScannedCode: String?
@@ -85,24 +90,35 @@ final class AppState: ObservableObject {
     // MARK: - ViewModel Factories
 
     func makePairingViewModel() -> PairingViewModel {
-        PairingViewModel(
+        if let existing = _pairingViewModel {
+            return existing
+        }
+        let vm = PairingViewModel(
             parseQRCodeUseCase: parseQRCodeUseCase,
             connectToAgentUseCase: connectToAgentUseCase,
             httpService: httpService,
             appState: self
         )
+        _pairingViewModel = vm
+        return vm
     }
 
     func makeDashboardViewModel() -> DashboardViewModel {
-        DashboardViewModel(
+        if let existing = _dashboardViewModel {
+            return existing
+        }
+        let vm = DashboardViewModel(
             webSocketService: webSocketService,
             agentRepository: agentRepository,
             sendPromptUseCase: sendPromptUseCase,
             respondToClaudeUseCase: respondToClaudeUseCase,
             sessionRepository: sessionRepository,
             logCache: logCache,
-            diffCache: diffCache
+            diffCache: diffCache,
+            appState: self
         )
+        _dashboardViewModel = vm
+        return vm
     }
 
     // MARK: - Public Actions
@@ -124,9 +140,38 @@ final class AppState: ObservableObject {
     }
 
     private func attemptAutoReconnect() {
-        guard sessionRepository.autoReconnect else { return }
+        guard sessionRepository.autoReconnect else {
+            AppLogger.log("[AppState] Auto-reconnect disabled")
+            return
+        }
 
         Task {
+            // First try WorkspaceStore (new system) - check UserDefaults directly
+            if let data = UserDefaults.standard.data(forKey: "cdev.saved_workspaces"),
+               let workspaces = try? JSONDecoder().decode([Workspace].self, from: data),
+               let lastWorkspace = workspaces.sorted(by: { $0.lastConnected > $1.lastConnected }).first {
+
+                AppLogger.log("[AppState] Auto-reconnecting to workspace: \(lastWorkspace.name) at \(lastWorkspace.webSocketURL)")
+                let connectionInfo = ConnectionInfo(
+                    webSocketURL: lastWorkspace.webSocketURL,
+                    httpURL: lastWorkspace.httpURL,
+                    sessionId: lastWorkspace.sessionId ?? "",
+                    repoName: lastWorkspace.name
+                )
+                httpService.baseURL = connectionInfo.httpURL
+                do {
+                    try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+                    WorkspaceStore.shared.setActive(lastWorkspace)
+                    AppLogger.log("[AppState] Auto-reconnect successful")
+                } catch {
+                    AppLogger.error(error, context: "Auto-reconnect to workspace")
+                }
+                return
+            }
+
+            AppLogger.log("[AppState] No saved workspaces found, trying old session storage")
+
+            // Fallback to old session storage
             do {
                 if let lastConnection = try await sessionRepository.loadLastConnection() {
                     AppLogger.log("Auto-reconnecting to \(lastConnection.host)")
@@ -137,5 +182,15 @@ final class AppState: ObservableObject {
                 AppLogger.error(error, context: "Auto-reconnect")
             }
         }
+    }
+
+    /// Check if there are saved workspaces available
+    /// Note: Checks UserDefaults directly to avoid @MainActor singleton timing issues
+    var hasSavedWorkspaces: Bool {
+        guard let data = UserDefaults.standard.data(forKey: "cdev.saved_workspaces"),
+              let workspaces = try? JSONDecoder().decode([Workspace].self, from: data) else {
+            return false
+        }
+        return !workspaces.isEmpty
     }
 }

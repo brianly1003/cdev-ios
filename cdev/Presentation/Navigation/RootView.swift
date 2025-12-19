@@ -8,8 +8,13 @@ struct RootView: View {
         Group {
             switch appState.connectionState {
             case .disconnected, .failed:
-                // Show pairing view when disconnected
-                PairingView(viewModel: appState.makePairingViewModel())
+                // If has saved workspaces, show Dashboard (user can reconnect via workspace switcher)
+                // If no workspaces, show Pairing for first-time setup
+                if appState.hasSavedWorkspaces {
+                    DashboardView(viewModel: appState.makeDashboardViewModel())
+                } else {
+                    PairingView(viewModel: appState.makePairingViewModel())
+                }
 
             case .connecting, .reconnecting:
                 // Show connecting state with cancel option

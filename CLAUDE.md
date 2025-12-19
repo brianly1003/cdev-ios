@@ -128,18 +128,67 @@ This app is designed for developers doing "vibe coding" on mobile - monitoring C
 4. **Information Density** - Show more data, less chrome
 5. **Real-time** - Auto-scroll logs, instant updates
 6. **Glanceable** - Status visible at all times
+7. **Responsive** - Adapt layout for iPhone (compact) and iPad (regular)
+8. **Scalable** - Support 100+ items in lists with search and grouping
 
 ### Compact UI Guidelines
 
 | Element | Guideline |
 |---------|-----------|
-| Padding | Use `Spacing.xs` (8pt) or smaller, avoid `Spacing.md`+ |
+| Padding | Use `Spacing.xs` (8pt) or `Spacing.xxs` (4pt), avoid `Spacing.md`+ |
 | Fonts | Prefer `Typography.terminal` (12pt) or `terminalSmall` (10pt) |
-| Row height | Single line preferred, max 2 lines |
-| Icons | 10-14pt, not larger |
+| Row height | Single line preferred, 28-36pt max height |
+| Icons | 9-14pt, not larger |
 | Timestamps | Compact format: "5m", "2h", "3d" not "5 minutes ago" |
-| Lists | No separators between items, use subtle background changes |
+| Lists | Use `LazyVStack` for performance, no separators, subtle backgrounds |
 | Sheets | Use `.presentationDetents([.medium, .large])` for adjustable height |
+| Status pills | 8pt monospace font, 3px border radius, minimal padding |
+
+### Responsive Design (iPad/iPhone)
+
+```swift
+// Always detect size class for responsive layouts
+@Environment(\.horizontalSizeClass) private var sizeClass
+private var isCompact: Bool { sizeClass == .compact }
+
+// iPhone: Full-width sheets, stacked layouts
+// iPad: Split views, auto-focus search, keyboard shortcuts
+if isCompact {
+    // iPhone layout
+} else {
+    // iPad layout with more information density
+}
+```
+
+**Responsive Patterns:**
+- iPhone: Sheets use full width, single-column layouts
+- iPad: Side-by-side layouts, keyboard shortcut hints (⌘K)
+- Both: Same components, different spacing/sizing
+
+### List Performance (100+ Items)
+
+```swift
+// ALWAYS use LazyVStack for lists that may grow
+LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+    ForEach(items) { item in
+        CompactRow(item: item)
+    }
+}
+
+// Add search for any list > 10 items
+@State private var searchText = ""
+private var filteredItems: [Item] {
+    guard !searchText.isEmpty else { return items }
+    return items.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+}
+
+// Group by category when multiple sources exist
+private var groupedItems: [(category: String, items: [Item])] {
+    Dictionary(grouping: filteredItems) { $0.category }
+        .map { (category: $0.key, items: $0.value) }
+        .sorted { $0.items.count > $1.items.count }
+}
+```
 
 ### UI Hierarchy
 
@@ -147,6 +196,125 @@ This app is designed for developers doing "vibe coding" on mobile - monitoring C
 2. Interaction banner (permissions/questions) - appears when needed
 3. Content area (logs/diffs) - swipeable tabs
 4. Action bar (prompt input + stop button) - always visible
+
+### Typography Consistency
+
+**CRITICAL: Always use Typography constants - never hardcode fonts**
+
+| Use Case | Typography Constant | Size |
+|----------|-------------------|------|
+| Page titles | `Typography.title2`, `title3` | System |
+| Body text | `Typography.body` | System body |
+| Bold body | `Typography.bodyBold` | System body semibold |
+| Terminal output | `Typography.terminal` | 12pt mono |
+| Small terminal | `Typography.terminalSmall` | 10pt mono |
+| Timestamps | `Typography.terminalTimestamp` | 9pt mono |
+| Status labels | `Typography.statusLabel` | 10pt rounded semibold |
+| Badges/pills | `Typography.badge` | 9pt rounded bold |
+| Tab labels | `Typography.tabLabel` | 11pt medium |
+| Button labels | `Typography.buttonLabel` | 12pt semibold |
+| Captions | `Typography.caption1`, `caption2` | System caption |
+| Input fields | `Typography.inputField` | 13pt regular |
+
+**Standard Icon Sizes (match typography):**
+| Context | Size | Example |
+|---------|------|---------|
+| Section headers | 10pt | Settings section icons |
+| Row icons | 14pt | Settings row icons |
+| Inline icons | 11-12pt | Status indicators |
+| Small badges | 8-9pt | Branch icons, chevrons |
+| Large icons | 24-28pt | Empty state icons |
+
+**Never use:**
+- `.font(.body)` → use `Typography.body`
+- `.font(.caption)` → use `Typography.caption1`
+- `.font(.system(size: 12))` for text → use `Typography.terminal` or appropriate constant
+
+### Theme Support (ColorSystem)
+
+All colors MUST use `ColorSystem` - never hardcode colors:
+
+```swift
+// Backgrounds (dark terminal theme)
+ColorSystem.terminalBg          // Main background
+ColorSystem.terminalBgElevated  // Cards, sheets
+ColorSystem.terminalBgHighlight // Hover, selected states
+
+// Text hierarchy
+ColorSystem.textPrimary         // Main content
+ColorSystem.textSecondary       // Supporting text
+ColorSystem.textTertiary        // Timestamps, hints
+ColorSystem.textQuaternary      // Disabled, very subtle
+
+// Semantic colors
+ColorSystem.primary             // Actions, links
+ColorSystem.success             // Connected, approved
+ColorSystem.error               // Disconnected, denied
+ColorSystem.warning             // Pending, caution
+
+// Status colors
+ColorSystem.Status.color(for: claudeState)  // Dynamic status
+```
+
+### Component Patterns
+
+**Compact Row (single line, ~32pt height):**
+```swift
+HStack(spacing: Spacing.xs) {
+    Image(systemName: "folder")
+        .font(.system(size: 11))
+        .foregroundStyle(ColorSystem.textTertiary)
+        .frame(width: 16)
+
+    Text(item.name)
+        .font(Typography.body)
+        .foregroundStyle(ColorSystem.textPrimary)
+        .lineLimit(1)
+
+    Spacer()
+
+    Text(item.timestamp)
+        .font(Typography.terminalSmall)
+        .foregroundStyle(ColorSystem.textQuaternary)
+}
+.padding(.horizontal, Spacing.sm)
+.padding(.vertical, Spacing.xs)
+```
+
+**Status Pill (ultra-compact badge):**
+```swift
+Text("ON")
+    .font(.system(size: 8, weight: .bold, design: .monospaced))
+    .foregroundStyle(ColorSystem.success)
+    .padding(.horizontal, 4)
+    .padding(.vertical, 1)
+    .background(ColorSystem.success.opacity(0.15))
+    .clipShape(RoundedRectangle(cornerRadius: 3))
+```
+
+**Search Bar:**
+```swift
+HStack(spacing: Spacing.xs) {
+    Image(systemName: "magnifyingglass")
+        .font(.system(size: 14))
+        .foregroundStyle(ColorSystem.textTertiary)
+
+    TextField("Search...", text: $searchText)
+        .font(Typography.body)
+        .focused($isSearchFocused)
+        .submitLabel(.search)
+
+    if !text.isEmpty {
+        Button { text = "" } label: {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(ColorSystem.textTertiary)
+        }
+    }
+}
+.padding(Spacing.sm)
+.background(ColorSystem.terminalBgElevated)
+.clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+```
 
 ## Security Rules
 

@@ -128,6 +128,12 @@ final class PairingViewModel: ObservableObject {
             // Connect via WebSocket
             try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
 
+            // Save workspace for quick reconnection
+            WorkspaceStore.shared.setActive(
+                from: connectionInfo,
+                repoName: connectionInfo.repoName
+            )
+
             // Clear scan history on successful connection
             appState?.clearScanHistory()
 

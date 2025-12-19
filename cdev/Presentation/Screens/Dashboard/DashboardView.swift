@@ -4,8 +4,11 @@ import SwiftUI
 /// Hero: Terminal output, quick actions, minimal chrome
 struct DashboardView: View {
     @StateObject var viewModel: DashboardViewModel
+    @StateObject private var workspaceStore = WorkspaceStore.shared
     @State private var showSettings = false
     @State private var showDebugLogs = false
+    @State private var showWorkspaceSwitcher = false
+    @State private var showPairing = false
     @FocusState private var isInputFocused: Bool
 
     /// Toolkit items - Easy to extend! Just add more .add() calls
@@ -26,12 +29,13 @@ struct DashboardView: View {
         ZStack {
             NavigationStack {
                 VStack(spacing: 0) {
-                    // Compact status bar
+                    // Compact status bar with workspace switcher
                     StatusBarView(
                         connectionState: viewModel.connectionState,
                         claudeState: viewModel.claudeState,
                         repoName: viewModel.agentStatus.repoName,
-                        sessionId: viewModel.agentStatus.sessionId
+                        sessionId: viewModel.agentStatus.sessionId,
+                        onWorkspaceTap: { showWorkspaceSwitcher = true }
                     )
 
                     // Pending interaction banner (if any)
@@ -113,7 +117,9 @@ struct DashboardView: View {
                         .presentationDragIndicator(.visible)
                 }
                 .sheet(isPresented: $showSettings) {
-                    SettingsView()
+                    SettingsView(onDisconnect: {
+                        Task { await viewModel.disconnect() }
+                    })
                 }
                 .sheet(isPresented: $viewModel.showSessionPicker) {
                     SessionPickerView(
@@ -136,6 +142,28 @@ struct DashboardView: View {
                         },
                         onDismiss: { viewModel.showSessionPicker = false }
                     )
+                }
+                .sheet(isPresented: $showWorkspaceSwitcher) {
+                    WorkspaceSwitcherSheet(
+                        workspaceStore: workspaceStore,
+                        currentWorkspace: workspaceStore.activeWorkspace,
+                        isConnected: viewModel.connectionState.isConnected,
+                        claudeState: viewModel.claudeState,
+                        onSwitch: { workspace in
+                            Task { await viewModel.switchWorkspace(workspace) }
+                        },
+                        onAddNew: { showPairing = true },
+                        onDisconnect: {
+                            Task { await viewModel.disconnect() }
+                        }
+                    )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                }
+                .sheet(isPresented: $showPairing) {
+                    if let pairingViewModel = viewModel.makePairingViewModel() {
+                        PairingView(viewModel: pairingViewModel)
+                    }
                 }
             }
 
@@ -165,6 +193,7 @@ struct StatusBarView: View {
     let claudeState: ClaudeState
     let repoName: String?
     let sessionId: String?
+    var onWorkspaceTap: (() -> Void)?
 
     @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = true
     @State private var isPulsing = false
@@ -210,21 +239,35 @@ struct StatusBarView: View {
 
                 Spacer()
 
-                // Repo badge
-                if let repoName = repoName {
-                    HStack(spacing: 3) {
-                        Image(systemName: Icons.files)
+                // Tappable repo badge - opens workspace switcher
+                Button {
+                    onWorkspaceTap?()
+                    Haptics.selection()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder.fill")
                             .font(.system(size: 9))
-                        Text(repoName)
-                            .font(Typography.statusLabel)
-                            .lineLimit(1)
+
+                        if let repoName = repoName, !repoName.isEmpty {
+                            Text(repoName)
+                                .font(Typography.statusLabel)
+                                .lineLimit(1)
+                        } else {
+                            Text("No Workspace")
+                                .font(Typography.statusLabel)
+                        }
+
+                        // Chevron to indicate tappable
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 7, weight: .semibold))
                     }
-                    .foregroundStyle(ColorSystem.textTertiary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .foregroundStyle(connectionState.isConnected ? ColorSystem.textSecondary : ColorSystem.textTertiary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                     .background(ColorSystem.terminalBgHighlight)
                     .clipShape(Capsule())
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)
