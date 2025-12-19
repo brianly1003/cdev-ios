@@ -58,10 +58,11 @@ struct DashboardView: View {
                             isVisible: viewModel.selectedTab == .logs,
                             isInputFocused: isInputFocused,
                             isStreaming: viewModel.isStreaming,
-                            streamingStartTime: viewModel.streamingStartTime
+                            streamingStartTime: viewModel.streamingStartTime,
+                            hasMoreMessages: viewModel.messagesHasMore,
+                            isLoadingMore: viewModel.isLoadingMoreMessages,
+                            onLoadMore: { await viewModel.loadMoreMessages() }
                         )
-                        // Force view refresh when element count changes
-                        .id("terminal-\(viewModel.chatElements.count)")
                         .tag(DashboardTab.logs)
 
                         // Source Control (Mini Repo Management)

@@ -11,10 +11,15 @@ struct LogListView: View {
     var isStreaming: Bool = false  // Whether Claude is actively thinking/streaming
     var streamingStartTime: Date?  // When streaming started (for duration display)
 
+    // Pull-to-refresh for loading more messages
+    var hasMoreMessages: Bool = false
+    var isLoadingMore: Bool = false
+    var onLoadMore: (() async -> Void)?
+
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
@@ -22,6 +27,9 @@ struct LogListView: View {
         self.isInputFocused = isInputFocused
         self.isStreaming = isStreaming
         self.streamingStartTime = streamingStartTime
+        self.hasMoreMessages = hasMoreMessages
+        self.isLoadingMore = isLoadingMore
+        self.onLoadMore = onLoadMore
     }
 
     var body: some View {
@@ -55,7 +63,17 @@ struct LogListView: View {
 
     @ViewBuilder
     private var elementsListView: some View {
-        ElementsScrollView(elements: elements, showTimestamps: showTimestamps, isVisible: isVisible, isInputFocused: isInputFocused, isStreaming: isStreaming, streamingStartTime: streamingStartTime)
+        ElementsScrollView(
+            elements: elements,
+            showTimestamps: showTimestamps,
+            isVisible: isVisible,
+            isInputFocused: isInputFocused,
+            isStreaming: isStreaming,
+            streamingStartTime: streamingStartTime,
+            hasMoreMessages: hasMoreMessages,
+            isLoadingMore: isLoadingMore,
+            onLoadMore: onLoadMore
+        )
     }
 
     // MARK: - Legacy Logs List View
@@ -476,15 +494,27 @@ private struct ElementsScrollView: View {
     let isStreaming: Bool
     let streamingStartTime: Date?
 
+    // Pull-to-refresh for loading more messages
+    let hasMoreMessages: Bool
+    let isLoadingMore: Bool
+    let onLoadMore: (() async -> Void)?
+
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
+    @State private var didTriggerLoadMore = false  // Track if we triggered load more (persists across re-renders)
 
     var body: some View {
-        let _ = AppLogger.log("[ElementsScrollView] Rendering \(elements.count) elements, isStreaming=\(isStreaming)")
+        let _ = AppLogger.log("[ElementsScrollView] Rendering \(elements.count) elements, isStreaming=\(isStreaming), hasMore=\(hasMoreMessages)")
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        // Load more indicator at top (pull down to load older messages)
+                        if hasMoreMessages {
+                            LoadMoreIndicator(isLoading: isLoadingMore)
+                                .id("loadMore")
+                        }
+
                         ForEach(elements) { element in
                             ElementView(element: element, showTimestamp: showTimestamps)
                                 .id(element.id)
@@ -504,13 +534,40 @@ private struct ElementsScrollView: View {
                     .padding(.horizontal, Spacing.xs)
                     .padding(.vertical, Spacing.xs)
                 }
+                .refreshable {
+                    // Pull-to-refresh triggers load more (older messages)
+                    // Use detached task to prevent cancellation when refresh gesture ends
+                    if hasMoreMessages, let onLoadMore = onLoadMore {
+                        AppLogger.log("[ElementsScrollView] Pull-to-refresh triggered")
+                        didTriggerLoadMore = true  // Set flag before loading
+                        await withCheckedContinuation { continuation in
+                            Task.detached {
+                                await onLoadMore()
+                                continuation.resume()
+                            }
+                        }
+                        AppLogger.log("[ElementsScrollView] Load more completed")
+                    }
+                }
                 .onAppear {
-                    AppLogger.log("[ElementsScrollView] onAppear with \(elements.count) elements")
+                    AppLogger.log("[ElementsScrollView] onAppear with \(elements.count) elements, isLoadingMore=\(isLoadingMore)")
+                    // Skip auto-scroll if we're in the middle of loading more messages
+                    guard !isLoadingMore && !didTriggerLoadMore else {
+                        AppLogger.log("[ElementsScrollView] Skipping onAppear scroll during load more")
+                        return
+                    }
                     scheduleScroll(proxy: proxy, animated: false)
                 }
                 .onChange(of: elements.count) { oldCount, newCount in
                     // Only scroll if count actually increased and we haven't just scrolled
                     guard newCount > oldCount, newCount != lastScrolledCount else { return }
+
+                    // Skip auto-scroll when loading older messages (pull-to-refresh)
+                    if didTriggerLoadMore {
+                        AppLogger.log("[ElementsScrollView] Skipping auto-scroll after load more (\(oldCount) -> \(newCount))")
+                        didTriggerLoadMore = false  // Reset flag after handling
+                        return
+                    }
                     scheduleScroll(proxy: proxy, animated: true)
                 }
                 .onChange(of: isVisible) { _, visible in
@@ -758,6 +815,34 @@ struct StreamingIndicatorView: View {
             return
         }
         elapsedSeconds = max(0, Int(Date().timeIntervalSince(startTime)))
+    }
+}
+
+// MARK: - Load More Indicator
+
+/// Shows at top of list when more messages are available
+/// Tappable to load older messages, or use pull-to-refresh
+private struct LoadMoreIndicator: View {
+    let isLoading: Bool
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            if isLoading {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .tint(ColorSystem.textTertiary)
+            } else {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 10))
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            Text(isLoading ? "Loading..." : "Pull to load more")
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Spacing.sm)
     }
 }
 

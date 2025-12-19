@@ -254,11 +254,28 @@ private struct InlineThinkingView: View {
 private struct MarkdownTextView: View {
     let text: String
 
-    /// Parsed lines with heading detection
+    /// Parsed lines with heading detection (respects code blocks)
     private var parsedLines: [MarkdownLine] {
-        text.components(separatedBy: "\n").map { line in
-            parseMarkdownLine(line)
+        var result: [MarkdownLine] = []
+        var insideCodeBlock = false
+
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Check for code block fence (``` or ```)
+            if trimmed.hasPrefix("```") {
+                insideCodeBlock.toggle()
+                result.append(.text(line))  // Keep fence as plain text
+            } else if insideCodeBlock {
+                // Inside code block - no markdown parsing
+                result.append(.text(line))
+            } else {
+                // Outside code block - parse for headings
+                result.append(parseMarkdownLine(line))
+            }
         }
+
+        return result
     }
 
     var body: some View {
@@ -310,7 +327,7 @@ private struct MarkdownTextView: View {
         return AttributedString(text)
     }
 
-    /// Parse a line to detect headings
+    /// Parse a line to detect headings (only called outside code blocks)
     private func parseMarkdownLine(_ line: String) -> MarkdownLine {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
