@@ -7,15 +7,17 @@ struct LogListView: View {
     let elements: [ChatElement]  // NEW: Elements API style display
     let onClear: () -> Void
     var isVisible: Bool = true  // Track if tab is visible
+    var isInputFocused: Bool = false  // Track if input field is focused (for auto-scroll)
 
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
         self.isVisible = isVisible
+        self.isInputFocused = isInputFocused
     }
 
     var body: some View {
@@ -48,104 +50,14 @@ struct LogListView: View {
 
     @ViewBuilder
     private var elementsListView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(elements) { element in
-                        ElementView(element: element, showTimestamp: showTimestamps)
-                            .id(element.id)
-                    }
-
-                    // Bottom anchor
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom")
-                }
-                .padding(.horizontal, Spacing.xs)
-                .padding(.vertical, Spacing.xs)
-            }
-            .onAppear {
-                guard !elements.isEmpty else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-            .onChange(of: elements.count) { oldCount, newCount in
-                guard newCount > oldCount else { return }
-                withAnimation(Animations.logAppear) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-            .onKeyboardShow {
-                guard !elements.isEmpty else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    withAnimation {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-            }
-            .onChange(of: isVisible) { _, visible in
-                guard visible, !elements.isEmpty else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-        }
+        ElementsScrollView(elements: elements, showTimestamps: showTimestamps, isVisible: isVisible, isInputFocused: isInputFocused)
     }
 
     // MARK: - Legacy Logs List View
 
     @ViewBuilder
     private var logsListView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(logs.enumerated()), id: \.element.id) { index, entry in
-                        let previousEntry = index > 0 ? logs[index - 1] : nil
-                        let showTime = shouldShowTimestamp(for: entry, previous: previousEntry)
-                        LogEntryRow(
-                            entry: entry,
-                            showTimestamp: showTimestamps && showTime,
-                            timestampsEnabled: showTimestamps
-                        )
-                        .id(entry.id)
-                    }
-                    // Bottom anchor
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom")
-                }
-                .padding(.horizontal, Spacing.xs)
-                .padding(.top, Spacing.xs)
-                .padding(.bottom, Spacing.xs)
-            }
-            .onAppear {
-                guard !logs.isEmpty else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-            .onChange(of: logs.count) { oldCount, newCount in
-                guard newCount > oldCount else { return }
-                withAnimation(Animations.logAppear) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-            .onKeyboardShow {
-                guard !logs.isEmpty else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    withAnimation {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-            }
-            .onChange(of: isVisible) { _, visible in
-                guard visible, !logs.isEmpty else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-        }
+        LogsScrollView(logs: logs, showTimestamps: showTimestamps, isVisible: isVisible, isInputFocused: isInputFocused, shouldShowTimestamp: shouldShowTimestamp)
     }
 
     /// Show timestamp if time is different OR stream type changed (user <-> assistant)
@@ -544,6 +456,187 @@ private struct SystemMessageRow: View {
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.Log.system)
                 .textSelection(.enabled)
+        }
+    }
+}
+
+// MARK: - Elements Scroll View (Debounced)
+
+/// Separate view to properly manage scroll state and prevent multiple updates per frame
+private struct ElementsScrollView: View {
+    let elements: [ChatElement]
+    let showTimestamps: Bool
+    let isVisible: Bool
+    let isInputFocused: Bool
+
+    @State private var scrollTask: Task<Void, Never>?
+    @State private var lastScrolledCount = 0
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(elements) { element in
+                        ElementView(element: element, showTimestamp: showTimestamps)
+                            .id(element.id)
+                    }
+
+                    // Bottom anchor
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom")
+                }
+                .padding(.horizontal, Spacing.xs)
+                .padding(.vertical, Spacing.xs)
+            }
+            .onAppear {
+                scheduleScroll(proxy: proxy, animated: false)
+            }
+            .onChange(of: elements.count) { oldCount, newCount in
+                // Only scroll if count actually increased and we haven't just scrolled
+                guard newCount > oldCount, newCount != lastScrolledCount else { return }
+                scheduleScroll(proxy: proxy, animated: true)
+            }
+            .onChange(of: isVisible) { _, visible in
+                guard visible, !elements.isEmpty else { return }
+                scheduleScroll(proxy: proxy, animated: false)
+            }
+            .onChange(of: isInputFocused) { _, focused in
+                // Auto-scroll when keyboard appears (input focused)
+                guard focused, !elements.isEmpty else { return }
+                scheduleScrollForKeyboard(proxy: proxy)
+            }
+        }
+    }
+
+    /// Debounced scroll - cancels previous scroll task and schedules new one
+    private func scheduleScroll(proxy: ScrollViewProxy, animated: Bool) {
+        guard !elements.isEmpty else { return }
+
+        // Cancel any pending scroll
+        scrollTask?.cancel()
+
+        // Schedule new scroll after brief delay to coalesce multiple updates
+        scrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            guard !Task.isCancelled else { return }
+
+            lastScrolledCount = elements.count
+            if animated {
+                withAnimation(Animations.logAppear) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    /// Scroll for keyboard appearance - longer delay to wait for keyboard animation
+    private func scheduleScrollForKeyboard(proxy: ScrollViewProxy) {
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            // Wait for keyboard animation to complete (300ms)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+}
+
+// MARK: - Logs Scroll View (Debounced)
+
+/// Separate view to properly manage scroll state and prevent multiple updates per frame
+private struct LogsScrollView: View {
+    let logs: [LogEntry]
+    let showTimestamps: Bool
+    let isVisible: Bool
+    let isInputFocused: Bool
+    let shouldShowTimestamp: (LogEntry, LogEntry?) -> Bool
+
+    @State private var scrollTask: Task<Void, Never>?
+    @State private var lastScrolledCount = 0
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(logs.enumerated()), id: \.element.id) { index, entry in
+                        let previousEntry = index > 0 ? logs[index - 1] : nil
+                        let showTime = shouldShowTimestamp(entry, previousEntry)
+                        LogEntryRow(
+                            entry: entry,
+                            showTimestamp: showTimestamps && showTime,
+                            timestampsEnabled: showTimestamps
+                        )
+                        .id(entry.id)
+                    }
+                    // Bottom anchor
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom")
+                }
+                .padding(.horizontal, Spacing.xs)
+                .padding(.top, Spacing.xs)
+                .padding(.bottom, Spacing.xs)
+            }
+            .onAppear {
+                scheduleScroll(proxy: proxy, animated: false)
+            }
+            .onChange(of: logs.count) { oldCount, newCount in
+                // Only scroll if count actually increased and we haven't just scrolled
+                guard newCount > oldCount, newCount != lastScrolledCount else { return }
+                scheduleScroll(proxy: proxy, animated: true)
+            }
+            .onChange(of: isVisible) { _, visible in
+                guard visible, !logs.isEmpty else { return }
+                scheduleScroll(proxy: proxy, animated: false)
+            }
+            .onChange(of: isInputFocused) { _, focused in
+                // Auto-scroll when keyboard appears (input focused)
+                guard focused, !logs.isEmpty else { return }
+                scheduleScrollForKeyboard(proxy: proxy)
+            }
+        }
+    }
+
+    /// Debounced scroll - cancels previous scroll task and schedules new one
+    private func scheduleScroll(proxy: ScrollViewProxy, animated: Bool) {
+        guard !logs.isEmpty else { return }
+
+        // Cancel any pending scroll
+        scrollTask?.cancel()
+
+        // Schedule new scroll after brief delay to coalesce multiple updates
+        scrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            guard !Task.isCancelled else { return }
+
+            lastScrolledCount = logs.count
+            if animated {
+                withAnimation(Animations.logAppear) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    /// Scroll for keyboard appearance - longer delay to wait for keyboard animation
+    private func scheduleScrollForKeyboard(proxy: ScrollViewProxy) {
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            // Wait for keyboard animation to complete (300ms)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
         }
     }
 }

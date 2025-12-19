@@ -6,6 +6,7 @@ struct DashboardView: View {
     @StateObject var viewModel: DashboardViewModel
     @State private var showSettings = false
     @State private var showDebugLogs = false
+    @FocusState private var isInputFocused: Bool
 
     /// Toolkit items - Easy to extend! Just add more .add() calls
     /// See PredefinedTool enum for available tools, or use .addCustom() for new ones
@@ -56,7 +57,8 @@ struct DashboardView: View {
                             logs: viewModel.logs,
                             elements: viewModel.chatElements,  // NEW: Elements API UI
                             onClear: { Task { await viewModel.clearLogs() } },
-                            isVisible: viewModel.selectedTab == .logs
+                            isVisible: viewModel.selectedTab == .logs,
+                            isInputFocused: isInputFocused
                         )
                         .tag(DashboardTab.logs)
 
@@ -79,6 +81,7 @@ struct DashboardView: View {
                                 claudeState: viewModel.claudeState,
                                 promptText: $viewModel.promptText,
                                 isLoading: viewModel.isLoading,
+                                isFocused: $isInputFocused,
                                 onSend: { Task { await viewModel.sendPrompt() } },
                                 onStop: { Task { await viewModel.stopClaude() } }
                             )
@@ -140,8 +143,17 @@ struct DashboardView: View {
             FloatingToolkitButton(items: toolkitItems)
         }
         .errorAlert($viewModel.error)
-        .task {
+        .onAppear {
+            AppLogger.log("[DashboardView] onAppear - UI should be interactive now")
+        }
+        .task(priority: .utility) {
+            AppLogger.log("[DashboardView] .task started - waiting 500ms before refreshStatus")
+            // Delay to let UI become fully interactive first
+            // This prevents hang when user tries to tap during initial load
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            AppLogger.log("[DashboardView] .task - calling refreshStatus")
             await viewModel.refreshStatus()
+            AppLogger.log("[DashboardView] .task completed")
         }
     }
 }
@@ -416,10 +428,9 @@ struct ActionBarView: View {
     let claudeState: ClaudeState
     @Binding var promptText: String
     let isLoading: Bool
+    var isFocused: FocusState<Bool>.Binding
     let onSend: () -> Void
     let onStop: () -> Void
-
-    @FocusState private var isFocused: Bool
 
     /// Filtered commands based on current input
     private var suggestedCommands: [BuiltInCommand] {
@@ -428,7 +439,7 @@ struct ActionBarView: View {
 
     /// Whether to show command suggestions
     private var showSuggestions: Bool {
-        !suggestedCommands.isEmpty && isFocused
+        !suggestedCommands.isEmpty && isFocused.wrappedValue
     }
 
     /// Whether sending is disabled (Claude is running or waiting)
@@ -475,15 +486,11 @@ struct ActionBarView: View {
                         .font(Typography.inputField)
                         .foregroundStyle(ColorSystem.textPrimary)
                         .lineLimit(1...3)
-                        .focused($isFocused)
+                        .focused(isFocused)
                         .submitLabel(.send)
                         .disabled(claudeState == .running)
                         .padding(.vertical, Spacing.sm)
                         .padding(.leading, Spacing.sm)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            isFocused = true
-                        }
                         .onSubmit {
                             if !isSendDisabled {
                                 onSend()
@@ -517,7 +524,7 @@ struct ActionBarView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
                         .stroke(
-                            isFocused ? ColorSystem.primary.opacity(0.5) : .clear,
+                            isFocused.wrappedValue ? ColorSystem.primary.opacity(0.5) : .clear,
                             lineWidth: 1
                         )
                 )
@@ -532,8 +539,11 @@ struct ActionBarView: View {
         // Dismiss keyboard when Claude starts running - don't auto-focus when done
         .onChange(of: claudeState) { _, newState in
             if newState == .running {
-                isFocused = false
+                isFocused.wrappedValue = false
             }
+        }
+        .onChange(of: isFocused.wrappedValue) { oldValue, newValue in
+            AppLogger.log("[ActionBarView] Focus changed: \(oldValue) -> \(newValue)")
         }
     }
 }

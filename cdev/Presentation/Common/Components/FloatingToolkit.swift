@@ -188,9 +188,20 @@ struct FloatingToolkitButton: View {
 
     @State private var isExpanded = false
     @State private var position: CGPoint = .zero
-    @State private var dragOffset: CGSize = .zero
-    @State private var isDragging = false
     @State private var isKeyboardVisible = false
+
+    // Drag state - GestureState for smooth 120Hz tracking
+    @GestureState private var dragOffset: CGSize = .zero
+    @State private var isDragging = false
+
+    // Idle state - fade to 0.5 opacity after 4 seconds of inactivity
+    @State private var isIdle = false
+    @State private var idleTimer: Timer?
+    private let idleTimeout: TimeInterval = 4.0
+    private let idleOpacity: Double = 0.5
+
+    // Threshold to distinguish tap from drag (in points)
+    private let tapThreshold: CGFloat = 10
 
     // Observer tokens for proper cleanup (prevent memory leaks)
     @State private var keyboardShowObserver: NSObjectProtocol?
@@ -235,14 +246,14 @@ struct FloatingToolkitButton: View {
                         }
                     }
 
-                    // Main floating button - uses explicit animations in finalizeDrag()
-                    MainButton(
+                    // Main floating button - tap/drag detected in single gesture
+                    MainButtonView(
                         isExpanded: isExpanded,
                         isDragging: isDragging,
                         size: buttonSize
-                    ) {
-                        toggleMenu()
-                    }
+                    )
+                    .opacity(isIdle && !isExpanded && !isDragging ? idleOpacity : 1.0)
+                    .animation(.easeInOut(duration: 0.3), value: isIdle)
                     .position(currentPosition(in: geometry))
                     .gesture(dragGesture(in: geometry))
                     .zIndex(2)
@@ -252,11 +263,15 @@ struct FloatingToolkitButton: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isExpanded)
             .animation(.easeInOut(duration: 0.2), value: isKeyboardVisible)
             .onAppear {
+                AppLogger.log("[FloatingToolkit] onAppear called")
                 initializePosition(in: geometry)
                 setupKeyboardObservers()
+                startIdleTimer()
             }
             .onDisappear {
+                AppLogger.log("[FloatingToolkit] onDisappear called")
                 removeKeyboardObservers()
+                cancelIdleTimer()
             }
         }
     }
@@ -266,6 +281,7 @@ struct FloatingToolkitButton: View {
     private func setupKeyboardObservers() {
         // Remove any existing observers first
         removeKeyboardObservers()
+        AppLogger.log("[FloatingToolkit] Setting up keyboard observers")
 
         // Store observer tokens for proper cleanup
         keyboardShowObserver = NotificationCenter.default.addObserver(
@@ -273,6 +289,12 @@ struct FloatingToolkitButton: View {
             object: nil,
             queue: .main
         ) { [self] _ in
+            // Guard against duplicate notifications
+            guard !isKeyboardVisible else {
+                AppLogger.log("[FloatingToolkit] Keyboard show - SKIPPED (already visible)")
+                return
+            }
+            AppLogger.log("[FloatingToolkit] Keyboard will show - hiding toolkit (time: \(Date().timeIntervalSince1970))")
             withAnimation(.easeInOut(duration: 0.2)) {
                 isKeyboardVisible = true
                 if isExpanded { isExpanded = false }
@@ -284,6 +306,12 @@ struct FloatingToolkitButton: View {
             object: nil,
             queue: .main
         ) { [self] _ in
+            // Guard against duplicate notifications
+            guard isKeyboardVisible else {
+                AppLogger.log("[FloatingToolkit] Keyboard hide - SKIPPED (already hidden)")
+                return
+            }
+            AppLogger.log("[FloatingToolkit] Keyboard will hide - showing toolkit (time: \(Date().timeIntervalSince1970))")
             withAnimation(.easeInOut(duration: 0.2)) {
                 isKeyboardVisible = false
             }
@@ -302,9 +330,34 @@ struct FloatingToolkitButton: View {
         }
     }
 
+    // MARK: - Idle Timer
+
+    /// Start the idle timer - button fades after timeout
+    private func startIdleTimer() {
+        cancelIdleTimer()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: idleTimeout, repeats: false) { _ in
+            withAnimation {
+                isIdle = true
+            }
+        }
+    }
+
+    /// Cancel the idle timer
+    private func cancelIdleTimer() {
+        idleTimer?.invalidate()
+        idleTimer = nil
+    }
+
+    /// Reset idle state on user interaction
+    private func resetIdleState() {
+        isIdle = false
+        startIdleTimer()
+    }
+
     // MARK: - Actions
 
     private func toggleMenu() {
+        resetIdleState()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
             isExpanded.toggle()
         }
@@ -312,6 +365,7 @@ struct FloatingToolkitButton: View {
     }
 
     private func closeMenu() {
+        resetIdleState()
         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
             isExpanded = false
         }
@@ -341,24 +395,40 @@ struct FloatingToolkitButton: View {
 
     /// Calculate all menu item positions at once (single base angle calculation)
     /// Returns array of CGPoints for each menu item - O(n) with minimal overhead
+    /// Items are arranged so that item[0] (Debug Logs) is always at the bottom of the arc
     private func menuItemPositions(total: Int, in geometry: GeometryProxy) -> [CGPoint] {
         guard total > 0 else { return [] }
 
         let currentPos = currentPosition(in: geometry)
+        let screenCenter = geometry.size.width / 2
 
         // Calculate base angle once for all items
         let baseAngle = calculateOptimalBaseAngle(for: currentPos, in: geometry)
 
         let angleSpread: Double = min(Double(total - 1) * 40, 160)
-        let startAngle = baseAngle - angleSpread / 2
         let angleStep = total > 1 ? angleSpread / Double(total - 1) : 0
+
+        // Determine if we're on the left side of screen
+        let isOnLeftSide = currentPos.x < screenCenter
 
         // Pre-allocate array for efficiency
         var positions = [CGPoint]()
         positions.reserveCapacity(total)
 
         for index in 0..<total {
-            let angle = startAngle + Double(index) * angleStep
+            // On left side: start from bottom of arc (higher angle = more downward)
+            // On right side: start from bottom of arc (lower angle = more downward for negative angles)
+            let adjustedIndex: Int
+            if isOnLeftSide {
+                // Left side: reverse order so item[0] is at bottom
+                adjustedIndex = total - 1 - index
+            } else {
+                // Right side: normal order, item[0] at bottom
+                adjustedIndex = index
+            }
+
+            let startAngle = baseAngle - angleSpread / 2
+            let angle = startAngle + Double(adjustedIndex) * angleStep
             let radians = angle * .pi / 180
 
             positions.append(CGPoint(
@@ -399,23 +469,43 @@ struct FloatingToolkitButton: View {
     }
 
     private func dragGesture(in geometry: GeometryProxy) -> some Gesture {
-        DragGesture(minimumDistance: 5, coordinateSpace: .global)
-            .onChanged { value in
-                // Close menu immediately on drag start (only once)
-                if !isDragging {
-                    isDragging = true
-                    if isExpanded {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            isExpanded = false
+        DragGesture(minimumDistance: 0)
+            // GestureState for smooth 120Hz finger tracking
+            .updating($dragOffset) { value, state, _ in
+                state = value.translation
+
+                // Mark as dragging once past threshold
+                if !isDragging && (abs(value.translation.width) > tapThreshold ||
+                                   abs(value.translation.height) > tapThreshold) {
+                    DispatchQueue.main.async {
+                        isDragging = true
+                        if isExpanded {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                isExpanded = false
+                            }
                         }
                     }
                 }
-                // Update offset without animation for smooth tracking
-                dragOffset = value.translation
             }
             .onEnded { value in
-                finalizeDrag(with: value.translation, in: geometry)
+                handleGestureEnd(translation: value.translation, in: geometry)
             }
+    }
+
+    /// Handle gesture end - detect tap vs drag based on translation distance
+    private func handleGestureEnd(translation: CGSize, in geometry: GeometryProxy) {
+        let distance = sqrt(translation.width * translation.width +
+                           translation.height * translation.height)
+
+        if distance < tapThreshold {
+            // It's a TAP - toggle menu
+            isDragging = false
+            toggleMenu()
+            Haptics.light()
+        } else {
+            // It's a DRAG - update position
+            finalizeDrag(with: translation, in: geometry)
+        }
     }
 
     /// Finalize drag with proper state transitions to prevent visual jump-back
@@ -423,23 +513,27 @@ struct FloatingToolkitButton: View {
         // Calculate final snapped position
         let finalPosition = calculateFinalPosition(with: translation, in: geometry)
 
-        // CRITICAL: Transfer dragOffset into position WITHOUT animation
-        // This prevents the visual jump-back (A → B' → B issue)
+        // GestureState resets automatically, so we need to update position
+        // to where the finger was released BEFORE the reset causes a jump
+        // IMPORTANT: Reset idle state within the same transaction to prevent
+        // animation interference (idle animation would otherwise cause jump)
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            // Set position to current visual location
+            // Reset idle state first (no animation due to transaction)
+            isIdle = false
+
             position = CGPoint(
                 x: position.x + translation.width,
                 y: position.y + translation.height
             )
-            // Clear offset (no visual change since position now includes it)
-            dragOffset = .zero
-            // Now safe to disable dragging
             isDragging = false
         }
 
-        // Animate from current position to snapped final position
+        // Restart idle timer after transaction completes
+        startIdleTimer()
+
+        // Animate from release point to snapped final position
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             position = finalPosition
         }
@@ -476,43 +570,41 @@ struct FloatingToolkitButton: View {
 
 // MARK: - Main Button Component
 
-private struct MainButton: View {
+/// Visual-only button view - tap/drag handled by parent gesture
+private struct MainButtonView: View {
     let isExpanded: Bool
     let isDragging: Bool
     let size: CGFloat
-    let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            ZStack {
-                // Outer glow
-                Circle()
-                    .fill(ColorSystem.primary.opacity(0.2))
-                    .frame(width: size + 8, height: size + 8)
-                    .blur(radius: 4)
+        ZStack {
+            // Outer glow
+            Circle()
+                .fill(ColorSystem.primary.opacity(0.2))
+                .frame(width: size + 8, height: size + 8)
+                .blur(radius: 4)
 
-                // Main circle
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [ColorSystem.primary, ColorSystem.primaryDim],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+            // Main circle
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [ColorSystem.primary, ColorSystem.primaryDim],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
-                    .frame(width: size, height: size)
-                    .shadow(color: ColorSystem.primaryGlow, radius: isDragging ? 12 : 6)
+                )
+                .frame(width: size, height: size)
+                .shadow(color: ColorSystem.primaryGlow, radius: isDragging ? 12 : 6)
 
-                // Icon
-                Image(systemName: isExpanded ? "xmark" : "wrench.and.screwdriver.fill")
-                    .font(.system(size: size * 0.4, weight: .bold))
-                    .foregroundStyle(.white)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            }
+            // Icon
+            Image(systemName: isExpanded ? "xmark" : "wrench.and.screwdriver.fill")
+                .font(.system(size: size * 0.4, weight: .bold))
+                .foregroundStyle(.white)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
         }
-        .buttonStyle(.plain)
         .scaleEffect(isDragging ? 1.15 : 1.0)
         .animation(.spring(response: 0.2), value: isDragging)
+        .contentShape(Circle()) // Ensure the entire circle is tappable
     }
 }
 

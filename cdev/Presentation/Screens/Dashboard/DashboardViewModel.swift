@@ -118,17 +118,27 @@ final class DashboardViewModel: ObservableObject {
 
         // Initialize with current connection state
         self.connectionState = webSocketService.connectionState
+        AppLogger.log("[DashboardViewModel] init - connectionState: \(connectionState), starting listeners")
 
         startListening()
 
-        // If already connected, load history immediately
+        // If already connected, load history (with delay to let UI render first)
         if connectionState.isConnected {
-            Task {
+            AppLogger.log("[DashboardViewModel] init - already connected, scheduling history load in 300ms")
+            // Use utility priority to avoid blocking UI interactions
+            Task(priority: .utility) {
+                // Wait for UI to be fully interactive before loading data
+                // This prevents hang when user tries to interact during initial load
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                AppLogger.log("[DashboardViewModel] init Task - starting loadRecentSessionHistory")
                 await loadRecentSessionHistory()
+                AppLogger.log("[DashboardViewModel] init Task - starting refreshGitStatus")
                 await refreshGitStatus()
+                AppLogger.log("[DashboardViewModel] init Task - completed")
             }
         }
         // Otherwise, history will be loaded when connection is established (in startListening)
+        AppLogger.log("[DashboardViewModel] init completed")
     }
 
     deinit {
@@ -688,6 +698,9 @@ final class DashboardViewModel: ObservableObject {
             hasActiveConversation = false  // Reset - will be set true on first prompt
             AppLogger.log("[Dashboard] Set userSelectedSessionId: \(sessionId)")
 
+            // Yield to let UI thread breathe before network call
+            await Task.yield()
+
             // Get messages for the session
             AppLogger.log("[Dashboard] Fetching messages for session: \(sessionId)")
             let messagesResponse: SessionMessagesResponse
@@ -699,6 +712,9 @@ final class DashboardViewModel: ObservableObject {
                 throw error
             }
 
+            // Yield after network call to prevent UI starvation
+            await Task.yield()
+
             // Only add messages if there are any
             guard messagesResponse.count > 0 else {
                 AppLogger.log("[Dashboard] Session has no messages")
@@ -708,7 +724,7 @@ final class DashboardViewModel: ObservableObject {
 
             // Convert to log entries and ChatElements (skip tool messages with no text)
             var entriesAdded = 0
-            for message in messagesResponse.messages {
+            for (index, message) in messagesResponse.messages.enumerated() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
@@ -718,6 +734,11 @@ final class DashboardViewModel: ObservableObject {
                 let element = convertChatMessageToElement(chatMessage)
                 if let element = element {
                     chatElements.append(element)
+                }
+
+                // Yield every 10 messages to prevent UI starvation
+                if index > 0 && index % 10 == 0 {
+                    await Task.yield()
                 }
             }
             AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(chatElements.count) elements from \(messagesResponse.count) messages")
@@ -740,6 +761,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func startListening() {
+        AppLogger.log("[DashboardViewModel] startListening - setting up connection state listener")
         // Listen to connection state
         stateTask = Task {
             for await state in webSocketService.connectionStateStream {
@@ -749,19 +771,27 @@ final class DashboardViewModel: ObservableObject {
 
                 // Load history when connection is first established
                 if !wasConnected && state.isConnected {
-                    AppLogger.log("[Dashboard] First connection - loading history and git status")
+                    AppLogger.log("[Dashboard] First connection - loading history and git status in 300ms")
+                    // Delay to let UI settle after connection state change
+                    // This prevents hang when user tries to interact during load
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                    AppLogger.log("[Dashboard] First connection - starting loadRecentSessionHistory")
                     await self.loadRecentSessionHistory()
+                    AppLogger.log("[Dashboard] First connection - starting refreshGitStatus")
                     await self.refreshGitStatus()
+                    AppLogger.log("[Dashboard] First connection - load completed")
                 }
             }
         }
 
+        AppLogger.log("[DashboardViewModel] startListening - setting up event listener")
         // Listen to events
         eventTask = Task {
             for await event in webSocketService.eventStream {
                 await self.handleEvent(event)
             }
         }
+        AppLogger.log("[DashboardViewModel] startListening - completed")
     }
 
     private func handleEvent(_ event: AgentEvent) async {

@@ -518,6 +518,8 @@ struct ElementsListView: View {
     @Binding var isAutoScrollEnabled: Bool
 
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var scrollTask: Task<Void, Never>?
+    @State private var lastScrolledCount = 0
 
     init(elements: [ChatElement], showTimestamps: Bool = false, isAutoScrollEnabled: Binding<Bool> = .constant(true)) {
         self.elements = elements
@@ -544,20 +546,29 @@ struct ElementsListView: View {
             }
             .onAppear {
                 scrollProxy = proxy
-                scrollToBottom()
+                scheduleScrollToBottom()
             }
-            .onChange(of: elements.count) { _, _ in
-                if isAutoScrollEnabled {
-                    scrollToBottom()
-                }
+            .onChange(of: elements.count) { oldCount, newCount in
+                guard isAutoScrollEnabled, newCount > oldCount, newCount != lastScrolledCount else { return }
+                scheduleScrollToBottom()
             }
         }
         .background(ColorSystem.terminalBg)
     }
 
-    private func scrollToBottom() {
-        withAnimation(Animations.logAppear) {
-            scrollProxy?.scrollTo("bottom", anchor: .bottom)
+    /// Debounced scroll to prevent multiple updates per frame
+    private func scheduleScrollToBottom() {
+        guard !elements.isEmpty else { return }
+
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            guard !Task.isCancelled else { return }
+
+            lastScrolledCount = elements.count
+            withAnimation(Animations.logAppear) {
+                scrollProxy?.scrollTo("bottom", anchor: .bottom)
+            }
         }
     }
 }

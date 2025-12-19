@@ -324,6 +324,9 @@ private struct DebugLogListView: View {
     @Binding var selectedLog: DebugLogEntry?
     let autoScroll: Bool
 
+    @State private var scrollTask: Task<Void, Never>?
+    @State private var lastScrolledCount = 0
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -342,15 +345,28 @@ private struct DebugLogListView: View {
                     }
                 }
             }
-            .onChange(of: logs.count) { _, _ in
-                if autoScroll, let firstLog = logs.first {
-                    withAnimation {
-                        proxy.scrollTo(firstLog.id, anchor: .top)
-                    }
-                }
+            .onChange(of: logs.count) { oldCount, newCount in
+                guard autoScroll, newCount > oldCount, newCount != lastScrolledCount else { return }
+                scheduleScroll(proxy: proxy)
             }
         }
         .background(ColorSystem.terminalBg)
+    }
+
+    /// Debounced scroll to prevent multiple updates per frame
+    private func scheduleScroll(proxy: ScrollViewProxy) {
+        guard !logs.isEmpty, let firstLog = logs.first else { return }
+
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            guard !Task.isCancelled else { return }
+
+            lastScrolledCount = logs.count
+            withAnimation {
+                proxy.scrollTo(firstLog.id, anchor: .top)
+            }
+        }
     }
 }
 
