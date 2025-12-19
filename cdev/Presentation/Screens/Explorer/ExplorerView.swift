@@ -5,9 +5,9 @@ import SwiftUI
 struct ExplorerView: View {
     @ObservedObject var viewModel: ExplorerViewModel
 
-    // Local state for controlled sheet presentation (prevents conflicts)
-    @State private var presentedFile: FileEntry?
-    @State private var isPresentingSheet = false
+    // Sheet presentation state - use isPresented instead of item to avoid race conditions
+    @State private var isShowingFileViewer = false
+    @State private var isDismissing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,37 +29,27 @@ struct ExplorerView: View {
         .refreshable {
             await viewModel.refresh()
         }
-        .sheet(item: $presentedFile) { file in
-            FileViewerView(
-                file: file,
-                content: viewModel.fileContent,
-                isLoading: viewModel.isLoadingFile,
-                onDismiss: {
-                    presentedFile = nil
-                    viewModel.closeFile()
-                }
-            )
-        }
-        .onChange(of: viewModel.selectedFile) { _, newFile in
-            // Controlled presentation: only present if not already presenting
-            if let file = newFile {
-                if !isPresentingSheet {
-                    isPresentingSheet = true
-                    // Small delay to avoid presentation conflicts
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        presentedFile = file
+        .sheet(isPresented: $isShowingFileViewer, onDismiss: {
+            // Called when sheet is fully dismissed
+            isDismissing = false
+            viewModel.closeFile()
+        }) {
+            if let file = viewModel.selectedFile {
+                FileViewerView(
+                    file: file,
+                    content: viewModel.fileContent,
+                    isLoading: viewModel.isLoadingFile,
+                    onDismiss: {
+                        isDismissing = true
+                        isShowingFileViewer = false
                     }
-                }
-            } else {
-                // File was deselected
-                isPresentingSheet = false
-                presentedFile = nil
+                )
             }
         }
-        .onChange(of: presentedFile) { _, newValue in
-            // Track presentation state
-            if newValue == nil {
-                isPresentingSheet = false
+        .onChange(of: viewModel.selectedFile) { _, newFile in
+            // Only show sheet if file selected and not currently dismissing
+            if newFile != nil && !isDismissing && !isShowingFileViewer {
+                isShowingFileViewer = true
             }
         }
         .errorAlert($viewModel.error)
