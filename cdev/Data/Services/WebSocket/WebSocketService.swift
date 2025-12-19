@@ -35,10 +35,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// DispatchSource timers for reliable timing (not affected by run loop)
     private var pingTimer: DispatchSourceTimer?
     private var heartbeatCheckTimer: DispatchSourceTimer?
+    private var failedRetryTimer: DispatchSourceTimer?  // Periodic retry when in failed state
     private let timerQueue = DispatchQueue(label: "com.cdev.websocket.timers", qos: .utility)
 
     /// Track if we should attempt reconnection
     private var shouldAutoReconnect = true
+
+    /// Cached JSON decoder/encoder to avoid repeated allocations
+    private let jsonDecoder = JSONDecoder()
+    private let jsonEncoder = JSONEncoder()
 
     // MARK: - Streams (Broadcast Pattern)
 
@@ -216,6 +221,60 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         pingTimer = nil
         heartbeatCheckTimer?.cancel()
         heartbeatCheckTimer = nil
+        stopFailedRetryTimer()
+    }
+
+    /// Stop the failed retry timer
+    private func stopFailedRetryTimer() {
+        failedRetryTimer?.cancel()
+        failedRetryTimer = nil
+    }
+
+    /// Schedule a single retry after cooldown period
+    /// Called when max reconnect attempts reached - waits then tries again
+    private func scheduleFailedRetry() {
+        stopFailedRetryTimer()
+
+        guard connectionInfo != nil, shouldAutoReconnect else { return }
+
+        // Wait 60 seconds before trying again (gives server time to restart)
+        let cooldownInterval: TimeInterval = 60
+
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer.schedule(deadline: .now() + cooldownInterval)
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            Task {
+                await self.handleFailedRetryTick()
+            }
+        }
+        timer.resume()
+        failedRetryTimer = timer
+        AppLogger.webSocket("Scheduled retry in \(Int(cooldownInterval))s")
+    }
+
+    /// Handle failed retry - reset counter and try reconnecting
+    private func handleFailedRetryTick() async {
+        stopFailedRetryTimer()
+
+        guard case .failed = connectionState,
+              connectionInfo != nil,
+              shouldAutoReconnect,
+              isNetworkAvailable else {
+            return
+        }
+
+        AppLogger.webSocket("Cooldown complete - attempting reconnection")
+
+        // Reset counter to allow fresh 10 attempts
+        reconnectAttempts = 0
+
+        do {
+            try await reconnect()
+        } catch {
+            // reconnect() will call scheduleFailedRetry() again if max attempts reached
+            AppLogger.webSocket("Retry cycle failed, will retry after cooldown", type: .warning)
+        }
     }
 
     /// Start ping timer using DispatchSourceTimer for reliability
@@ -349,12 +408,22 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     private func waitForConnection(connectionInfo: ConnectionInfo) async throws {
+        guard let currentSocket = webSocket else {
+            throw AppError.connectionFailed(underlying: nil)
+        }
+
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             // Start receiving messages
             self.receiveMessage()
 
             // Check connection with a ping
-            self.webSocket?.sendPing { [weak self] error in
+            currentSocket.sendPing { [weak self] error in
+                // Verify socket is still the current one
+                guard self?.webSocket === currentSocket else {
+                    continuation.resume(throwing: AppError.connectionFailed(underlying: nil))
+                    return
+                }
+
                 if let error = error {
                     continuation.resume(throwing: AppError.connectionFailed(underlying: error))
                 } else {
@@ -449,48 +518,63 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
               shouldAutoReconnect else { return }
 
         isReconnecting = true
+        defer { isReconnecting = false }
 
-        reconnectAttempts += 1
+        // Loop through all attempts (fixes bug where only 1 attempt was made per call)
+        while reconnectAttempts < Constants.Network.maxReconnectAttempts && shouldAutoReconnect {
+            reconnectAttempts += 1
+            updateState(.reconnecting(attempt: reconnectAttempts))
 
-        guard reconnectAttempts <= Constants.Network.maxReconnectAttempts else {
-            isReconnecting = false
-            updateState(.failed(reason: "Max reconnect attempts reached"))
-            throw AppError.connectionFailed(underlying: nil)
+            // Clean up old connection first
+            stopTimers()
+            webSocket?.cancel(with: .goingAway, reason: nil)
+            webSocket = nil
+            session?.invalidateAndCancel()
+            session = nil
+
+            // Exponential backoff with max cap
+            // Attempts: 1s, 2s, 4s, 8s, 16s, 30s, 30s, 30s, 30s, 30s = ~127s total
+            let delay = min(
+                Constants.Network.reconnectDelay * pow(2, Double(reconnectAttempts - 1)),
+                Constants.Network.maxReconnectDelay
+            )
+            AppLogger.webSocket("Reconnect attempt \(reconnectAttempts)/\(Constants.Network.maxReconnectAttempts) in \(String(format: "%.1f", delay))s")
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+            // Check if we should stop (app went to background, user disconnected)
+            guard shouldAutoReconnect else {
+                AppLogger.webSocket("Reconnection cancelled")
+                return
+            }
+
+            do {
+                try await connect(to: connectionInfo)
+                reconnectAttempts = 0
+                AppLogger.webSocket("Reconnection successful", type: .success)
+                return  // Success - exit loop
+            } catch {
+                AppLogger.webSocket("Attempt \(reconnectAttempts) failed: \(Self.friendlyErrorMessage(from: error))", type: .warning)
+                // Continue to next attempt
+            }
         }
 
-        updateState(.reconnecting(attempt: reconnectAttempts))
-
-        // Clean up old connection first
-        stopTimers()
-        webSocket?.cancel(with: .goingAway, reason: nil)
-        webSocket = nil
-        session?.invalidateAndCancel()
-        session = nil
-
-        // Exponential backoff with max cap
-        let delay = min(
-            Constants.Network.reconnectDelay * pow(2, Double(reconnectAttempts - 1)),
-            Constants.Network.maxReconnectDelay
-        )
-        AppLogger.webSocket("Reconnect attempt \(reconnectAttempts) in \(String(format: "%.1f", delay))s")
-        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-
-        do {
-            try await connect(to: connectionInfo)
-            isReconnecting = false
-            reconnectAttempts = 0
-            AppLogger.webSocket("Reconnection successful", type: .success)
-        } catch {
-            isReconnecting = false
-            throw error
-        }
+        // All attempts exhausted
+        updateState(.failed(reason: "Max reconnect attempts reached"))
+        scheduleFailedRetry()
+        throw AppError.connectionFailed(underlying: nil)
     }
 
     func ping() async throws -> Bool {
-        guard let webSocket = webSocket else { return false }
+        guard let currentSocket = webSocket else { return false }
 
-        return await withCheckedContinuation { continuation in
-            webSocket.sendPing { error in
+        return await withCheckedContinuation { [weak self] continuation in
+            currentSocket.sendPing { error in
+                // Verify socket is still the current one before resuming
+                guard self?.webSocket === currentSocket else {
+                    // Socket changed, treat as failure but don't crash
+                    continuation.resume(returning: false)
+                    return
+                }
                 continuation.resume(returning: error == nil)
             }
         }
@@ -503,8 +587,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             throw AppError.webSocketDisconnected
         }
 
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(command)
+        let data = try jsonEncoder.encode(command)
 
         guard let jsonString = String(data: data, encoding: .utf8) else {
             throw AppError.encodingFailed(underlying: NSError(domain: "WebSocket", code: -1))
@@ -547,9 +630,16 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private func updateState(_ state: ConnectionState) {
         _connectionState = state
 
-        // Broadcast to ALL subscribers
+        // Stop failed retry timer when leaving failed state (connecting/connected)
+        if case .failed = state {
+            // Keep timer running (managed by reconnect/scheduleFailedRetry)
+        } else {
+            stopFailedRetryTimer()
+        }
+
+        // Broadcast to ALL subscribers (copy to Array to avoid holding lock during yield)
         continuationsLock.lock()
-        let continuations = stateStreamContinuations.values
+        let continuations = Array(stateStreamContinuations.values)
         continuationsLock.unlock()
 
         for continuation in continuations {
@@ -577,8 +667,17 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     private func receiveMessage() {
-        webSocket?.receive { [weak self] result in
+        // Capture the current webSocket to compare in callback
+        guard let currentSocket = webSocket else { return }
+
+        currentSocket.receive { [weak self] result in
             guard let self = self else { return }
+
+            // Ignore callbacks from old/stale websocket tasks
+            guard self.webSocket === currentSocket else {
+                AppLogger.webSocket("Ignoring callback from stale WebSocket task")
+                return
+            }
 
             switch result {
             case .success(let message):
@@ -586,6 +685,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 self.receiveMessage() // Continue receiving
 
             case .failure(let error):
+                // Double-check we're not in the middle of cleanup
+                guard self.webSocket != nil, !self.isReconnecting else {
+                    AppLogger.webSocket("Ignoring receive error during cleanup/reconnection")
+                    return
+                }
                 AppLogger.webSocket("Receive error: \(error)", type: .error)
                 self.handleDisconnect(error: error)
             }
@@ -614,13 +718,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
-        let decoder = JSONDecoder()
-
         for line in lines {
             guard let data = line.data(using: .utf8) else { continue }
 
             do {
-                let event = try decoder.decode(AgentEvent.self, from: data)
+                let event = try jsonDecoder.decode(AgentEvent.self, from: data)
 
                 // Handle heartbeat events - don't forward to event stream
                 if event.type == .heartbeat {
@@ -637,9 +739,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                     continue
                 }
 
-                // Broadcast to ALL event stream subscribers
+                // Broadcast to ALL event stream subscribers (copy to Array for thread safety)
                 eventContinuationsLock.lock()
-                let eventContinuations = eventStreamContinuations.values
+                let eventContinuations = Array(eventStreamContinuations.values)
                 eventContinuationsLock.unlock()
 
                 for continuation in eventContinuations {
@@ -721,6 +823,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // Re-enable auto-reconnect when app becomes active
         if connectionInfo != nil {
             shouldAutoReconnect = true
+            // Reset attempts to give fresh chances after returning to app
+            reconnectAttempts = 0
         }
 
         Task {
@@ -773,6 +877,11 @@ extension WebSocketService: URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
+        // Ignore callbacks from old/stale sessions
+        guard self.session === session, self.webSocket === webSocketTask else {
+            AppLogger.webSocket("Ignoring didOpen from stale session")
+            return
+        }
         AppLogger.webSocket("WebSocket opened", type: .success)
     }
 
@@ -782,7 +891,11 @@ extension WebSocketService: URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
-        // Ignore callbacks from old sessions during reconnection
+        // Ignore callbacks from old/stale sessions or during reconnection
+        guard self.session === session, self.webSocket === webSocketTask else {
+            AppLogger.webSocket("Ignoring didClose from stale session")
+            return
+        }
         guard !isReconnecting else { return }
 
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) }

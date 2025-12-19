@@ -610,6 +610,386 @@ actor LogCache {
 
 ---
 
+## File Explorer Architecture
+
+### Overview
+
+The File Explorer tab allows users to browse repository source code remotely. It uses a **cache-first strategy** with lazy loading for performance.
+
+### Component Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   ExplorerView                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │BreadcrumbBar│  │DirectoryList│  │FileViewerView│         │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
+│         └────────────────┼────────────────┘                 │
+│                          │                                   │
+│                   ┌──────▼──────┐                           │
+│                   │ExplorerViewModel│                        │
+│                   │ - currentPath    │                       │
+│                   │ - entries        │                       │
+│                   │ - navigationStack│                       │
+│                   └──────┬──────┘                           │
+└──────────────────────────┼──────────────────────────────────┘
+                           │
+┌──────────────────────────┼──────────────────────────────────┐
+│                          │      Data Layer                   │
+│                   ┌──────▼──────┐                           │
+│                   │FileRepository │                          │
+│                   │ - useMockData │                          │
+│                   └──────┬──────┘                           │
+│                          │                                   │
+│          ┌───────────────┼───────────────┐                  │
+│   ┌──────▼──────┐                 ┌──────▼──────┐           │
+│   │  FileCache   │                 │ HTTPService │           │
+│   │ (Actor LRU)  │                 │  /api/...   │           │
+│   │ 50 dirs      │                 │             │           │
+│   │ 20 files     │                 │             │           │
+│   └─────────────┘                 └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Caching Strategy
+
+```swift
+actor FileCache {
+    // LRU cache limits
+    let maxDirectories: Int = 50     // Cache 50 directory listings
+    let maxContents: Int = 20        // Cache 20 file contents
+    let maxContentSize: Int = 100_000 // Don't cache files > 100KB
+}
+```
+
+| Operation | Cache Behavior |
+|-----------|----------------|
+| List directory | Check cache → API if miss → cache result |
+| Read file | Check cache → API if miss → cache if < 100KB |
+| Navigate back | Served from cache (instant) |
+| Pull to refresh | Invalidate path → reload |
+
+---
+
+## File Explorer Backend API Integration
+
+> **Status**: ✅ Fully Integrated with cdev-agent
+
+The File Explorer uses the following cdev-agent Repository API endpoints:
+
+### 1. Directory Listing Endpoint
+
+**Endpoint**: `GET /api/repository/files/list`
+
+**Query Parameters**:
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `directory` | string | No | Directory path. Empty = root directory |
+| `limit` | int | No | Maximum results (default: 100, max: 1000) |
+| `offset` | int | No | Pagination offset |
+| `recursive` | bool | No | Include subdirectories (default: false) |
+| `sort` | string | No | Sort by: `name`, `size`, `modified` |
+| `order` | string | No | Sort order: `asc`, `desc` |
+
+**Response** (200 OK):
+```json
+{
+  "directory": "cdev/Domain/Models",
+  "files": [
+    {
+      "path": "cdev/Domain/Models/AgentEvent.swift",
+      "name": "AgentEvent.swift",
+      "directory": "cdev/Domain/Models",
+      "extension": "swift",
+      "size_bytes": 12450,
+      "modified_at": "2025-01-15T10:30:00Z",
+      "is_binary": false,
+      "is_sensitive": false,
+      "git_tracked": true
+    }
+  ],
+  "directories": [
+    {
+      "path": "cdev/Domain/Models/Interfaces",
+      "name": "Interfaces",
+      "file_count": 5,
+      "total_size_bytes": 24680
+    }
+  ],
+  "total_files": 8,
+  "total_directories": 2,
+  "pagination": {
+    "limit": 100,
+    "offset": 0,
+    "has_more": false
+  }
+}
+```
+
+**Response Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `directory` | string | Current directory path |
+| `files` | array | List of files in directory |
+| `directories` | array | List of subdirectories |
+| `total_files` | int | Total file count |
+| `total_directories` | int | Total directory count |
+| `pagination` | object | Pagination metadata |
+
+**File Entry Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Full relative path |
+| `name` | string | File name |
+| `directory` | string | Parent directory |
+| `extension` | string? | File extension |
+| `size_bytes` | int64 | Size in bytes |
+| `modified_at` | string? | ISO 8601 timestamp |
+| `is_binary` | bool | Whether file is binary |
+| `is_sensitive` | bool | Whether file contains secrets |
+| `git_tracked` | bool | Whether tracked by git |
+
+**Directory Entry Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Full relative path |
+| `name` | string | Directory name |
+| `file_count` | int | Number of files inside |
+| `total_size_bytes` | int64 | Total size of contents |
+
+**Error Responses**:
+| Status | Description |
+|--------|-------------|
+| 503 | Repository indexer not available |
+
+### 2. File Search Endpoint
+
+**Endpoint**: `GET /api/repository/search`
+
+**Query Parameters**:
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `q` | string | Yes | Search query |
+| `mode` | string | No | `fuzzy`, `exact`, `prefix`, `extension` (default: fuzzy) |
+| `limit` | int | No | Maximum results (default: 50, max: 500) |
+| `exclude_binaries` | bool | No | Exclude binary files (default: true) |
+
+**Response** (200 OK):
+```json
+{
+  "query": "ViewModel",
+  "mode": "fuzzy",
+  "results": [
+    {
+      "path": "cdev/Presentation/Screens/Dashboard/DashboardViewModel.swift",
+      "name": "DashboardViewModel.swift",
+      "directory": "cdev/Presentation/Screens/Dashboard",
+      "extension": "swift",
+      "size_bytes": 15420,
+      "match_score": 0.95
+    }
+  ],
+  "total": 12,
+  "elapsed_ms": 5
+}
+```
+
+### 3. File Content Endpoint
+
+**Endpoint**: `GET /api/file`
+
+> Used by File Explorer to read file contents.
+
+**Query Parameters**:
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | Yes | Relative file path |
+
+**Response** (200 OK):
+```json
+{
+  "path": "cdev/App/AppState.swift",
+  "content": "import Foundation\n\n/// App state...",
+  "encoding": "utf-8",
+  "size": 5280,
+  "truncated": false
+}
+```
+
+### Backend Implementation Notes
+
+#### Go Implementation Example
+
+```go
+// handlers/files.go
+
+type FileEntry struct {
+    Name          string  `json:"name"`
+    Type          string  `json:"type"`            // "file" or "directory"
+    Size          *int64  `json:"size,omitempty"`  // bytes, files only
+    Modified      *string `json:"modified,omitempty"`
+    ChildrenCount *int    `json:"children_count,omitempty"` // directories only
+}
+
+type DirectoryListingResponse struct {
+    Path       string      `json:"path"`
+    Entries    []FileEntry `json:"entries"`
+    TotalCount int         `json:"total_count"`
+}
+
+func ListDirectory(w http.ResponseWriter, r *http.Request) {
+    path := r.URL.Query().Get("path")
+
+    // Security: Validate path is within repo root
+    absPath := filepath.Join(repoRoot, path)
+    if !strings.HasPrefix(absPath, repoRoot) {
+        http.Error(w, "Path outside repository", http.StatusForbidden)
+        return
+    }
+
+    // Read directory
+    dirEntries, err := os.ReadDir(absPath)
+    if err != nil {
+        http.Error(w, "Directory not found", http.StatusNotFound)
+        return
+    }
+
+    var entries []FileEntry
+    for _, entry := range dirEntries {
+        // Skip hidden files
+        if strings.HasPrefix(entry.Name(), ".") {
+            continue
+        }
+
+        info, _ := entry.Info()
+        fe := FileEntry{
+            Name: entry.Name(),
+            Type: entryType(entry),
+        }
+
+        if entry.IsDir() {
+            count := countChildren(filepath.Join(absPath, entry.Name()))
+            fe.ChildrenCount = &count
+        } else {
+            size := info.Size()
+            fe.Size = &size
+        }
+
+        if info != nil {
+            mod := info.ModTime().Format(time.RFC3339)
+            fe.Modified = &mod
+        }
+
+        entries = append(entries, fe)
+    }
+
+    // Sort: directories first, then alphabetically
+    sort.Slice(entries, func(i, j int) bool {
+        if entries[i].Type != entries[j].Type {
+            return entries[i].Type == "directory"
+        }
+        return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+    })
+
+    response := DirectoryListingResponse{
+        Path:       path,
+        Entries:    entries,
+        TotalCount: len(entries),
+    }
+
+    json.NewEncoder(w).Encode(response)
+}
+```
+
+#### Security Considerations
+
+1. **Path Traversal Prevention**: Always validate resolved path is within repo root
+2. **Hidden Files**: Filter out `.git`, `.DS_Store`, etc. by default
+3. **Size Limits**: Consider limiting response to max 500 entries for large directories
+4. **Symlink Handling**: Be cautious with symlinks that could escape repo
+
+#### Performance Considerations
+
+1. **Lazy Loading**: Only fetch directory when user navigates to it
+2. **Parallel stat()**: Use goroutines for file info if directory has many files
+3. **Pagination**: For very large directories (future enhancement)
+
+### iOS Integration
+
+The File Explorer is fully integrated via `DependencyContainer`:
+
+```swift
+// DependencyContainer.swift
+lazy var fileRepository: FileRepositoryProtocol = FileRepository(
+    httpService: httpService,
+    cache: fileCache,
+    useMockData: false  // Uses real cdev-agent API
+)
+```
+
+**FileRepository Implementation:**
+
+```swift
+// FileRepository.swift
+private func fetchRemoteDirectory(path: String) async throws -> [FileEntry] {
+    var queryItems: [URLQueryItem] = []
+    if !path.isEmpty {
+        queryItems.append(URLQueryItem(name: "directory", value: path))
+    }
+    queryItems.append(URLQueryItem(name: "limit", value: "500"))
+
+    let response: RepositoryFileListResponse = try await httpService.get(
+        path: "/api/repository/files/list",
+        queryItems: queryItems
+    )
+
+    // Combine directories and files
+    var entries: [FileEntry] = []
+    for dirDTO in response.directories {
+        entries.append(FileEntry(from: dirDTO))
+    }
+    for fileDTO in response.files {
+        entries.append(FileEntry(from: fileDTO))
+    }
+    return entries
+}
+```
+
+**DTO Models:**
+
+```swift
+// Matches cdev-agent response format
+struct RepositoryFileListResponse: Codable {
+    let directory: String
+    let files: [FileInfoDTO]
+    let directories: [DirectoryInfoDTO]
+    let totalFiles: Int
+    let totalDirectories: Int
+    let pagination: PaginationDTO
+}
+
+struct FileInfoDTO: Codable {
+    let path: String
+    let name: String
+    let directory: String
+    let ext: String?           // "extension" key
+    let sizeBytes: Int64       // "size_bytes" key
+    let modifiedAt: String?    // "modified_at" key
+    let isBinary: Bool
+    let isSensitive: Bool
+    let gitTracked: Bool?
+}
+
+struct DirectoryInfoDTO: Codable {
+    let path: String
+    let name: String
+    let fileCount: Int         // "file_count" key
+    let totalSizeBytes: Int64  // "total_size_bytes" key
+}
+```
+
+---
+
 ## Related Documentation
 
 - [CLAUDE.md](../CLAUDE.md) - Development guidelines

@@ -16,12 +16,6 @@ struct DashboardView: View {
     private var toolkitItems: [ToolkitItem] {
         ToolkitBuilder()
             .add(.debugLogs { showDebugLogs = true })
-            .add(.refresh { Task { await viewModel.refreshStatus() } })
-            .add(.copySessionId(sessionId: viewModel.agentStatus.sessionId))
-            .add(.clearLogs {
-                Task { await viewModel.clearLogs() }
-                DebugLogStore.shared.clear()
-            })
             .build()
     }
 
@@ -74,6 +68,10 @@ struct DashboardView: View {
                             }
                         )
                         .tag(DashboardTab.diffs)
+
+                        // File Explorer
+                        ExplorerView(viewModel: viewModel.explorerViewModel)
+                            .tag(DashboardTab.explorer)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .dismissKeyboardOnTap()
@@ -332,6 +330,22 @@ struct CompactTabSelector: View {
     let logsCount: Int
     let diffsCount: Int
 
+    private var tabCount: CGFloat {
+        CGFloat(DashboardTab.allCases.count)
+    }
+
+    private var selectedIndex: CGFloat {
+        CGFloat(DashboardTab.allCases.firstIndex(of: selectedTab) ?? 0)
+    }
+
+    private func badgeCount(for tab: DashboardTab) -> Int {
+        switch tab {
+        case .logs: return logsCount
+        case .diffs: return diffsCount
+        case .explorer: return 0  // No badge for explorer
+        }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             ForEach(DashboardTab.allCases, id: \.self) { tab in
@@ -349,7 +363,7 @@ struct CompactTabSelector: View {
                             .font(Typography.tabLabel)
 
                         // Badge with glow when selected
-                        let count = tab == .logs ? logsCount : diffsCount
+                        let count = badgeCount(for: tab)
                         if count > 0 {
                             Text("\(min(count, 99))\(count > 99 ? "+" : "")")
                                 .font(Typography.badge)
@@ -374,11 +388,12 @@ struct CompactTabSelector: View {
         .overlay(alignment: .bottom) {
             // Animated selection indicator with glow
             GeometryReader { geo in
+                let tabWidth = geo.size.width / tabCount
                 Rectangle()
                     .fill(ColorSystem.primary)
-                    .frame(width: geo.size.width / 2, height: 2)
+                    .frame(width: tabWidth, height: 2)
                     .shadow(color: ColorSystem.primaryGlow, radius: 4, y: 0)
-                    .offset(x: selectedTab == .logs ? 0 : geo.size.width / 2)
+                    .offset(x: selectedIndex * tabWidth)
                     .animation(Animations.tabSlide, value: selectedTab)
             }
             .frame(height: 2)

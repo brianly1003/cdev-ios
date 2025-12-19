@@ -143,6 +143,85 @@ enum ColorSystem {
         static let json = ColorSystem.accent
     }
 
+    // MARK: - Code Editor Colors (IDE-style theming)
+
+    enum Editor {
+        /// Editor backgrounds
+        static let background = ColorSystem.terminalBg
+        static let gutterBg = Color(hex: "#0A0E13")
+        static let activeLineBg = Color(hex: "#1C2128")
+        static let selectionBg = Color(hex: "#264F78").opacity(0.5)
+
+        /// Line numbers
+        static let lineNumber = ColorSystem.textQuaternary
+        static let lineNumberActive = ColorSystem.textSecondary
+        static let gutterBorder = Color(hex: "#21262D")
+
+        /// Cursor and selection
+        static let cursor = ColorSystem.primary
+        static let matchHighlight = ColorSystem.primaryGlow
+
+        /// Minimap (future)
+        static let minimapBg = Color(hex: "#0A0E13")
+        static let minimapSlider = Color(hex: "#30363D").opacity(0.6)
+
+        /// Scroll decoration
+        static let scrollbarBg = Color(hex: "#161B22")
+        static let scrollbarThumb = Color(hex: "#484F58").opacity(0.5)
+    }
+
+    // MARK: - Syntax Highlighting (VSCode-inspired, theme-ready)
+
+    enum Syntax {
+        /// Keywords: if, else, func, class, struct, enum, import, return, etc.
+        static let keyword = Color(hex: "#FF7B72")
+
+        /// Types: String, Int, Bool, custom types
+        static let type = Color(hex: "#79C0FF")
+
+        /// Functions/methods
+        static let function = Color(hex: "#D2A8FF")
+
+        /// Variables and parameters
+        static let variable = Color(hex: "#FFA657")
+
+        /// String literals
+        static let string = Color(hex: "#A5D6FF")
+
+        /// Number literals
+        static let number = Color(hex: "#79C0FF")
+
+        /// Comments
+        static let comment = Color(hex: "#8B949E")
+
+        /// Operators: +, -, =, ==, etc.
+        static let `operator` = Color(hex: "#FF7B72")
+
+        /// Punctuation: (), {}, [], etc.
+        static let punctuation = ColorSystem.textSecondary
+
+        /// Preprocessor/directives: #import, @property
+        static let preprocessor = Color(hex: "#FF7B72")
+
+        /// Constants and enums
+        static let constant = Color(hex: "#79C0FF")
+
+        /// Property names
+        static let property = Color(hex: "#7EE787")
+
+        /// Decorators/attributes: @MainActor, @Published
+        static let decorator = Color(hex: "#D2A8FF")
+
+        /// Regular text (plain code)
+        static let plain = ColorSystem.textPrimary
+
+        /// Error squiggles
+        static let errorUnderline = ColorSystem.error
+
+        /// Warning squiggles
+        static let warningUnderline = ColorSystem.warning
+    }
+
     // MARK: - File Change Type Colors
 
     enum FileChange {

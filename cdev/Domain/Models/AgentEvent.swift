@@ -446,6 +446,13 @@ struct ClaudeSessionInfoPayload: Codable {
 struct FileChangedPayload: Codable {
     let path: String?
     let change: FileChangeType?
+    let size: Int?          // File size in bytes (for created/modified)
+    let oldPath: String?    // Previous path (only for renamed)
+
+    enum CodingKeys: String, CodingKey {
+        case path, change, size
+        case oldPath = "old_path"
+    }
 }
 
 enum FileChangeType: String, Codable {

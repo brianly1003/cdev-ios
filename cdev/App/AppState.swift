@@ -49,6 +49,7 @@ final class AppState: ObservableObject {
     private let sendPromptUseCase: SendPromptUseCase
     private let respondToClaudeUseCase: RespondToClaudeUseCase
     private let agentRepository: AgentRepositoryProtocol
+    private let fileRepository: FileRepositoryProtocol
     private let logCache: LogCache
     private let diffCache: DiffCache
 
@@ -65,6 +66,7 @@ final class AppState: ObservableObject {
         sendPromptUseCase: SendPromptUseCase,
         respondToClaudeUseCase: RespondToClaudeUseCase,
         agentRepository: AgentRepositoryProtocol,
+        fileRepository: FileRepositoryProtocol,
         logCache: LogCache,
         diffCache: DiffCache
     ) {
@@ -76,6 +78,7 @@ final class AppState: ObservableObject {
         self.sendPromptUseCase = sendPromptUseCase
         self.respondToClaudeUseCase = respondToClaudeUseCase
         self.agentRepository = agentRepository
+        self.fileRepository = fileRepository
         self.logCache = logCache
         self.diffCache = diffCache
 
@@ -113,6 +116,7 @@ final class AppState: ObservableObject {
             sendPromptUseCase: sendPromptUseCase,
             respondToClaudeUseCase: respondToClaudeUseCase,
             sessionRepository: sessionRepository,
+            fileRepository: fileRepository,
             logCache: logCache,
             diffCache: diffCache,
             appState: self

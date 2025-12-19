@@ -29,6 +29,9 @@ final class DashboardViewModel: ObservableObject {
     // Source Control (Mini Repo Management)
     @Published var sourceControlViewModel: SourceControlViewModel!
 
+    // File Explorer
+    @Published var explorerViewModel: ExplorerViewModel!
+
     /// Log count excluding system messages (for badge display)
     /// System messages like "Started new session" are still shown but not counted
     var logsCountForBadge: Int {
@@ -95,6 +98,7 @@ final class DashboardViewModel: ObservableObject {
         sendPromptUseCase: SendPromptUseCase,
         respondToClaudeUseCase: RespondToClaudeUseCase,
         sessionRepository: SessionRepository,
+        fileRepository: FileRepositoryProtocol,
         logCache: LogCache,
         diffCache: DiffCache,
         appState: AppState? = nil
@@ -110,6 +114,14 @@ final class DashboardViewModel: ObservableObject {
 
         // Initialize Source Control ViewModel
         self.sourceControlViewModel = SourceControlViewModel(agentRepository: agentRepository)
+
+        // Initialize File Explorer ViewModel
+        self.explorerViewModel = ExplorerViewModel(
+            fileRepository: fileRepository,
+            gitStatusProvider: { [weak self] in
+                self?.sourceControlViewModel.state.allFiles ?? []
+            }
+        )
 
         // Load persisted session ID from storage and initialize agentStatus
         self.userSelectedSessionId = sessionRepository.selectedSessionId
@@ -880,16 +892,58 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .fileChanged:
-            // Handle file changes (even without git diff)
+            // Handle file changes per API-REFERENCE.md
+            // Change types: created, modified, deleted, renamed
             if case .fileChanged(let payload) = event.payload,
-               let path = payload.path {
-                // If file was deleted, remove from cache
-                if payload.change == .deleted {
+               let path = payload.path,
+               let changeType = payload.change {
+                AppLogger.log("[Dashboard] File changed: \(path) (\(changeType.rawValue))" +
+                              (payload.oldPath != nil ? " from \(payload.oldPath!)" : ""))
+
+                // Update diff cache based on change type
+                switch changeType {
+                case .deleted:
                     await diffCache.remove(path: path)
                     scheduleDiffUpdate()
-                } else if let entry = DiffEntry.fromFileChanged(event: event) {
-                    await diffCache.add(entry)
+
+                case .renamed:
+                    // Remove old path, add new path
+                    if let oldPath = payload.oldPath {
+                        await diffCache.remove(path: oldPath)
+                    }
+                    if let entry = DiffEntry.fromFileChanged(event: event) {
+                        await diffCache.add(entry)
+                    }
                     scheduleDiffUpdate()
+
+                case .created, .modified:
+                    if let entry = DiffEntry.fromFileChanged(event: event) {
+                        await diffCache.add(entry)
+                        scheduleDiffUpdate()
+                    }
+                }
+
+                // Refresh source control to show the new/changed file in Changes tab
+                Task { await sourceControlViewModel.refresh() }
+
+                // Notify Explorer to refresh affected directories
+                let directory = (path as NSString).deletingLastPathComponent
+                let explorerPath = explorerViewModel.currentPath
+
+                // Check if current Explorer directory is affected
+                let isCurrentDirAffected = directory == explorerPath ||
+                                           (directory.isEmpty && explorerPath.isEmpty)
+
+                // For renames, also check if old path directory is affected
+                let isOldDirAffected: Bool = {
+                    guard let oldPath = payload.oldPath else { return false }
+                    let oldDir = (oldPath as NSString).deletingLastPathComponent
+                    return oldDir == explorerPath || (oldDir.isEmpty && explorerPath.isEmpty)
+                }()
+
+                if isCurrentDirAffected || isOldDirAffected {
+                    AppLogger.log("[Dashboard] File changed in current Explorer path, refreshing")
+                    Task { await explorerViewModel.refresh() }
                 }
             }
 
@@ -1095,11 +1149,13 @@ final class DashboardViewModel: ObservableObject {
 enum DashboardTab: String, CaseIterable {
     case logs = "Terminal"
     case diffs = "Changes"
+    case explorer = "Explorer"
 
     var icon: String {
         switch self {
         case .logs: return "terminal"
         case .diffs: return "arrow.triangle.branch"
+        case .explorer: return "folder"
         }
     }
 }

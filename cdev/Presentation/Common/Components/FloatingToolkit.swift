@@ -375,8 +375,8 @@ struct FloatingToolkitButton: View {
 
     private func initializePosition(in geometry: GeometryProxy) {
         if savedX < 0 || savedY < 0 {
-            // Default: bottom-right corner
-            let defaultX = geometry.size.width - buttonSize / 2 - 20
+            // Default: bottom-LEFT corner (away from Settings button in top-right)
+            let defaultX = buttonSize / 2 + 20
             let defaultY = geometry.size.height - buttonSize / 2 - 120
             position = CGPoint(x: defaultX, y: defaultY)
             savedX = defaultX
@@ -396,6 +396,7 @@ struct FloatingToolkitButton: View {
     /// Calculate all menu item positions at once (single base angle calculation)
     /// Returns array of CGPoints for each menu item - O(n) with minimal overhead
     /// Items are arranged so that item[0] (Debug Logs) is always at the bottom of the arc
+    /// Positions are clamped to stay within screen bounds
     private func menuItemPositions(total: Int, in geometry: GeometryProxy) -> [CGPoint] {
         guard total > 0 else { return [] }
 
@@ -410,6 +411,13 @@ struct FloatingToolkitButton: View {
 
         // Determine if we're on the left side of screen
         let isOnLeftSide = currentPos.x < screenCenter
+
+        // Screen bounds for clamping (with padding for menu item size + label)
+        let itemPadding: CGFloat = menuItemSize / 2 + 30  // Extra space for label
+        let minX = itemPadding
+        let maxX = geometry.size.width - itemPadding
+        let minY = geometry.safeAreaInsets.top + itemPadding
+        let maxY = geometry.size.height - geometry.safeAreaInsets.bottom - itemPadding - 50
 
         // Pre-allocate array for efficiency
         var positions = [CGPoint]()
@@ -431,9 +439,13 @@ struct FloatingToolkitButton: View {
             let angle = startAngle + Double(adjustedIndex) * angleStep
             let radians = angle * .pi / 180
 
+            // Calculate position and clamp to screen bounds
+            let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * expandedRadius
+            let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * expandedRadius
+
             positions.append(CGPoint(
-                x: currentPos.x + CGFloat(Darwin.cos(radians)) * expandedRadius,
-                y: currentPos.y + CGFloat(Darwin.sin(radians)) * expandedRadius
+                x: max(minX, min(maxX, rawX)),
+                y: max(minY, min(maxY, rawY))
             ))
         }
 
@@ -677,9 +689,6 @@ private struct ScaleButtonStyle: ButtonStyle {
         FloatingToolkitButton(
             items: ToolkitBuilder()
                 .add(.debugLogs { print("Debug") })
-                .add(.refresh { print("Refresh") })
-                .add(.copySessionId(sessionId: "test-123"))
-                .add(.clearLogs { print("Clear") })
                 .build()
         )
     }

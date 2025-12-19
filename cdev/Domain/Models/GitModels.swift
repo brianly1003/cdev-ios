@@ -244,6 +244,11 @@ struct RepositoryState: Equatable {
     var allUnstagedFiles: [GitFileEntry] {
         unstagedFiles + untrackedFiles
     }
+
+    /// All files combined (for file explorer git status overlay)
+    var allFiles: [GitFileEntry] {
+        stagedFiles + unstagedFiles + untrackedFiles + conflictedFiles
+    }
 }
 
 // MARK: - Git Operations

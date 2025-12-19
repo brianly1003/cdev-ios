@@ -132,7 +132,16 @@ private struct HTTPDetailSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             // Request info
-            SectionHeader(title: "Request", icon: "arrow.up.circle")
+            HStack {
+                SectionHeader(title: "Request", icon: "arrow.up.circle")
+
+                Spacer()
+
+                // Copy cURL button
+                if details.curlCommand != nil {
+                    CopyCurlButton(details: details, onCopy: onCopy)
+                }
+            }
 
             VStack(alignment: .leading, spacing: Spacing.xs) {
                 // Method and path
@@ -142,6 +151,11 @@ private struct HTTPDetailSection: View {
                         .font(Typography.terminal)
                         .foregroundStyle(ColorSystem.textPrimary)
                         .textSelection(.enabled)
+                }
+
+                // Full URL (if available)
+                if let fullURL = details.fullURL {
+                    DetailRow(label: "URL", value: fullURL)
                 }
 
                 // Query params
@@ -159,6 +173,7 @@ private struct HTTPDetailSection: View {
                 }
             }
             .padding(Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(ColorSystem.terminalBgHighlight)
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
 
@@ -194,6 +209,7 @@ private struct HTTPDetailSection: View {
                     }
                 }
                 .padding(Spacing.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(ColorSystem.terminalBgHighlight)
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
             }
@@ -205,6 +221,7 @@ private struct HTTPDetailSection: View {
                 Text(error)
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.error)
+                    .textSelection(.enabled)
                     .padding(Spacing.sm)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(ColorSystem.error.opacity(0.1))
@@ -247,6 +264,7 @@ private struct WebSocketDetailSection: View {
                 }
             }
             .padding(Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(ColorSystem.terminalBgHighlight)
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
         }
@@ -312,6 +330,7 @@ private struct MetadataSection: View {
                 DetailRow(label: "Level", value: entry.level.rawValue)
             }
             .padding(Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(ColorSystem.terminalBgHighlight)
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
         }
@@ -505,6 +524,59 @@ private struct CopiedToast: View {
     }
 }
 
+/// Copy cURL button with menu for different formats
+private struct CopyCurlButton: View {
+    let details: HTTPLogDetails
+    let onCopy: (String) -> Void
+
+    var body: some View {
+        Menu {
+            // Copy formatted cURL (multiline, readable)
+            if let curl = details.curlCommand {
+                Button {
+                    onCopy(curl)
+                } label: {
+                    Label("Copy cURL (Formatted)", systemImage: "terminal")
+                }
+            }
+
+            // Copy compact cURL (single line)
+            if let curlCompact = details.curlCommandCompact {
+                Button {
+                    onCopy(curlCompact)
+                } label: {
+                    Label("Copy cURL (Compact)", systemImage: "text.alignleft")
+                }
+            }
+
+            Divider()
+
+            // Copy just the URL
+            if let url = details.fullURL {
+                Button {
+                    onCopy(url)
+                } label: {
+                    Label("Copy URL", systemImage: "link")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("cURL")
+                    .font(Typography.badge)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundStyle(ColorSystem.primary)
+            .padding(.horizontal, Spacing.xs)
+            .padding(.vertical, 4)
+            .background(ColorSystem.primary.opacity(0.15))
+            .clipShape(Capsule())
+        }
+    }
+}
+
 // MARK: - Helpers
 
 /// Format JSON string for display
@@ -548,7 +620,9 @@ extension DebugLogEntry: Hashable {
                 responseStatus: 200,
                 responseBody: "{\"status\":\"started\",\"session_id\":\"abc123\"}",
                 duration: 0.350,
-                error: nil
+                error: nil,
+                fullURL: "http://localhost:8080/api/claude/run",
+                requestHeaders: ["Content-Type": "application/json", "Accept": "application/json"]
             ))
         ))
         .navigationTitle("Log Detail")

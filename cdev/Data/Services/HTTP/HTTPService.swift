@@ -79,13 +79,16 @@ final class HTTPService: HTTPServiceProtocol {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+        // Capture headers for cURL generation
+        let headers = request.allHTTPHeaderFields
+
         // Build query params string for logging
         let queryParamsStr = queryItems?.isEmpty == false
             ? queryItems!.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
             : nil
 
         let startTime = Date()
-        logRequest(method: "GET", path: path, queryItems: queryItems, body: nil)
+        logRequest(method: "GET", path: path, queryItems: queryItems, body: nil, fullURL: url.absoluteString, headers: headers)
 
         do {
             let (data, response) = try await executeWithRetry(request: request, path: path)
@@ -98,7 +101,9 @@ final class HTTPService: HTTPServiceProtocol {
                 path: path,
                 queryParams: queryParamsStr,
                 requestBody: nil,
-                duration: duration
+                duration: duration,
+                fullURL: url.absoluteString,
+                headers: headers
             )
 
             return try decoder.decode(T.self, from: data)
@@ -140,13 +145,16 @@ final class HTTPService: HTTPServiceProtocol {
         request.httpMethod = "DELETE"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+        // Capture headers for cURL generation
+        let headers = request.allHTTPHeaderFields
+
         // Build query params string for logging
         let queryParamsStr = queryItems?.isEmpty == false
             ? queryItems!.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
             : nil
 
         let startTime = Date()
-        logRequest(method: "DELETE", path: path, queryItems: queryItems, body: nil)
+        logRequest(method: "DELETE", path: path, queryItems: queryItems, body: nil, fullURL: url.absoluteString, headers: headers)
 
         do {
             let (data, response) = try await executeWithRetry(request: request, path: path)
@@ -159,7 +167,9 @@ final class HTTPService: HTTPServiceProtocol {
                 path: path,
                 queryParams: queryParamsStr,
                 requestBody: nil,
-                duration: duration
+                duration: duration,
+                fullURL: url.absoluteString,
+                headers: headers
             )
 
             return try decoder.decode(T.self, from: data)
@@ -212,8 +222,11 @@ final class HTTPService: HTTPServiceProtocol {
             bodyString = String(data: bodyData, encoding: .utf8)
         }
 
+        // Capture headers for cURL generation
+        let headers = request.allHTTPHeaderFields
+
         let startTime = Date()
-        logRequest(method: "POST", path: path, queryItems: nil, body: bodyString)
+        logRequest(method: "POST", path: path, queryItems: nil, body: bodyString, fullURL: url.absoluteString, headers: headers)
 
         do {
             let (data, response) = try await executeWithRetry(request: request, path: path)
@@ -226,7 +239,9 @@ final class HTTPService: HTTPServiceProtocol {
                 path: path,
                 queryParams: nil,
                 requestBody: bodyString,
-                duration: duration
+                duration: duration,
+                fullURL: url.absoluteString,
+                headers: headers
             )
 
             return data
@@ -244,7 +259,9 @@ final class HTTPService: HTTPServiceProtocol {
         path: String,
         queryParams: String?,
         requestBody: String?,
-        duration: TimeInterval
+        duration: TimeInterval,
+        fullURL: String?,
+        headers: [String: String]?
     ) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AppError.invalidResponse
@@ -257,7 +274,7 @@ final class HTTPService: HTTPServiceProtocol {
         if (200...299).contains(statusCode) {
             AppLogger.network("[HTTP] ← \(statusCode) \(path) (\(durationMs)ms)")
 
-            // Log success to debug store
+            // Log success to debug store (with cURL-ready data)
             Task { @MainActor in
                 DebugLogStore.shared.logHTTPResponse(
                     method: method,
@@ -266,7 +283,9 @@ final class HTTPService: HTTPServiceProtocol {
                     requestBody: requestBody,
                     status: statusCode,
                     responseBody: responseBody,
-                    duration: duration
+                    duration: duration,
+                    fullURL: fullURL,
+                    headers: headers
                 )
             }
         } else {
@@ -276,7 +295,7 @@ final class HTTPService: HTTPServiceProtocol {
                 AppLogger.network("[HTTP]   Response: \(msg.prefix(200))", type: .error)
             }
 
-            // Log error to debug store
+            // Log error to debug store (with cURL-ready data)
             Task { @MainActor in
                 DebugLogStore.shared.logHTTPResponse(
                     method: method,
@@ -285,7 +304,9 @@ final class HTTPService: HTTPServiceProtocol {
                     requestBody: requestBody,
                     status: statusCode,
                     responseBody: responseBody,
-                    duration: duration
+                    duration: duration,
+                    fullURL: fullURL,
+                    headers: headers
                 )
             }
 
@@ -310,7 +331,14 @@ final class HTTPService: HTTPServiceProtocol {
     }
 
     /// Log outgoing request with params/body
-    private func logRequest(method: String, path: String, queryItems: [URLQueryItem]?, body: String?) {
+    private func logRequest(
+        method: String,
+        path: String,
+        queryItems: [URLQueryItem]?,
+        body: String?,
+        fullURL: String?,
+        headers: [String: String]?
+    ) {
         var logParts: [String] = ["[HTTP] → \(method) \(path)"]
 
         // Build query params string
@@ -328,13 +356,15 @@ final class HTTPService: HTTPServiceProtocol {
             AppLogger.network("[HTTP]   body: \(body)")
         }
 
-        // Log to debug store for admin tool
+        // Log to debug store for admin tool (with cURL-ready data)
         Task { @MainActor in
             DebugLogStore.shared.logHTTPRequest(
                 method: method,
                 path: path,
                 queryParams: queryParamsStr,
-                body: body
+                body: body,
+                fullURL: fullURL,
+                headers: headers
             )
         }
     }
@@ -342,6 +372,12 @@ final class HTTPService: HTTPServiceProtocol {
     /// Log detailed error information for failed requests
     private func logRequestError(_ error: Error, method: String, path: String, duration: TimeInterval) {
         let durationMs = Int(duration * 1000)
+
+        // Don't log cancellation errors as errors - they're expected behavior
+        if isCancellationError(error) {
+            AppLogger.network("[HTTP] ⊘ \(method) \(path) cancelled")
+            return
+        }
 
         if let appError = error as? AppError {
             switch appError {
@@ -373,8 +409,15 @@ final class HTTPService: HTTPServiceProtocol {
         case NSURLErrorNotConnectedToInternet: return "No internet connection"
         case NSURLErrorCannotFindHost: return "Cannot find server"
         case NSURLErrorSecureConnectionFailed: return "SSL/TLS connection failed"
+        case NSURLErrorCancelled: return "Request cancelled"
         default: return "Network error (code: \(code))"
         }
+    }
+
+    /// Check if error is a cancellation (expected behavior, not a real error)
+    private func isCancellationError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     /// Check if error is retryable (transient network issues)

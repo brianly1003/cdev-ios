@@ -48,6 +48,10 @@ struct HTTPLogDetails {
     let duration: TimeInterval?
     let error: String?
 
+    // For cURL generation
+    let fullURL: String?
+    let requestHeaders: [String: String]?
+
     /// Status indicator
     var statusIcon: String {
         guard let status = responseStatus else { return "⋯" }
@@ -67,6 +71,69 @@ struct HTTPLogDetails {
     var durationString: String? {
         guard let duration = duration else { return nil }
         return "\(Int(duration * 1000))ms"
+    }
+
+    // MARK: - cURL Generation
+
+    /// Generate a cURL command string for this request
+    /// Output is ready to paste into terminal
+    var curlCommand: String? {
+        guard let url = fullURL else { return nil }
+
+        var parts: [String] = ["curl"]
+
+        // Method (skip for GET as it's default)
+        if method.uppercased() != "GET" {
+            parts.append("-X \(method.uppercased())")
+        }
+
+        // URL (quoted for safety)
+        parts.append("'\(url)'")
+
+        // Headers
+        if let headers = requestHeaders {
+            for (key, value) in headers.sorted(by: { $0.key < $1.key }) {
+                // Escape single quotes in header values
+                let escapedValue = value.replacingOccurrences(of: "'", with: "'\\''")
+                parts.append("-H '\(key): \(escapedValue)'")
+            }
+        }
+
+        // Request body
+        if let body = requestBody, !body.isEmpty {
+            // Escape single quotes in body
+            let escapedBody = body.replacingOccurrences(of: "'", with: "'\\''")
+            parts.append("-d '\(escapedBody)'")
+        }
+
+        return parts.joined(separator: " \\\n  ")
+    }
+
+    /// Compact cURL (single line, for quick copy)
+    var curlCommandCompact: String? {
+        guard let url = fullURL else { return nil }
+
+        var parts: [String] = ["curl"]
+
+        if method.uppercased() != "GET" {
+            parts.append("-X \(method.uppercased())")
+        }
+
+        parts.append("'\(url)'")
+
+        if let headers = requestHeaders {
+            for (key, value) in headers.sorted(by: { $0.key < $1.key }) {
+                let escapedValue = value.replacingOccurrences(of: "'", with: "'\\''")
+                parts.append("-H '\(key): \(escapedValue)'")
+            }
+        }
+
+        if let body = requestBody, !body.isEmpty {
+            let escapedBody = body.replacingOccurrences(of: "'", with: "'\\''")
+            parts.append("-d '\(escapedBody)'")
+        }
+
+        return parts.joined(separator: " ")
     }
 }
 
@@ -155,7 +222,14 @@ final class DebugLogStore: ObservableObject {
     // MARK: - Convenience Methods
 
     /// Log HTTP request start
-    func logHTTPRequest(method: String, path: String, queryParams: String?, body: String?) {
+    func logHTTPRequest(
+        method: String,
+        path: String,
+        queryParams: String?,
+        body: String?,
+        fullURL: String? = nil,
+        headers: [String: String]? = nil
+    ) {
         let details = HTTPLogDetails(
             method: method,
             path: path,
@@ -164,7 +238,9 @@ final class DebugLogStore: ObservableObject {
             responseStatus: nil,
             responseBody: nil,
             duration: nil,
-            error: nil
+            error: nil,
+            fullURL: fullURL,
+            requestHeaders: headers
         )
 
         var subtitle = "→ \(method)"
@@ -191,7 +267,9 @@ final class DebugLogStore: ObservableObject {
         requestBody: String?,
         status: Int,
         responseBody: String?,
-        duration: TimeInterval
+        duration: TimeInterval,
+        fullURL: String? = nil,
+        headers: [String: String]? = nil
     ) {
         let details = HTTPLogDetails(
             method: method,
@@ -201,7 +279,9 @@ final class DebugLogStore: ObservableObject {
             responseStatus: status,
             responseBody: responseBody,
             duration: duration,
-            error: nil
+            error: nil,
+            fullURL: fullURL,
+            requestHeaders: headers
         )
 
         let level: DebugLogLevel = (200...299).contains(status) ? .success : .error
@@ -219,16 +299,26 @@ final class DebugLogStore: ObservableObject {
     }
 
     /// Log HTTP error
-    func logHTTPError(method: String, path: String, error: String, duration: TimeInterval?) {
+    func logHTTPError(
+        method: String,
+        path: String,
+        error: String,
+        duration: TimeInterval?,
+        fullURL: String? = nil,
+        headers: [String: String]? = nil,
+        requestBody: String? = nil
+    ) {
         let details = HTTPLogDetails(
             method: method,
             path: path,
             queryParams: nil,
-            requestBody: nil,
+            requestBody: requestBody,
             responseStatus: nil,
             responseBody: nil,
             duration: duration,
-            error: error
+            error: error,
+            fullURL: fullURL,
+            requestHeaders: headers
         )
 
         let durationStr = duration.map { "(\(Int($0 * 1000))ms)" } ?? ""

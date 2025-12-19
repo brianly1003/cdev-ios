@@ -49,6 +49,12 @@ enum Typography {
     static let codeSmall: Font = .system(.caption, design: .monospaced)
     static let codeLarge: Font = .system(.title3, design: .monospaced)
 
+    /// Code viewer line numbers - compact, dimmed
+    static let codeLineNumber: Font = .system(size: 11, weight: .regular, design: .monospaced)
+
+    /// Code viewer content - readable monospace
+    static let codeContent: Font = .system(size: 12, weight: .regular, design: .monospaced)
+
     // MARK: - UI Typography
 
     /// Status labels - compact, readable

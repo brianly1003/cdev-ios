@@ -21,6 +21,8 @@ final class DependencyContainer {
 
     lazy var diffCache: DiffCache = DiffCache()
 
+    lazy var fileCache: FileCache = FileCache()
+
     // MARK: - Repositories
 
     lazy var sessionRepository: SessionRepository = SessionRepository(
@@ -30,6 +32,12 @@ final class DependencyContainer {
     lazy var agentRepository: AgentRepositoryProtocol = AgentRepository(
         webSocketService: webSocketService,
         httpService: httpService
+    )
+
+    lazy var fileRepository: FileRepositoryProtocol = FileRepository(
+        httpService: httpService,
+        cache: fileCache,
+        useMockData: false  // Use real cdev-agent API
     )
 
     // MARK: - Use Cases
@@ -62,6 +70,7 @@ final class DependencyContainer {
             sendPromptUseCase: sendPromptUseCase,
             respondToClaudeUseCase: respondToClaudeUseCase,
             agentRepository: agentRepository,
+            fileRepository: fileRepository,
             logCache: logCache,
             diffCache: diffCache
         )
