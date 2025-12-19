@@ -37,6 +37,19 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
 
     /// Handle app resigning active (background)
     func handleAppWillResignActive()
+
+    // MARK: - Session Watching
+
+    /// Currently watched session ID (nil if not watching)
+    var watchedSessionId: String? { get }
+
+    /// Watch a session for real-time updates
+    /// Sends watch_session command and tracks the watched session
+    func watchSession(_ sessionId: String) async throws
+
+    /// Stop watching the current session
+    /// Sends unwatch_session command
+    func unwatchSession() async throws
 }
 
 /// Protocol for HTTP API operations

@@ -29,6 +29,7 @@ struct DashboardView: View {
                         claudeState: viewModel.claudeState,
                         repoName: viewModel.agentStatus.repoName,
                         sessionId: viewModel.agentStatus.sessionId,
+                        isWatchingSession: viewModel.isWatchingSession,
                         onWorkspaceTap: { showWorkspaceSwitcher = true }
                     )
 
@@ -195,11 +196,13 @@ struct StatusBarView: View {
     let claudeState: ClaudeState
     let repoName: String?
     let sessionId: String?
+    var isWatchingSession: Bool = false
     var onWorkspaceTap: (() -> Void)?
 
     @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = true
     @State private var isPulsing = false
     @State private var showCopiedToast = false
+    @State private var watchingPulse = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -237,6 +240,25 @@ struct StatusBarView: View {
                     Text(claudeState.rawValue.capitalized)
                         .font(Typography.statusLabel)
                         .foregroundStyle(ColorSystem.Status.color(for: claudeState))
+                }
+
+                // Live indicator when watching session
+                if isWatchingSession {
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(ColorSystem.error)
+                            .frame(width: 5, height: 5)
+                            .scaleEffect(watchingPulse ? 1.3 : 1.0)
+                            .opacity(watchingPulse ? 0.7 : 1.0)
+
+                        Text("LIVE")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(ColorSystem.error)
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(ColorSystem.error.opacity(0.15))
+                    .clipShape(Capsule())
                 }
 
                 Spacer()
@@ -318,11 +340,25 @@ struct StatusBarView: View {
         .background(ColorSystem.terminalBgElevated)
         .onAppear {
             isPulsing = claudeState == .running
+            if isWatchingSession {
+                startWatchingPulse()
+            }
         }
         .onChange(of: claudeState) { _, newState in
             withAnimation(newState == .running ? Animations.pulse : .none) {
                 isPulsing = newState == .running
             }
+        }
+        .onChange(of: isWatchingSession) { _, watching in
+            if watching {
+                startWatchingPulse()
+            }
+        }
+    }
+
+    private func startWatchingPulse() {
+        withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+            watchingPulse = true
         }
     }
 }
@@ -527,19 +563,10 @@ struct ActionBarView: View {
             }
 
             HStack(spacing: Spacing.xs) {
-                // Stop button with glow when active
+                // Stop button with loading animation when active
                 if claudeState == .running || claudeState == .waiting {
-                    Button(action: onStop) {
-                        Image(systemName: Icons.stop)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(ColorSystem.error)
-                            .clipShape(Circle())
-                            .shadow(color: ColorSystem.errorGlow, radius: 4)
-                    }
-                    .pressEffect()
-                    .transition(Animations.fadeScale)
+                    StopButtonWithAnimation(onStop: onStop)
+                        .transition(Animations.fadeScale)
                 }
 
                 // Prompt input with Pulse Terminal styling
@@ -606,6 +633,55 @@ struct ActionBarView: View {
         }
         .onChange(of: isFocused.wrappedValue) { oldValue, newValue in
             AppLogger.log("[ActionBarView] Focus changed: \(oldValue) -> \(newValue)")
+        }
+    }
+}
+
+// MARK: - Stop Button with Loading Animation
+
+/// Stop button with rotating ring animation
+/// Sized to match the send button visual weight
+private struct StopButtonWithAnimation: View {
+    let onStop: () -> Void
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Button(action: onStop) {
+            ZStack {
+                // Rotating ring animation
+                Circle()
+                    .stroke(
+                        AngularGradient(
+                            gradient: Gradient(colors: [
+                                ColorSystem.error.opacity(0),
+                                ColorSystem.error.opacity(0.3),
+                                ColorSystem.error.opacity(0.6),
+                                ColorSystem.error
+                            ]),
+                            center: .center,
+                            startAngle: .degrees(0),
+                            endAngle: .degrees(360)
+                        ),
+                        lineWidth: 2
+                    )
+                    .frame(width: 28, height: 28)
+                    .rotationEffect(.degrees(rotation))
+
+                // Stop button - smaller to fit inside ring
+                Image(systemName: Icons.stop)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(ColorSystem.error)
+                    .clipShape(Circle())
+            }
+            .shadow(color: ColorSystem.errorGlow, radius: 3)
+        }
+        .pressEffect()
+        .onAppear {
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
         }
     }
 }

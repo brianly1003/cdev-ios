@@ -25,33 +25,44 @@ final class SourceControlViewModel: ObservableObject {
 
     /// Refresh git status from server using enhanced API
     func refresh() async {
+        AppLogger.log("[SCViewModel] refresh() START - isLoading:\(state.isLoading), totalCount:\(state.totalCount)")
         state.isLoading = true
         state.lastError = nil
+        AppLogger.log("[SCViewModel] refresh() SET isLoading=true - totalCount:\(state.totalCount)")
 
         do {
             // Fetch enhanced git status with staged/unstaged/untracked arrays
             let response = try await agentRepository.getGitStatusExtended()
+            AppLogger.log("[SCViewModel] refresh() API returned")
 
             // Convert response to repository state
-            let newState = response.toRepositoryState()
+            var newState = response.toRepositoryState()
+            AppLogger.log("[SCViewModel] refresh() newState created - newState.totalCount:\(newState.totalCount), newState.isLoading:\(newState.isLoading)")
 
-            // Update state while preserving commit message
-            let commitMessage = state.commitMessage
+            // Preserve loading state and commit message during state replacement
+            // This prevents the UI from flashing between empty/content views
+            newState.commitMessage = state.commitMessage
+            newState.isLoading = true  // Keep loading until fully done
+            AppLogger.log("[SCViewModel] refresh() BEFORE state=newState - state.isLoading:\(state.isLoading), newState.isLoading:\(newState.isLoading)")
             state = newState
-            state.commitMessage = commitMessage
+            AppLogger.log("[SCViewModel] refresh() AFTER state=newState - state.isLoading:\(state.isLoading), state.totalCount:\(state.totalCount)")
 
         } catch {
+            AppLogger.log("[SCViewModel] refresh() enhanced API failed, trying fallback")
             // Fallback to basic git status if enhanced not available
             do {
                 let gitStatus = try await agentRepository.getGitStatus()
                 updateStateFromBasicStatus(gitStatus)
+                AppLogger.log("[SCViewModel] refresh() fallback done - totalCount:\(state.totalCount)")
             } catch {
                 state.lastError = error.localizedDescription
                 AppLogger.error(error, context: "Refresh git status")
             }
         }
 
+        AppLogger.log("[SCViewModel] refresh() BEFORE isLoading=false - state.isLoading:\(state.isLoading)")
         state.isLoading = false
+        AppLogger.log("[SCViewModel] refresh() END - isLoading:\(state.isLoading), totalCount:\(state.totalCount)")
     }
 
     /// Fallback: Update state from basic git status response

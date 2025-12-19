@@ -55,6 +55,9 @@ struct ElementView: View {
 
         case .interrupted(let content):
             InterruptedElementView(content: content)
+
+        case .contextCompaction(let content):
+            ContextCompactionElementView(content: content)
         }
     }
 
@@ -762,6 +765,75 @@ struct InterruptedElementView: View {
         }
         .padding(.vertical, Spacing.xxs)
         .frame(minHeight: 20)
+    }
+}
+
+// MARK: - Context Compaction View
+
+/// Context compaction indicator - shown when Claude Code compacts conversation
+/// Styled like Claude Code's "Conversation compacted" divider
+struct ContextCompactionElementView: View {
+    let content: ContextCompactionContent
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            // Divider with label (Claude Code style)
+            Button {
+                withAnimation(Animations.stateChange) {
+                    isExpanded.toggle()
+                }
+                Haptics.selection()
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    // Left line
+                    Rectangle()
+                        .fill(ColorSystem.textQuaternary.opacity(0.3))
+                        .frame(height: 1)
+                        .frame(maxWidth: 40)
+
+                    // Label - fixed size to prevent wrapping
+                    HStack(spacing: Spacing.xxs) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+
+                        Text("Conversation compacted")
+                            .font(Typography.terminalSmall)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                    // Right line
+                    Rectangle()
+                        .fill(ColorSystem.textQuaternary.opacity(0.3))
+                        .frame(height: 1)
+                }
+            }
+            .buttonStyle(.plain)
+
+            // Expanded summary (collapsible)
+            if isExpanded {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text("Summary")
+                        .font(Typography.badge)
+                        .foregroundStyle(ColorSystem.textTertiary)
+
+                    Text(content.summary)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(20)  // Limit to prevent huge expansion
+                }
+                .padding(Spacing.sm)
+                .background(ColorSystem.terminalBgHighlight)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, Spacing.sm)
+        .frame(maxWidth: .infinity)
     }
 }
 

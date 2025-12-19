@@ -21,8 +21,12 @@ struct SourceControlView: View {
     }
 
     var body: some View {
+        let _ = AppLogger.log("[SCView] body - totalCount:\(viewModel.state.totalCount), isLoading:\(viewModel.state.isLoading), showEmpty:\(viewModel.state.totalCount == 0)")
         Group {
-            if viewModel.state.totalCount == 0 && !viewModel.state.isLoading {
+            // Only switch views based on totalCount - NOT isLoading
+            // This prevents the CommitInputView from flashing when refreshing from empty state
+            // Both views have .refreshable which shows loading feedback
+            if viewModel.state.totalCount == 0 {
                 emptyStateView
             } else {
                 contentView
@@ -52,7 +56,8 @@ struct SourceControlView: View {
     // MARK: - Content View
 
     private var contentView: some View {
-        ScrollView {
+        let _ = AppLogger.log("[SCView] contentView rendered")
+        return ScrollView {
             LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                 // Branch & Sync Header
                 BranchHeaderView(
@@ -139,45 +144,63 @@ struct SourceControlView: View {
     // MARK: - Empty State
 
     private var emptyStateView: some View {
-        ScrollView {
-            VStack(spacing: Spacing.lg) {
-                Spacer(minLength: 60)
+        let _ = AppLogger.log("[SCView] emptyStateView rendered")
+        return VStack(spacing: 0) {
+            // Always show branch header with push/pull buttons
+            BranchHeaderView(
+                branch: viewModel.state.currentBranch,
+                onPull: { Task { await viewModel.pull() } },
+                onPush: { Task { await viewModel.push() } },
+                onRefresh: { Task { await onRefresh() } }
+            )
 
-                Image(systemName: "checkmark.circle")
-                    .font(.system(size: 48))
-                    .foregroundStyle(ColorSystem.success)
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    Spacer(minLength: 60)
 
-                Text("No Changes")
-                    .font(Typography.title3)
-                    .foregroundStyle(ColorSystem.textPrimary)
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 48))
+                        .foregroundStyle(ColorSystem.success)
 
-                Text("Your working directory is clean")
-                    .font(Typography.terminal)
-                    .foregroundStyle(ColorSystem.textTertiary)
+                    Text("No Changes")
+                        .font(Typography.title3)
+                        .foregroundStyle(ColorSystem.textPrimary)
 
-                // Branch info
-                if let branch = viewModel.state.currentBranch {
-                    HStack(spacing: Spacing.xs) {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 12))
-                        Text(branch.name)
-                            .font(Typography.terminal)
-                        if let sync = branch.syncStatus {
-                            Text(sync)
-                                .font(Typography.terminalSmall)
-                                .foregroundStyle(ColorSystem.primary)
+                    Text("Your working directory is clean")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textTertiary)
+
+                    // Sync status hint
+                    if let branch = viewModel.state.currentBranch {
+                        if branch.ahead > 0 {
+                            HStack(spacing: Spacing.xs) {
+                                Image(systemName: "arrow.up.circle")
+                                    .font(.system(size: 14))
+                                Text("\(branch.ahead) commit\(branch.ahead == 1 ? "" : "s") to push")
+                                    .font(Typography.terminal)
+                            }
+                            .foregroundStyle(ColorSystem.primary)
+                            .padding(.top, Spacing.sm)
+                        }
+                        if branch.behind > 0 {
+                            HStack(spacing: Spacing.xs) {
+                                Image(systemName: "arrow.down.circle")
+                                    .font(.system(size: 14))
+                                Text("\(branch.behind) commit\(branch.behind == 1 ? "" : "s") to pull")
+                                    .font(Typography.terminal)
+                            }
+                            .foregroundStyle(ColorSystem.info)
+                            .padding(.top, Spacing.xs)
                         }
                     }
-                    .foregroundStyle(ColorSystem.textSecondary)
-                    .padding(.top, Spacing.sm)
-                }
 
-                Spacer()
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, minHeight: 300)
             }
-            .frame(maxWidth: .infinity, minHeight: 300)
-        }
-        .refreshable {
-            await onRefresh()
+            .refreshable {
+                await onRefresh()
+            }
         }
     }
 
@@ -316,6 +339,7 @@ struct CommitInputView: View {
     @State private var showCommitOptions = false
 
     var body: some View {
+        let _ = AppLogger.log("[CommitInputView] body rendered - canCommit:\(canCommit), stagedCount:\(stagedCount), isLoading:\(isLoading)")
         VStack(spacing: 0) {
             HStack(spacing: Spacing.xs) {
                 // Commit message input

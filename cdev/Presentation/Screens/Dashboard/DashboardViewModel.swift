@@ -48,6 +48,10 @@ final class DashboardViewModel: ObservableObject {
     @Published var isStreaming: Bool = false
     @Published var streamingStartTime: Date?
 
+    // Session Watching State
+    @Published var isWatchingSession: Bool = false
+    @Published var watchingSessionId: String?
+
     // Sessions (for /resume command)
     @Published var sessions: [SessionsResponse.SessionInfo] = []
     @Published var showSessionPicker: Bool = false
@@ -100,6 +104,14 @@ final class DashboardViewModel: ObservableObject {
     //   - No session → fetch recent from server → continue if exists, new if empty
     private var userSelectedSessionId: String?
     private var hasActiveConversation: Bool = false
+
+    // Deduplication for real-time messages
+    // O(1) lookup to prevent duplicate elements from multiple sources
+    private var seenElementIds: Set<String> = []
+
+    // Memory management: max elements to keep in memory
+    // Older elements will be removed when this limit is exceeded
+    private let maxChatElements = 500
 
     // MARK: - Init
 
@@ -432,23 +444,42 @@ final class DashboardViewModel: ObservableObject {
             // Prepend older messages (API returns desc, so higher offset = older messages)
             // Reverse to get chronological order, then prepend to existing messages
             var newElements: [ChatElement] = []
-            // Track existing IDs to prevent duplicates when prepending
-            let existingIds = Set(chatElements.map { $0.id })
+            // Track new IDs locally (we prepend, so can't use addElementIfNew)
             var seenNewIds = Set<String>()
             for message in response.messages.reversed() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
+
+                // Check for context compaction messages
+                if message.isContextCompaction == true {
+                    // Create context compaction element instead of regular element
+                    // Only for user messages with the summary (not system messages)
+                    if message.type == "user" {
+                        let summary = message.textContent
+                        let element = ChatElement.contextCompaction(summary: summary)
+                        // Check both instance set and local set
+                        if !seenElementIds.contains(element.id) && !seenNewIds.contains(element.id) {
+                            seenNewIds.insert(element.id)
+                            newElements.append(element)
+                        }
+                    }
+                    // Skip system compaction messages (they just mark the boundary)
+                    continue
+                }
+
                 let chatMessage = ChatMessage.from(sessionMessage: message)
                 let elements = convertChatMessageToElements(chatMessage)
-                // Filter out duplicates (both from existing and within new batch)
+                // Filter out duplicates using instance deduplication set
                 for element in elements {
-                    if !existingIds.contains(element.id) && !seenNewIds.contains(element.id) {
+                    if !seenElementIds.contains(element.id) && !seenNewIds.contains(element.id) {
                         seenNewIds.insert(element.id)
                         newElements.append(element)
                     }
                 }
             }
+            // Add new IDs to instance set for future deduplication
+            seenElementIds.formUnion(seenNewIds)
             chatElements.insert(contentsOf: newElements, at: 0)
             await forceLogUpdate()
         } catch {
@@ -463,10 +494,14 @@ final class DashboardViewModel: ObservableObject {
         isLoading = true
         Haptics.medium()
 
+        // Stop watching previous session
+        await stopWatchingSession()
+
         // Clear current logs and elements
         await logCache.clear()
         logs = []
         chatElements = []
+        seenElementIds.removeAll()  // Clear deduplication set
 
         // Reset pagination state
         messagesNextOffset = 0
@@ -495,23 +530,36 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Loaded \(messagesResponse.count) of \(messagesResponse.total) messages, hasMore=\(messagesResponse.hasMore)")
 
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
-            var seenElementIds = Set<String>()  // Track seen IDs to prevent duplicates
+            // Use instance seenElementIds (already cleared above)
             for message in messagesResponse.messages.reversed() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
+
+                // Check for context compaction messages
+                if message.isContextCompaction == true {
+                    // Create context compaction element instead of regular element
+                    // Only for user messages with the summary (not system messages)
+                    if message.type == "user" {
+                        let summary = message.textContent
+                        let element = ChatElement.contextCompaction(summary: summary)
+                        addElementIfNew(element)
+                    }
+                    // Skip system compaction messages (they just mark the boundary)
+                    continue
+                }
+
                 // Also create ChatElements from session message (may have multiple blocks)
                 let chatMessage = ChatMessage.from(sessionMessage: message)
                 let elements = convertChatMessageToElements(chatMessage)
-                // Filter out duplicate IDs
-                for element in elements {
-                    if !seenElementIds.contains(element.id) {
-                        seenElementIds.insert(element.id)
-                        chatElements.append(element)
-                    }
-                }
+                // Use deduplication method
+                addElementsIfNew(elements)
             }
             await forceLogUpdate()
+
+            // Start watching this session for real-time updates
+            await startWatchingCurrentSession()
+
             Haptics.success()
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
@@ -523,10 +571,14 @@ final class DashboardViewModel: ObservableObject {
 
     /// Start a new session (clear current context)
     func startNewSession() async {
+        // Stop watching current session
+        await stopWatchingSession()
+
         // Clear logs, elements, and session state
         await logCache.clear()
         logs = []
         chatElements = []
+        seenElementIds.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
         AppLogger.log("[Dashboard] Started new session - cleared session state")
@@ -543,9 +595,13 @@ final class DashboardViewModel: ObservableObject {
 
     /// Clear logs and start a new session
     private func clearAndStartNew() async {
+        // Stop watching current session
+        await stopWatchingSession()
+
         await logCache.clear()
         logs = []
         chatElements = []
+        seenElementIds.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
         AppLogger.log("[Dashboard] Cleared & started new - cleared session state")
@@ -738,6 +794,7 @@ final class DashboardViewModel: ObservableObject {
         await logCache.clear()
         logs = []
         chatElements = []
+        seenElementIds.removeAll()
         Haptics.light()
     }
 
@@ -793,6 +850,7 @@ final class DashboardViewModel: ObservableObject {
             if isNewSession {
                 await logCache.clear()
                 chatElements = []
+                seenElementIds.removeAll()  // Clear deduplication set
                 // Reset pagination state
                 messagesNextOffset = 0
                 messagesHasMore = false
@@ -801,6 +859,8 @@ final class DashboardViewModel: ObservableObject {
             } else if !chatElements.isEmpty {
                 // Same session and already have data - skip reloading to prevent duplicates
                 AppLogger.log("[Dashboard] Same session with \(chatElements.count) elements - skipping reload")
+                // Still start watching if not already
+                await startWatchingCurrentSession()
                 return
             } else {
                 AppLogger.log("[Dashboard] Same session but empty - loading data")
@@ -850,22 +910,31 @@ final class DashboardViewModel: ObservableObject {
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
             let chronologicalMessages = Array(messagesResponse.messages.reversed())
             var entriesAdded = 0
-            var seenElementIds = Set<String>()  // Track seen IDs to prevent duplicates
+            // Use instance seenElementIds (already cleared above for new session)
             for (index, message) in chronologicalMessages.enumerated() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
                 }
+
+                // Check for context compaction messages
+                if message.isContextCompaction == true {
+                    // Create context compaction element instead of regular element
+                    // Only for user messages with the summary (not system messages)
+                    if message.type == "user" {
+                        let summary = message.textContent
+                        let element = ChatElement.contextCompaction(summary: summary)
+                        addElementIfNew(element)
+                    }
+                    // Skip system compaction messages (they just mark the boundary)
+                    continue
+                }
+
                 // Also create ChatElements from session message (may have multiple blocks)
                 let chatMessage = ChatMessage.from(sessionMessage: message)
                 let elements = convertChatMessageToElements(chatMessage)
-                // Filter out duplicate IDs (API may return same message UUID multiple times)
-                for element in elements {
-                    if !seenElementIds.contains(element.id) {
-                        seenElementIds.insert(element.id)
-                        chatElements.append(element)
-                    }
-                }
+                // Use deduplication method (handles Set management internally)
+                addElementsIfNew(elements)
 
                 // Yield every 10 messages to prevent UI starvation
                 if index > 0 && index % 10 == 0 {
@@ -876,6 +945,10 @@ final class DashboardViewModel: ObservableObject {
 
             // Update logs array
             await forceLogUpdate()
+
+            // Start watching this session for real-time updates
+            await startWatchingCurrentSession()
+
             AppLogger.log("[Dashboard] Loaded session history, total logs in view: \(logs.count)")
         } catch {
             // Log the actual error for debugging
@@ -932,15 +1005,8 @@ final class DashboardViewModel: ObservableObject {
             // Convert to ChatElements for sophisticated UI
             if case .claudeMessage(let payload) = event.payload {
                 let elements = ChatElement.from(payload: payload)
-                // Deduplicate against existing elements
-                let existingIds = Set(chatElements.map { $0.id })
-                var addedCount = 0
-                for element in elements {
-                    if !existingIds.contains(element.id) {
-                        chatElements.append(element)
-                        addedCount += 1
-                    }
-                }
+                // Use deduplication method for O(1) lookup
+                let addedCount = addElementsIfNew(elements)
                 if addedCount > 0 {
                     AppLogger.log("[Dashboard] Added \(addedCount) chat elements from claude_message")
                 }
@@ -1119,6 +1185,24 @@ final class DashboardViewModel: ObservableObject {
                 }
                 // Trigger source control refresh
                 Task { await sourceControlViewModel.refresh() }
+            }
+
+        case .sessionWatchStarted:
+            // Server confirmed we're watching a session
+            if case .sessionWatch(let payload) = event.payload,
+               let sessionId = payload.sessionId {
+                isWatchingSession = true
+                watchingSessionId = sessionId
+                AppLogger.log("[Dashboard] Session watch confirmed: \(sessionId)")
+            }
+
+        case .sessionWatchStopped:
+            // Server says we're no longer watching
+            if case .sessionWatch(let payload) = event.payload {
+                let reason = payload.reason ?? "unknown"
+                isWatchingSession = false
+                watchingSessionId = nil
+                AppLogger.log("[Dashboard] Session watch stopped: \(reason)")
             }
 
         default:
@@ -1331,13 +1415,107 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Session Watching
+
+    /// Start watching the currently selected session for real-time updates
+    /// Called automatically when session is loaded or resumed
+    func startWatchingCurrentSession() async {
+        guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else {
+            AppLogger.log("[Dashboard] No session to watch")
+            return
+        }
+
+        // Already watching this session?
+        if isWatchingSession && watchingSessionId == sessionId {
+            AppLogger.log("[Dashboard] Already watching session: \(sessionId)")
+            return
+        }
+
+        // Must be connected
+        guard connectionState.isConnected else {
+            AppLogger.log("[Dashboard] Cannot watch session - not connected")
+            return
+        }
+
+        do {
+            try await webSocketService.watchSession(sessionId)
+            // State will be updated when we receive session_watch_started event
+            AppLogger.log("[Dashboard] Watch request sent for session: \(sessionId)")
+        } catch {
+            AppLogger.error(error, context: "Watch session")
+        }
+    }
+
+    /// Stop watching the current session
+    func stopWatchingSession() async {
+        guard isWatchingSession else { return }
+
+        do {
+            try await webSocketService.unwatchSession()
+            isWatchingSession = false
+            watchingSessionId = nil
+            AppLogger.log("[Dashboard] Stopped watching session")
+        } catch {
+            // Still clear local state even if command fails
+            isWatchingSession = false
+            watchingSessionId = nil
+            AppLogger.error(error, context: "Unwatch session")
+        }
+    }
+
+    /// Trim chat elements to prevent memory bloat
+    /// Removes oldest elements when exceeding maxChatElements
+    private func trimChatElementsIfNeeded() {
+        guard chatElements.count > maxChatElements else { return }
+
+        let removeCount = chatElements.count - maxChatElements
+        let removedElements = Array(chatElements.prefix(removeCount))
+
+        // Remove from deduplication set
+        for element in removedElements {
+            seenElementIds.remove(element.id)
+        }
+
+        // Remove from array
+        chatElements.removeFirst(removeCount)
+        AppLogger.log("[Dashboard] Trimmed \(removeCount) old elements (memory management)")
+    }
+
+    /// Add element with deduplication check
+    /// Returns true if element was added, false if duplicate
+    @discardableResult
+    private func addElementIfNew(_ element: ChatElement) -> Bool {
+        guard !seenElementIds.contains(element.id) else {
+            return false
+        }
+
+        seenElementIds.insert(element.id)
+        chatElements.append(element)
+        trimChatElementsIfNeeded()
+        return true
+    }
+
+    /// Add multiple elements with deduplication
+    /// Returns count of elements actually added
+    @discardableResult
+    private func addElementsIfNew(_ elements: [ChatElement]) -> Int {
+        var addedCount = 0
+        for element in elements {
+            if addElementIfNew(element) {
+                addedCount += 1
+            }
+        }
+        return addedCount
+    }
+
     // MARK: - Workspace Management
 
     /// Switch to a different workspace
     func switchWorkspace(_ workspace: Workspace) async {
         AppLogger.log("[Dashboard] Switching to workspace: \(workspace.name)")
 
-        // Disconnect current connection
+        // Stop watching and disconnect
+        await stopWatchingSession()
         webSocketService.disconnect()
 
         // Don't clear data immediately - let new session data replace it
@@ -1347,6 +1525,7 @@ final class DashboardViewModel: ObservableObject {
         // Clear session tracking so new session will trigger data reload
         userSelectedSessionId = nil
         hasActiveConversation = false
+        seenElementIds.removeAll()
 
         // Update workspace store
         WorkspaceStore.shared.setActive(workspace)
@@ -1372,7 +1551,8 @@ final class DashboardViewModel: ObservableObject {
     func disconnect() async {
         AppLogger.log("[Dashboard] Disconnecting from workspace")
 
-        // Disconnect WebSocket
+        // Stop watching and disconnect
+        await stopWatchingSession()
         webSocketService.disconnect()
 
         // Clear workspace store active
@@ -1380,6 +1560,7 @@ final class DashboardViewModel: ObservableObject {
 
         // Clear state
         await clearLogsAndDiffs()
+        seenElementIds.removeAll()
         connectionState = .disconnected
         claudeState = .idle
     }
@@ -1390,6 +1571,7 @@ final class DashboardViewModel: ObservableObject {
         diffs = []
         chatMessages = []
         chatElements = []
+        seenElementIds.removeAll()
         await logCache.clear()
         await diffCache.clear()
     }

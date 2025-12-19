@@ -12,6 +12,7 @@ enum ElementType: String, Codable {
     case diff = "diff"
     case thinking = "thinking"
     case interrupted = "interrupted"
+    case contextCompaction = "context_compaction"  // Claude Code context window compacted
 }
 
 /// Tool execution status
@@ -81,6 +82,7 @@ enum ElementContent: Codable, Equatable {
     case diff(DiffContent)
     case thinking(ThinkingContent)
     case interrupted(InterruptedContent)
+    case contextCompaction(ContextCompactionContent)
 
     static func decode(from container: KeyedDecodingContainer<ChatElement.CodingKeys>, type: ElementType) throws -> ElementContent {
         let nestedDecoder = try container.superDecoder(forKey: .content)
@@ -100,6 +102,8 @@ enum ElementContent: Codable, Equatable {
             return .thinking(try ThinkingContent(from: nestedDecoder))
         case .interrupted:
             return .interrupted(try InterruptedContent(from: nestedDecoder))
+        case .contextCompaction:
+            return .contextCompaction(try ContextCompactionContent(from: nestedDecoder))
         }
     }
 
@@ -113,6 +117,7 @@ enum ElementContent: Codable, Equatable {
         case .diff(let content): try container.encode(content)
         case .thinking(let content): try container.encode(content)
         case .interrupted(let content): try container.encode(content)
+        case .contextCompaction(let content): try container.encode(content)
         }
     }
 }
@@ -282,6 +287,18 @@ struct InterruptedContent: Codable, Equatable {
     }
 }
 
+/// Context compaction content - shown when Claude Code compacts conversation
+/// This is auto-generated when context window reaches limit
+struct ContextCompactionContent: Codable, Equatable {
+    let summary: String       // The auto-generated summary text
+    var isExpanded: Bool      // Whether to show full summary
+
+    init(summary: String, isExpanded: Bool = false) {
+        self.summary = summary
+        self.isExpanded = isExpanded
+    }
+}
+
 // MARK: - Factory Methods
 
 extension ChatElement {
@@ -346,6 +363,14 @@ extension ChatElement {
         ChatElement(
             type: .thinking,
             content: .thinking(ThinkingContent(text: text))
+        )
+    }
+
+    /// Create context compaction element
+    static func contextCompaction(summary: String) -> ChatElement {
+        ChatElement(
+            type: .contextCompaction,
+            content: .contextCompaction(ContextCompactionContent(summary: summary))
         )
     }
 

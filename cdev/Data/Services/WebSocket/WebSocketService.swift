@@ -45,6 +45,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
 
+    // MARK: - Session Watching State
+
+    /// Currently watched session ID (publicly accessible)
+    @Atomic private var _watchedSessionId: String?
+    var watchedSessionId: String? { _watchedSessionId }
+
     // MARK: - Streams (Broadcast Pattern)
 
     /// Thread-safe storage for multiple state stream subscribers
@@ -490,6 +496,10 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         AppLogger.webSocket("Disconnecting")
         shouldAutoReconnect = false
         stopTimers()
+
+        // Clear watched session state
+        _watchedSessionId = nil
+
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         session?.invalidateAndCancel()
@@ -866,6 +876,68 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Stop timers to save CPU/battery
         stopTimers()
+
+        // Unwatch session when going to background to reduce server load
+        if _watchedSessionId != nil {
+            Task {
+                try? await unwatchSession()
+            }
+        }
+    }
+
+    // MARK: - Session Watching
+
+    /// Watch a session for real-time updates
+    /// - Parameter sessionId: The session ID to watch
+    /// - Throws: Connection or encoding errors
+    func watchSession(_ sessionId: String) async throws {
+        // Already watching this session? Skip
+        guard _watchedSessionId != sessionId else {
+            AppLogger.webSocket("Already watching session: \(sessionId)")
+            return
+        }
+
+        // If watching a different session, unwatch first
+        if _watchedSessionId != nil {
+            try await unwatchSession()
+        }
+
+        // Must be connected
+        guard isConnected else {
+            AppLogger.webSocket("Cannot watch session - not connected", type: .warning)
+            throw AppError.webSocketDisconnected
+        }
+
+        AppLogger.webSocket("Starting watch for session: \(sessionId)")
+        let command = AgentCommand.watchSession(sessionId: sessionId)
+        try await send(command: command)
+
+        // Optimistically set watched session ID
+        // Server will confirm with session_watch_started event
+        _watchedSessionId = sessionId
+    }
+
+    /// Stop watching the current session
+    /// - Throws: Connection or encoding errors
+    func unwatchSession() async throws {
+        guard _watchedSessionId != nil else {
+            AppLogger.webSocket("Not watching any session")
+            return
+        }
+
+        // Clear watched session ID immediately to prevent race conditions
+        let previousSessionId = _watchedSessionId
+        _watchedSessionId = nil
+
+        // Only send unwatch if connected
+        guard isConnected else {
+            AppLogger.webSocket("Cleared local watch state (disconnected)")
+            return
+        }
+
+        AppLogger.webSocket("Stopping watch for session: \(previousSessionId ?? "unknown")")
+        let command = AgentCommand.unwatchSession()
+        try await send(command: command)
     }
 }
 

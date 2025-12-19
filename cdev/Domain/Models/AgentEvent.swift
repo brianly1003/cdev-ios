@@ -15,6 +15,8 @@ enum AgentEventType: String, Codable {
     case gitOperationCompleted = "git_operation_completed"  // Git operation results
     case sessionStart = "session_start"
     case sessionEnd = "session_end"
+    case sessionWatchStarted = "session_watch_started"  // Session watch subscription confirmed
+    case sessionWatchStopped = "session_watch_stopped"  // Session watch subscription ended
     case statusResponse = "status_response"
     case fileContent = "file_content"
     case heartbeat = "heartbeat"
@@ -70,6 +72,7 @@ enum AgentEventPayload: Codable {
     case gitStatusChanged(GitStatusChangedPayload)  // Real-time git status
     case gitOperationCompleted(GitOperationCompletedPayload)  // Git operation result
     case sessionLifecycle(SessionLifecyclePayload)
+    case sessionWatch(SessionWatchPayload)  // Session watch start/stop confirmation
     case statusResponse(StatusResponsePayload)
     case fileContent(FileContentPayload)
     case heartbeat(HeartbeatPayload)
@@ -102,6 +105,8 @@ enum AgentEventPayload: Codable {
             self = .gitStatusChanged(payload)
         } else if let payload = try? container.decode(GitOperationCompletedPayload.self), payload.operation != nil {
             self = .gitOperationCompleted(payload)
+        } else if let payload = try? container.decode(SessionWatchPayload.self), payload.sessionId != nil {
+            self = .sessionWatch(payload)
         } else if let payload = try? container.decode(StatusResponsePayload.self), payload.claudeState != nil {
             self = .statusResponse(payload)
         } else if let payload = try? container.decode(FileContentPayload.self), payload.content != nil {
@@ -139,6 +144,8 @@ enum AgentEventPayload: Codable {
         case .gitOperationCompleted(let payload):
             try container.encode(payload)
         case .sessionLifecycle(let payload):
+            try container.encode(payload)
+        case .sessionWatch(let payload):
             try container.encode(payload)
         case .statusResponse(let payload):
             try container.encode(payload)
@@ -539,6 +546,19 @@ struct SessionLifecyclePayload: Codable {
         case sessionId = "session_id"
         case repoName = "repo_name"
         case repoPath = "repo_path"
+    }
+}
+
+/// Payload for session_watch_started and session_watch_stopped events
+struct SessionWatchPayload: Codable {
+    let sessionId: String?
+    let watching: Bool?  // true for started, false for stopped
+    let reason: String?  // Optional reason for stopped (e.g., "session_ended", "client_request")
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case watching
+        case reason
     }
 }
 

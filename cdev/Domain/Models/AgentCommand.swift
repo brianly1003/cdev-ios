@@ -8,6 +8,8 @@ enum AgentCommandType: String, Codable {
     case respondToClaude = "respond_to_claude"
     case getStatus = "get_status"
     case getFile = "get_file"
+    case watchSession = "watch_session"
+    case unwatchSession = "unwatch_session"
 }
 
 /// Base command structure to agent
@@ -34,6 +36,7 @@ enum AgentCommandPayload: Codable {
     case runClaude(RunClaudePayload)
     case respondToClaude(RespondToClaudePayload)
     case getFile(GetFilePayload)
+    case watchSession(WatchSessionPayload)
     case empty
 
     init(from decoder: Decoder) throws {
@@ -45,6 +48,8 @@ enum AgentCommandPayload: Codable {
             self = .respondToClaude(payload)
         } else if let payload = try? container.decode(GetFilePayload.self) {
             self = .getFile(payload)
+        } else if let payload = try? container.decode(WatchSessionPayload.self) {
+            self = .watchSession(payload)
         } else {
             self = .empty
         }
@@ -58,6 +63,8 @@ enum AgentCommandPayload: Codable {
         case .respondToClaude(let payload):
             try container.encode(payload)
         case .getFile(let payload):
+            try container.encode(payload)
+        case .watchSession(let payload):
             try container.encode(payload)
         case .empty:
             try container.encodeNil()
@@ -114,6 +121,15 @@ struct GetFilePayload: Codable {
     let path: String
 }
 
+/// Payload for watch_session command
+struct WatchSessionPayload: Codable {
+    let sessionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+    }
+}
+
 // MARK: - Factory Methods
 
 extension AgentCommand {
@@ -161,5 +177,18 @@ extension AgentCommand {
             command: .getFile,
             payload: .getFile(GetFilePayload(path: path))
         )
+    }
+
+    /// Create watch_session command to subscribe to real-time session updates
+    static func watchSession(sessionId: String) -> AgentCommand {
+        AgentCommand(
+            command: .watchSession,
+            payload: .watchSession(WatchSessionPayload(sessionId: sessionId))
+        )
+    }
+
+    /// Create unwatch_session command to unsubscribe from session updates
+    static func unwatchSession() -> AgentCommand {
+        AgentCommand(command: .unwatchSession)
     }
 }

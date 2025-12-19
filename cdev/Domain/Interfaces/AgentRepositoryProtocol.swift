@@ -252,6 +252,14 @@ struct SessionMessagesResponse: Codable {
         let timestamp: String?
         let gitBranch: String?
         let message: MessageContent
+        let isContextCompaction: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case type, uuid, timestamp, message
+            case sessionId = "session_id"
+            case gitBranch = "git_branch"
+            case isContextCompaction = "is_context_compaction"
+        }
 
         /// Nested message content
         struct MessageContent: Codable {
