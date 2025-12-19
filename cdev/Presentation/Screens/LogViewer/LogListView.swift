@@ -597,6 +597,12 @@ private struct ElementsScrollView: View {
                 }
                 .onAppear {
                     AppLogger.log("[ElementsScrollView] onAppear - elementsCount=\(elements.count), isLoadingMore=\(isLoadingMore), isVisible=\(isVisible)")
+                    // IMPORTANT: Skip scroll if tab is not visible
+                    // This prevents LazyVStack content disappearing bug - see handleScrollRequest docs
+                    guard isVisible else {
+                        AppLogger.log("[ElementsScrollView] Skipping onAppear scroll - tab not visible")
+                        return
+                    }
                     // Skip auto-scroll if we're in the middle of loading more messages
                     guard !isLoadingMore && !didTriggerLoadMore else {
                         AppLogger.log("[ElementsScrollView] Skipping onAppear scroll during load more")
@@ -753,6 +759,29 @@ private struct ElementsScrollView: View {
     }
 
     /// Handle scroll request from floating toolkit long-press
+    ///
+    /// # Known Issue: LazyVStack + ScrollViewReader Animation Bug (December 2024)
+    ///
+    /// ## Problem
+    /// When using `withAnimation` with `proxy.scrollTo()` on a LazyVStack, the view content
+    /// can disappear completely. This happens because:
+    /// 1. LazyVStack only realizes (renders) content that's visible in the viewport
+    /// 2. Animated scrollTo with certain anchors can cause the scroll position to overshoot
+    /// 3. When scroll overshoots past content bounds, LazyVStack has nothing to render
+    /// 4. Additionally, calling scrollTo when `isVisible=false` (tab not shown) causes issues
+    ///
+    /// ## Solutions Applied
+    /// 1. **Use element IDs instead of anchors**: Scroll to `elements.first?.id` or `elements.last?.id`
+    ///    instead of "top"/"bottom" anchors. This forces content realization.
+    /// 2. **Spring animation with no bounce**: Use `dampingFraction: 1.0` to prevent overshoot
+    /// 3. **Proper anchor selection**: Use `.top` for scroll-to-top, `.bottom` for scroll-to-bottom
+    /// 4. **Check isVisible before scrolling**: Skip scroll in `onAppear` if tab is not visible
+    ///
+    /// ## What Didn't Work
+    /// - Using Color.clear anchors with `.id("bottom")` - LazyVStack doesn't realize content
+    /// - easeInOut animation - can overshoot on long scrolls
+    /// - `.top` anchor for scroll-to-bottom - positions last element at top, can overshoot below
+    ///
     private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
         AppLogger.log("[ElementsScrollView] handleScrollRequest called - direction=\(direction), elementsCount=\(elements.count)")
 
@@ -766,28 +795,38 @@ private struct ElementsScrollView: View {
 
             AppLogger.log("[ElementsScrollView] Executing scroll - direction=\(direction)")
 
-            // Use instant scroll (no animation) to prevent inertia issues with LazyVStack
+            // Use spring animation without bounce to prevent overshoot
+            let scrollAnimation = Animation.spring(response: 0.35, dampingFraction: 1.0, blendDuration: 0)
+
             switch direction {
             case .top:
                 // Scroll to first element to force content realization
                 if let firstId = elements.first?.id {
                     AppLogger.log("[ElementsScrollView] Scrolling to TOP - targetId=\(firstId), anchor=.top")
-                    proxy.scrollTo(firstId, anchor: .top)
+                    withAnimation(scrollAnimation) {
+                        proxy.scrollTo(firstId, anchor: .top)
+                    }
                     AppLogger.log("[ElementsScrollView] scrollTo completed for TOP")
                 } else {
                     AppLogger.log("[ElementsScrollView] WARNING: No first element, using 'top' anchor")
-                    proxy.scrollTo("top", anchor: .top)
+                    withAnimation(scrollAnimation) {
+                        proxy.scrollTo("top", anchor: .top)
+                    }
                 }
 
             case .bottom:
-                // Scroll to last element to force content realization
+                // Scroll to last element with .bottom anchor (natural for scroll-to-bottom)
                 if let lastId = elements.last?.id {
-                    AppLogger.log("[ElementsScrollView] Scrolling to BOTTOM - targetId=\(lastId), anchor=.top, elementsCount=\(elements.count)")
-                    proxy.scrollTo(lastId, anchor: .top)
+                    AppLogger.log("[ElementsScrollView] Scrolling to BOTTOM - targetId=\(lastId), anchor=.bottom, elementsCount=\(elements.count)")
+                    withAnimation(scrollAnimation) {
+                        proxy.scrollTo(lastId, anchor: .bottom)
+                    }
                     AppLogger.log("[ElementsScrollView] scrollTo completed for BOTTOM")
                 } else {
                     AppLogger.log("[ElementsScrollView] WARNING: No last element, using 'bottom' anchor")
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                    withAnimation(scrollAnimation) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                 }
             }
 
