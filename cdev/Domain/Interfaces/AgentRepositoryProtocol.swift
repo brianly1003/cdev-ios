@@ -20,11 +20,49 @@ protocol AgentRepositoryProtocol {
     /// Get file content
     func getFile(path: String) async throws -> FileContentPayload
 
-    /// Get git status
+    /// Get git status (basic format)
     func getGitStatus() async throws -> GitStatusResponse
+
+    /// Get git status (enhanced format with staged/unstaged/untracked arrays)
+    /// This is the preferred method for Source Control features
+    func getGitStatusExtended() async throws -> GitStatusExtendedResponse
 
     /// Get git diff for file
     func getGitDiff(file: String?) async throws -> [GitDiffPayload]
+
+    // MARK: - Git Operations (Source Control)
+
+    /// Stage files for commit
+    /// - Returns: Operation response with staged count
+    @discardableResult
+    func gitStage(paths: [String]) async throws -> GitOperationResponse
+
+    /// Unstage files
+    /// - Returns: Operation response with unstaged count
+    @discardableResult
+    func gitUnstage(paths: [String]) async throws -> GitOperationResponse
+
+    /// Discard changes in files
+    /// - Returns: Operation response with discarded count
+    @discardableResult
+    func gitDiscard(paths: [String]) async throws -> GitOperationResponse
+
+    /// Commit staged changes
+    /// - Returns: Commit response with SHA and details
+    @discardableResult
+    func gitCommit(message: String, push: Bool) async throws -> GitCommitResponse
+
+    /// Push to remote
+    /// - Returns: Sync response with push details
+    @discardableResult
+    func gitPush() async throws -> GitSyncResponse
+
+    /// Pull from remote
+    /// - Returns: Sync response with pull details
+    @discardableResult
+    func gitPull() async throws -> GitSyncResponse
+
+    // MARK: - Sessions
 
     /// Get list of available Claude sessions (paginated)
     /// - Parameters:

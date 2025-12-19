@@ -5,112 +5,139 @@ import SwiftUI
 struct DashboardView: View {
     @StateObject var viewModel: DashboardViewModel
     @State private var showSettings = false
+    @State private var showDebugLogs = false
+
+    /// Toolkit items - Easy to extend! Just add more .add() calls
+    /// See PredefinedTool enum for available tools, or use .addCustom() for new ones
+    private var toolkitItems: [ToolkitItem] {
+        ToolkitBuilder()
+            .add(.debugLogs { showDebugLogs = true })
+            .add(.refresh { Task { await viewModel.refreshStatus() } })
+            .add(.copySessionId(sessionId: viewModel.agentStatus.sessionId))
+            .add(.clearLogs {
+                Task { await viewModel.clearLogs() }
+                DebugLogStore.shared.clear()
+            })
+            .build()
+    }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Compact status bar
-                StatusBarView(
-                    connectionState: viewModel.connectionState,
-                    claudeState: viewModel.claudeState,
-                    repoName: viewModel.agentStatus.repoName,
-                    sessionId: viewModel.agentStatus.sessionId
-                )
-
-                // Pending interaction banner (if any)
-                if let interaction = viewModel.pendingInteraction {
-                    InteractionBanner(
-                        interaction: interaction,
-                        onApprove: { Task { await viewModel.approvePermission() } },
-                        onDeny: { Task { await viewModel.denyPermission() } },
-                        onAnswer: { response in Task { await viewModel.answerQuestion(response) } }
+        ZStack {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    // Compact status bar
+                    StatusBarView(
+                        connectionState: viewModel.connectionState,
+                        claudeState: viewModel.claudeState,
+                        repoName: viewModel.agentStatus.repoName,
+                        sessionId: viewModel.agentStatus.sessionId
                     )
-                }
 
-                // Tab selector
-                CompactTabSelector(
-                    selectedTab: $viewModel.selectedTab,
-                    logsCount: viewModel.logsCountForBadge,
-                    diffsCount: viewModel.diffs.count
-                )
-
-                // Content - tap to dismiss keyboard
-                TabView(selection: $viewModel.selectedTab) {
-                    LogListView(
-                        logs: viewModel.logs,
-                        elements: viewModel.chatElements,  // NEW: Elements API UI
-                        onClear: { Task { await viewModel.clearLogs() } },
-                        isVisible: viewModel.selectedTab == .logs
-                    )
-                    .tag(DashboardTab.logs)
-
-                    DiffListView(
-                        diffs: viewModel.diffs,
-                        onClear: { Task { await viewModel.clearDiffs() } },
-                        onRefresh: { await viewModel.refreshGitStatus() }
-                    )
-                    .tag(DashboardTab.diffs)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .dismissKeyboardOnTap()
-                .background(ColorSystem.terminalBg)
-                // Use safeAreaInset so ScrollView accounts for action bar height
-                .safeAreaInset(edge: .bottom) {
-                    if viewModel.selectedTab == .logs {
-                        ActionBarView(
-                            claudeState: viewModel.claudeState,
-                            promptText: $viewModel.promptText,
-                            isLoading: viewModel.isLoading,
-                            onSend: { Task { await viewModel.sendPrompt() } },
-                            onStop: { Task { await viewModel.stopClaude() } }
+                    // Pending interaction banner (if any)
+                    if let interaction = viewModel.pendingInteraction {
+                        InteractionBanner(
+                            interaction: interaction,
+                            onApprove: { Task { await viewModel.approvePermission() } },
+                            onDeny: { Task { await viewModel.denyPermission() } },
+                            onAnswer: { response in Task { await viewModel.answerQuestion(response) } }
                         )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                }
-            }
-            .background(ColorSystem.terminalBg)
-            .animation(Animations.stateChange, value: viewModel.selectedTab)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("cdev")
-                        .font(Typography.title3)
-                        .fontWeight(.bold)
-                }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
+                    // Tab selector
+                    CompactTabSelector(
+                        selectedTab: $viewModel.selectedTab,
+                        logsCount: viewModel.logsCountForBadge,
+                        diffsCount: viewModel.sourceControlViewModel.state.totalCount
+                    )
+
+                    // Content - tap to dismiss keyboard
+                    TabView(selection: $viewModel.selectedTab) {
+                        LogListView(
+                            logs: viewModel.logs,
+                            elements: viewModel.chatElements,  // NEW: Elements API UI
+                            onClear: { Task { await viewModel.clearLogs() } },
+                            isVisible: viewModel.selectedTab == .logs
+                        )
+                        .tag(DashboardTab.logs)
+
+                        // Source Control (Mini Repo Management)
+                        SourceControlView(
+                            viewModel: viewModel.sourceControlViewModel,
+                            onRefresh: {
+                                await viewModel.sourceControlViewModel.refresh()
+                            }
+                        )
+                        .tag(DashboardTab.diffs)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .dismissKeyboardOnTap()
+                    .background(ColorSystem.terminalBg)
+                    // Use safeAreaInset so ScrollView accounts for action bar height
+                    .safeAreaInset(edge: .bottom) {
+                        if viewModel.selectedTab == .logs {
+                            ActionBarView(
+                                claudeState: viewModel.claudeState,
+                                promptText: $viewModel.promptText,
+                                isLoading: viewModel.isLoading,
+                                onSend: { Task { await viewModel.sendPrompt() } },
+                                onStop: { Task { await viewModel.stopClaude() } }
+                            )
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
                     }
                 }
+                .background(ColorSystem.terminalBg)
+                .animation(Animations.stateChange, value: viewModel.selectedTab)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Text("cdev")
+                            .font(Typography.title3)
+                            .fontWeight(.bold)
+                    }
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                    }
+                }
+                .sheet(isPresented: $showDebugLogs) {
+                    AdminToolsView()
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                }
+                .sheet(isPresented: $showSettings) {
+                    SettingsView()
+                }
+                .sheet(isPresented: $viewModel.showSessionPicker) {
+                    SessionPickerView(
+                        sessions: viewModel.sessions,
+                        currentSessionId: viewModel.agentStatus.sessionId,
+                        hasMore: viewModel.sessionsHasMore,
+                        isLoadingMore: viewModel.isLoadingMoreSessions,
+                        agentRepository: viewModel.agentRepository,
+                        onSelect: { sessionId in
+                            Task { await viewModel.resumeSession(sessionId) }
+                        },
+                        onDelete: { sessionId in
+                            Task { await viewModel.deleteSession(sessionId) }
+                        },
+                        onDeleteAll: {
+                            Task { await viewModel.deleteAllSessions() }
+                        },
+                        onLoadMore: {
+                            Task { await viewModel.loadMoreSessions() }
+                        },
+                        onDismiss: { viewModel.showSessionPicker = false }
+                    )
+                }
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-            }
-            .sheet(isPresented: $viewModel.showSessionPicker) {
-                SessionPickerView(
-                    sessions: viewModel.sessions,
-                    currentSessionId: viewModel.agentStatus.sessionId,
-                    hasMore: viewModel.sessionsHasMore,
-                    isLoadingMore: viewModel.isLoadingMoreSessions,
-                    agentRepository: viewModel.agentRepository,
-                    onSelect: { sessionId in
-                        Task { await viewModel.resumeSession(sessionId) }
-                    },
-                    onDelete: { sessionId in
-                        Task { await viewModel.deleteSession(sessionId) }
-                    },
-                    onDeleteAll: {
-                        Task { await viewModel.deleteAllSessions() }
-                    },
-                    onLoadMore: {
-                        Task { await viewModel.loadMoreSessions() }
-                    },
-                    onDismiss: { viewModel.showSessionPicker = false }
-                )
-            }
+
+            // Floating toolkit button (AssistiveTouch-style)
+            FloatingToolkitButton(items: toolkitItems)
         }
         .errorAlert($viewModel.error)
         .task {

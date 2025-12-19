@@ -98,8 +98,51 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     deinit {
-        stopNetworkMonitor()
+        cleanupAllResources()
+    }
+
+    // MARK: - Resource Cleanup
+
+    /// Complete cleanup of all resources to prevent memory leaks
+    private func cleanupAllResources() {
+        // Stop all timers
         stopTimers()
+
+        // Stop network monitoring
+        stopNetworkMonitor()
+
+        // Cancel WebSocket and session
+        webSocket?.cancel(with: .goingAway, reason: nil)
+        webSocket = nil
+        session?.invalidateAndCancel()
+        session = nil
+
+        // Finish all stream continuations to release subscribers
+        finishAllContinuations()
+
+        // Clear state
+        connectionInfo = nil
+        shouldAutoReconnect = false
+        isReconnecting = false
+    }
+
+    /// Finish all async stream continuations to allow subscribers to be released
+    private func finishAllContinuations() {
+        // Finish state stream continuations
+        continuationsLock.lock()
+        for continuation in stateStreamContinuations.values {
+            continuation.finish()
+        }
+        stateStreamContinuations.removeAll()
+        continuationsLock.unlock()
+
+        // Finish event stream continuations
+        eventContinuationsLock.lock()
+        for continuation in eventStreamContinuations.values {
+            continuation.finish()
+        }
+        eventStreamContinuations.removeAll()
+        eventContinuationsLock.unlock()
     }
 
     // MARK: - Network Monitoring
@@ -340,13 +383,38 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             return "Server not reachable"
         case -1001: // kCFURLErrorTimedOut
             return "Connection timed out"
+        case -1005: // kCFURLErrorNetworkConnectionLost / Connection interrupted
+            return "Connection interrupted"
         case -1009: // kCFURLErrorNotConnectedToInternet
             return "No internet connection"
-        case 61: // Connection refused
+        case -1018: // kCFURLErrorInternationalRoamingOff
+            return "Roaming disabled"
+        case -1020: // kCFURLErrorDataNotAllowed
+            return "Data not allowed"
+        case 53: // ECONNABORTED - Software caused connection abort
+            return "Connection aborted"
+        case 54: // ECONNRESET - Connection reset by peer
+            return "Connection reset"
+        case 57: // ENOTCONN - Socket is not connected
+            return "Socket disconnected"
+        case 61: // ECONNREFUSED - Connection refused
             return "Connection refused - is the server running?"
         default:
             return nsError.localizedDescription
         }
+    }
+
+    /// Check if error is a transient connection issue that should trigger silent reconnection
+    private static func isTransientConnectionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        let transientCodes = [
+            -1005, // Connection interrupted
+            -1001, // Timed out
+            53,    // Connection aborted
+            54,    // Connection reset
+            57,    // Socket disconnected
+        ]
+        return transientCodes.contains(nsError.code)
     }
 
     func disconnect() {
@@ -614,14 +682,22 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         let errorMessage = Self.friendlyErrorMessage(from: error)
+        let isTransient = Self.isTransientConnectionError(error)
 
         switch connectionState {
         case .connected:
-            updateState(.failed(reason: errorMessage))
-            // Attempt reconnect only if was connected and auto-reconnect is enabled
-            if shouldAutoReconnect {
+            // For transient errors, go directly to reconnecting state (less alarming to user)
+            if isTransient && shouldAutoReconnect {
+                AppLogger.webSocket("Transient disconnect: \(errorMessage) - reconnecting silently")
                 Task {
                     try? await reconnect()
+                }
+            } else {
+                updateState(.failed(reason: errorMessage))
+                if shouldAutoReconnect {
+                    Task {
+                        try? await reconnect()
+                    }
                 }
             }
         case .connecting:
@@ -642,9 +718,17 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     func handleAppDidBecomeActive() {
         AppLogger.webSocket("App became active - checking connection")
 
+        // Re-enable auto-reconnect when app becomes active
+        if connectionInfo != nil {
+            shouldAutoReconnect = true
+        }
+
         Task {
             switch connectionState {
             case .connected:
+                // Restart timers that were stopped on background
+                startTimers()
+
                 // Verify connection is still alive
                 let success = try? await ping()
                 if success != true {
@@ -666,11 +750,18 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
     }
 
-    /// Called when app enters background - prepare for potential disconnection
+    /// Called when app enters background - stop reconnection attempts to save resources
     func handleAppWillResignActive() {
-        AppLogger.webSocket("App will resign active")
-        // Note: iOS will keep the connection alive briefly, but we should be
-        // prepared to reconnect when foregrounding
+        AppLogger.webSocket("App will resign active - pausing reconnection")
+
+        // Stop reconnection attempts when app goes to background
+        shouldAutoReconnect = false
+
+        // Cancel any pending reconnection
+        isReconnecting = false
+
+        // Stop timers to save CPU/battery
+        stopTimers()
     }
 }
 

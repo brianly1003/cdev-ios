@@ -11,6 +11,8 @@ enum AgentEventType: String, Codable {
     case claudeSessionInfo = "claude_session_info"
     case fileChanged = "file_changed"
     case gitDiff = "git_diff"
+    case gitStatusChanged = "git_status_changed"  // Real-time git status updates
+    case gitOperationCompleted = "git_operation_completed"  // Git operation results
     case sessionStart = "session_start"
     case sessionEnd = "session_end"
     case statusResponse = "status_response"
@@ -65,6 +67,8 @@ enum AgentEventPayload: Codable {
     case claudeSessionInfo(ClaudeSessionInfoPayload)
     case fileChanged(FileChangedPayload)
     case gitDiff(GitDiffPayload)
+    case gitStatusChanged(GitStatusChangedPayload)  // Real-time git status
+    case gitOperationCompleted(GitOperationCompletedPayload)  // Git operation result
     case sessionLifecycle(SessionLifecyclePayload)
     case statusResponse(StatusResponsePayload)
     case fileContent(FileContentPayload)
@@ -94,6 +98,10 @@ enum AgentEventPayload: Codable {
             self = .fileChanged(payload)
         } else if let payload = try? container.decode(GitDiffPayload.self), payload.diff != nil {
             self = .gitDiff(payload)
+        } else if let payload = try? container.decode(GitStatusChangedPayload.self), payload.branch != nil {
+            self = .gitStatusChanged(payload)
+        } else if let payload = try? container.decode(GitOperationCompletedPayload.self), payload.operation != nil {
+            self = .gitOperationCompleted(payload)
         } else if let payload = try? container.decode(StatusResponsePayload.self), payload.claudeState != nil {
             self = .statusResponse(payload)
         } else if let payload = try? container.decode(FileContentPayload.self), payload.content != nil {
@@ -125,6 +133,10 @@ enum AgentEventPayload: Codable {
         case .fileChanged(let payload):
             try container.encode(payload)
         case .gitDiff(let payload):
+            try container.encode(payload)
+        case .gitStatusChanged(let payload):
+            try container.encode(payload)
+        case .gitOperationCompleted(let payload):
             try container.encode(payload)
         case .sessionLifecycle(let payload):
             try container.encode(payload)
@@ -456,6 +468,48 @@ struct GitDiffPayload: Codable {
         case additions
         case deletions
         case isNew = "is_new"
+    }
+}
+
+/// WebSocket event payload for git_status_changed
+/// Emitted when git status changes (file modified, staged, etc.)
+struct GitStatusChangedPayload: Codable {
+    let branch: String?
+    let ahead: Int?
+    let behind: Int?
+    let stagedCount: Int?
+    let unstagedCount: Int?
+    let untrackedCount: Int?
+    let hasConflicts: Bool?
+    let changedFiles: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case branch
+        case ahead
+        case behind
+        case stagedCount = "staged_count"
+        case unstagedCount = "unstaged_count"
+        case untrackedCount = "untracked_count"
+        case hasConflicts = "has_conflicts"
+        case changedFiles = "changed_files"
+    }
+}
+
+/// WebSocket event payload for git_operation_completed
+/// Emitted when a git operation (commit, push, pull) completes
+struct GitOperationCompletedPayload: Codable {
+    let operation: String?  // "commit", "push", "pull", "stage", "unstage", "checkout"
+    let success: Bool?
+    let sha: String?        // For commits
+    let message: String?    // Operation result message
+    let error: String?      // Error message if failed
+
+    enum CodingKeys: String, CodingKey {
+        case operation
+        case success
+        case sha
+        case message
+        case error
     }
 }
 

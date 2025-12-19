@@ -26,6 +26,9 @@ final class DashboardViewModel: ObservableObject {
     // Chat Elements (Elements API style - sophisticated UI)
     @Published var chatElements: [ChatElement] = []
 
+    // Source Control (Mini Repo Management)
+    @Published var sourceControlViewModel: SourceControlViewModel!
+
     /// Log count excluding system messages (for badge display)
     /// System messages like "Started new session" are still shown but not counted
     var logsCountForBadge: Int {
@@ -101,6 +104,9 @@ final class DashboardViewModel: ObservableObject {
         self.sessionRepository = sessionRepository
         self.logCache = logCache
         self.diffCache = diffCache
+
+        // Initialize Source Control ViewModel
+        self.sourceControlViewModel = SourceControlViewModel(agentRepository: agentRepository)
 
         // Load persisted session ID from storage and initialize agentStatus
         self.userSelectedSessionId = sessionRepository.selectedSessionId
@@ -600,6 +606,10 @@ final class DashboardViewModel: ObservableObject {
 
     /// Refresh git status from API
     func refreshGitStatus() async {
+        // Refresh source control view
+        await sourceControlViewModel.refresh()
+
+        // Also update legacy diff cache for backward compatibility
         do {
             let gitStatus = try await _agentRepository.getGitStatus()
             // Clear existing entries and add fresh ones from API
@@ -854,6 +864,27 @@ final class DashboardViewModel: ObservableObject {
             if case .error(let payload) = event.payload,
                let message = payload.message {
                 error = .commandFailed(reason: message)
+            }
+
+        case .gitStatusChanged:
+            // Refresh source control when git status changes
+            if case .gitStatusChanged(let payload) = event.payload {
+                AppLogger.log("[Dashboard] Git status changed - branch: \(payload.branch ?? "?"), staged: \(payload.stagedCount ?? 0), unstaged: \(payload.unstagedCount ?? 0)")
+                // Trigger source control refresh
+                Task { await sourceControlViewModel.refresh() }
+            }
+
+        case .gitOperationCompleted:
+            // Refresh source control after git operations complete
+            if case .gitOperationCompleted(let payload) = event.payload {
+                let op = payload.operation ?? "unknown"
+                let success = payload.success ?? false
+                AppLogger.log("[Dashboard] Git operation completed - \(op): \(success ? "success" : "failed")")
+                if !success, let error = payload.error {
+                    self.error = .commandFailed(reason: "Git \(op) failed: \(error)")
+                }
+                // Trigger source control refresh
+                Task { await sourceControlViewModel.refresh() }
             }
 
         default:

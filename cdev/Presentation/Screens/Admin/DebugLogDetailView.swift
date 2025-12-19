@@ -463,14 +463,17 @@ private struct CollapsibleCodeBlock: View {
             }
             .buttonStyle(.plain)
 
-            // Content
+            // Content - vertical scroll only, with word wrap
             if isExpanded {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ScrollView(.vertical, showsIndicators: true) {
                     Text(content)
                         .font(Typography.terminalSmall)
                         .foregroundStyle(ColorSystem.accent)
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)  // Enable word wrap
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: 400) // Limit height to prevent infinite expansion
                 .padding(Spacing.xs)
                 .background(ColorSystem.terminalBg)
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
@@ -491,8 +494,13 @@ private struct CopiedToast: View {
         .padding(.horizontal, Spacing.md)
         .padding(.vertical, Spacing.sm)
         .background(ColorSystem.terminalBgElevated)
+        .overlay(
+            Capsule()
+                .stroke(ColorSystem.primary.opacity(0.3), lineWidth: 1)
+        )
         .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.3), radius: 8)
+        .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 4)
+        .shadow(color: ColorSystem.primary.opacity(0.2), radius: 8, x: 0, y: 2)
         .padding(.bottom, Spacing.md)
     }
 }

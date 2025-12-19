@@ -125,6 +125,10 @@ final class AgentRepository: AgentRepositoryProtocol {
         try await httpService.get(path: "/api/git/status", queryItems: nil)
     }
 
+    func getGitStatusExtended() async throws -> GitStatusExtendedResponse {
+        try await httpService.get(path: "/api/git/status", queryItems: nil)
+    }
+
     func getGitDiff(file: String?) async throws -> [GitDiffPayload] {
         if let file = file {
             // Single file request - API returns single object
@@ -135,6 +139,42 @@ final class AgentRepository: AgentRepositoryProtocol {
             // All files request - API returns array
             return try await httpService.get(path: "/api/git/diff", queryItems: nil)
         }
+    }
+
+    // MARK: - Git Operations (Source Control)
+
+    @discardableResult
+    func gitStage(paths: [String]) async throws -> GitOperationResponse {
+        let body = GitStageRequest(paths: paths)
+        return try await httpService.post(path: "/api/git/stage", body: body)
+    }
+
+    @discardableResult
+    func gitUnstage(paths: [String]) async throws -> GitOperationResponse {
+        let body = GitUnstageRequest(paths: paths)
+        return try await httpService.post(path: "/api/git/unstage", body: body)
+    }
+
+    @discardableResult
+    func gitDiscard(paths: [String]) async throws -> GitOperationResponse {
+        let body = GitDiscardRequest(paths: paths)
+        return try await httpService.post(path: "/api/git/discard", body: body)
+    }
+
+    @discardableResult
+    func gitCommit(message: String, push: Bool) async throws -> GitCommitResponse {
+        let body = GitCommitRequest(message: message, push: push)
+        return try await httpService.post(path: "/api/git/commit", body: body)
+    }
+
+    @discardableResult
+    func gitPush() async throws -> GitSyncResponse {
+        try await httpService.post(path: "/api/git/push", body: EmptyBody())
+    }
+
+    @discardableResult
+    func gitPull() async throws -> GitSyncResponse {
+        try await httpService.post(path: "/api/git/pull", body: EmptyBody())
     }
 
     // MARK: - Sessions

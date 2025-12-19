@@ -150,6 +150,9 @@ enum ColorSystem {
         static let modified = ColorSystem.warning
         static let deleted = ColorSystem.error
         static let renamed = ColorSystem.primary
+        static let untracked = ColorSystem.success  // Same as created (green)
+        static let added = ColorSystem.success      // Staged new file
+        static let conflict = ColorSystem.error     // Merge conflicts
 
         static func color(for type: FileChangeType?) -> Color {
             guard let type = type else { return ColorSystem.textSecondary }
@@ -158,6 +161,21 @@ enum ColorSystem {
             case .modified: return modified
             case .deleted: return deleted
             case .renamed: return renamed
+            }
+        }
+
+        /// Color for GitFileStatus
+        static func color(for status: GitFileStatus) -> Color {
+            switch status {
+            case .modified: return modified
+            case .added: return added
+            case .deleted: return deleted
+            case .renamed: return renamed
+            case .untracked: return untracked
+            case .unmerged: return conflict
+            case .copied: return ColorSystem.info
+            case .ignored: return ColorSystem.textQuaternary
+            case .typeChanged: return modified
             }
         }
     }
