@@ -52,6 +52,11 @@ final class DashboardViewModel: ObservableObject {
     @Published var isWatchingSession: Bool = false
     @Published var watchingSessionId: String?
 
+    // Terminal Search State
+    let terminalSearchState = TerminalSearchState()
+    private var searchDebounceTask: Task<Void, Never>?
+    private var searchStateCancellable: AnyCancellable?
+
     // Sessions (for /resume command)
     @Published var sessions: [SessionsResponse.SessionInfo] = []
     @Published var showSessionPicker: Bool = false
@@ -157,6 +162,14 @@ final class DashboardViewModel: ObservableObject {
         // Initialize with current connection state
         self.connectionState = webSocketService.connectionState
         AppLogger.log("[DashboardViewModel] init - connectionState: \(connectionState), starting listeners")
+
+        // Forward search state changes to trigger view re-renders
+        // (Nested ObservableObjects don't propagate changes automatically)
+        searchStateCancellable = terminalSearchState.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
 
         startListening()
 
@@ -1415,6 +1428,36 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Terminal Search
+
+    /// Perform search with debounce
+    func performSearch() {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = Task { @MainActor in
+            // Debounce: 150ms delay
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+
+            let searchText = terminalSearchState.searchText
+            let filters = terminalSearchState.activeFilters
+
+            // Find matching elements
+            let matchingIds = chatElements
+                .filter { $0.matches(searchText: searchText, filters: filters) }
+                .map { $0.id }
+
+            terminalSearchState.matchingElementIds = matchingIds
+            terminalSearchState.currentMatchIndex = 0
+
+            AppLogger.log("[Search] Found \(matchingIds.count) matches for '\(searchText)' with \(filters.count) filters")
+        }
+    }
+
+    /// Scroll to current search match
+    func scrollToCurrentMatch() -> String? {
+        return terminalSearchState.currentMatchId
+    }
+
     // MARK: - Session Watching
 
     /// Start watching the currently selected session for real-time updates
@@ -1439,7 +1482,10 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             try await webSocketService.watchSession(sessionId)
-            // State will be updated when we receive session_watch_started event
+            // Optimistic UI update - show LIVE indicator immediately
+            // Server will confirm with session_watch_started event
+            isWatchingSession = true
+            watchingSessionId = sessionId
             AppLogger.log("[Dashboard] Watch request sent for session: \(sessionId)")
         } catch {
             AppLogger.error(error, context: "Watch session")

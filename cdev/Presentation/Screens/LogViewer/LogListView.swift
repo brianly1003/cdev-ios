@@ -16,10 +16,15 @@ struct LogListView: View {
     var isLoadingMore: Bool = false
     var onLoadMore: (() async -> Void)?
 
+    // Search state - individual values for reactivity
+    var searchText: String = ""
+    var matchingElementIds: [String] = []
+    var currentMatchIndex: Int = 0
+
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
@@ -30,6 +35,9 @@ struct LogListView: View {
         self.hasMoreMessages = hasMoreMessages
         self.isLoadingMore = isLoadingMore
         self.onLoadMore = onLoadMore
+        self.searchText = searchText
+        self.matchingElementIds = matchingElementIds
+        self.currentMatchIndex = currentMatchIndex
     }
 
     var body: some View {
@@ -72,7 +80,10 @@ struct LogListView: View {
             streamingStartTime: streamingStartTime,
             hasMoreMessages: hasMoreMessages,
             isLoadingMore: isLoadingMore,
-            onLoadMore: onLoadMore
+            onLoadMore: onLoadMore,
+            searchText: searchText,
+            matchingElementIds: matchingElementIds,
+            currentMatchIndex: currentMatchIndex
         )
     }
 
@@ -499,9 +510,25 @@ private struct ElementsScrollView: View {
     let isLoadingMore: Bool
     let onLoadMore: (() async -> Void)?
 
+    // Search support - pass values directly for reactivity
+    var searchText: String = ""
+    var matchingElementIds: [String] = []
+    var currentMatchIndex: Int = 0
+
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
     @State private var didTriggerLoadMore = false  // Track if we triggered load more (persists across re-renders)
+
+    /// Current highlighted element ID
+    private var currentMatchId: String? {
+        guard !matchingElementIds.isEmpty, currentMatchIndex < matchingElementIds.count else { return nil }
+        return matchingElementIds[currentMatchIndex]
+    }
+
+    /// Check if an element is a search match
+    private func isMatch(_ element: ChatElement) -> Bool {
+        matchingElementIds.contains(element.id)
+    }
 
     var body: some View {
         let _ = AppLogger.log("[ElementsScrollView] Rendering \(elements.count) elements, isStreaming=\(isStreaming), hasMore=\(hasMoreMessages)")
@@ -516,8 +543,14 @@ private struct ElementsScrollView: View {
                         }
 
                         ForEach(elements) { element in
-                            ElementView(element: element, showTimestamp: showTimestamps)
-                                .id(element.id)
+                            ElementView(
+                                element: element,
+                                showTimestamp: showTimestamps,
+                                searchText: searchText,
+                                isCurrentMatch: element.id == currentMatchId,
+                                isMatch: isMatch(element)
+                            )
+                            .id(element.id)
                         }
 
                         // Extra padding at bottom when streaming indicator is visible
@@ -589,6 +622,12 @@ private struct ElementsScrollView: View {
                     guard streaming else { return }
                     scheduleScroll(proxy: proxy, animated: true)
                 }
+                .onChange(of: currentMatchIndex) { _, _ in
+                    // Scroll to current search match
+                    if let matchId = currentMatchId {
+                        scrollToMatch(proxy: proxy, matchId: matchId)
+                    }
+                }
             }
 
             // Streaming indicator - fixed at bottom
@@ -650,6 +689,19 @@ private struct ElementsScrollView: View {
             // Scroll to bottom to adjust content position
             withAnimation(.easeOut(duration: 0.15)) {
                 proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    /// Scroll to a specific search match
+    private func scrollToMatch(proxy: ScrollViewProxy, matchId: String) {
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms debounce
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeInOut(duration: 0.3)) {
+                proxy.scrollTo(matchId, anchor: .center)
             }
         }
     }

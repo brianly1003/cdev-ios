@@ -7,10 +7,16 @@ import SwiftUI
 struct ElementView: View {
     let element: ChatElement
     let showTimestamp: Bool
+    var searchText: String = ""
+    var isCurrentMatch: Bool = false
+    var isMatch: Bool = false
 
-    init(element: ChatElement, showTimestamp: Bool = false) {
+    init(element: ChatElement, showTimestamp: Bool = false, searchText: String = "", isCurrentMatch: Bool = false, isMatch: Bool = false) {
         self.element = element
         self.showTimestamp = showTimestamp
+        self.searchText = searchText
+        self.isCurrentMatch = isCurrentMatch
+        self.isMatch = isMatch
     }
 
     var body: some View {
@@ -30,28 +36,48 @@ struct ElementView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(minHeight: 20)
+        // Highlight background for search matches
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(matchBackgroundColor)
+        )
+        // Border for current match
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(isCurrentMatch ? ColorSystem.warning : .clear, lineWidth: 2)
+        )
+    }
+
+    /// Background color for search matches
+    private var matchBackgroundColor: Color {
+        if isCurrentMatch {
+            return ColorSystem.warning.opacity(0.2)
+        } else if isMatch {
+            return ColorSystem.warning.opacity(0.08)
+        }
+        return .clear
     }
 
     @ViewBuilder
     private var elementContent: some View {
         switch element.content {
         case .userInput(let content):
-            UserInputElementView(content: content)
+            UserInputElementView(content: content, searchText: searchText)
 
         case .assistantText(let content):
-            AssistantTextElementView(content: content)
+            AssistantTextElementView(content: content, searchText: searchText)
 
         case .toolCall(let content):
-            ToolCallElementView(content: content)
+            ToolCallElementView(content: content, searchText: searchText)
 
         case .toolResult(let content):
-            ToolResultElementView(content: content)
+            ToolResultElementView(content: content, searchText: searchText)
 
         case .diff(let content):
             DiffElementView(content: content)
 
         case .thinking(let content):
-            ThinkingElementView(content: content)
+            ThinkingElementView(content: content, searchText: searchText)
 
         case .interrupted(let content):
             InterruptedElementView(content: content)
@@ -73,6 +99,7 @@ struct ElementView: View {
 /// User prompt display: > user text
 struct UserInputElementView: View {
     let content: UserInputContent
+    var searchText: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xxs) {
@@ -82,12 +109,20 @@ struct UserInputElementView: View {
                 .foregroundStyle(ColorSystem.Log.user)
                 .fontWeight(.bold)
 
-            // User text
-            Text(content.text)
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.Log.user)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            // User text with optional search highlighting
+            if searchText.isEmpty {
+                Text(content.text)
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.Log.user)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HighlightedText(content.text, highlighting: searchText)
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.Log.user)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Spacer(minLength: 0)
         }
@@ -102,6 +137,7 @@ struct UserInputElementView: View {
 /// Parses <thinking> tags and renders markdown
 struct AssistantTextElementView: View {
     let content: AssistantTextContent
+    var searchText: String = ""
 
     /// Parsed segments from content (thinking blocks and regular text)
     private var segments: [TextSegment] {
@@ -132,10 +168,10 @@ struct AssistantTextElementView: View {
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                     switch segment {
                     case .thinking(let text):
-                        InlineThinkingView(text: text)
+                        InlineThinkingView(text: text, searchText: searchText)
                     case .text(let text):
                         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            MarkdownTextView(text: text)
+                            MarkdownTextView(text: text, searchText: searchText)
                         }
                     }
                 }
@@ -205,6 +241,7 @@ private enum TextSegment {
 /// Inline collapsible thinking block (within assistant text)
 private struct InlineThinkingView: View {
     let text: String
+    var searchText: String = ""
     @State private var isExpanded = false
 
     var body: some View {
@@ -235,56 +272,102 @@ private struct InlineThinkingView: View {
             }
             .buttonStyle(.plain)
 
-            // Expanded content
+            // Expanded content with search highlighting
             if isExpanded {
-                Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textTertiary)
-                    .italic()
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, Spacing.xs)
-                    .padding(.vertical, 4)
-                    .background(ColorSystem.terminalBgHighlight)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                Group {
+                    if searchText.isEmpty {
+                        Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    } else {
+                        HighlightedText(text.trimmingCharacters(in: .whitespacesAndNewlines), highlighting: searchText)
+                    }
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+                .italic()
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Spacing.xs)
+                .padding(.vertical, 4)
+                .background(ColorSystem.terminalBgHighlight)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
 }
 
-/// Markdown-enabled text view with heading support
+/// Markdown-enabled text view with heading and code block support
 private struct MarkdownTextView: View {
     let text: String
+    var searchText: String = ""
 
-    /// Parsed lines with heading detection (respects code blocks)
-    private var parsedLines: [MarkdownLine] {
-        var result: [MarkdownLine] = []
+    /// Parsed blocks (code blocks, headings, text)
+    private var parsedBlocks: [MarkdownBlock] {
+        var result: [MarkdownBlock] = []
+        var currentTextLines: [String] = []
         var insideCodeBlock = false
+        var codeBlockLanguage: String = ""
+        var codeBlockLines: [String] = []
 
         for line in text.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-            // Check for code block fence (``` or ```)
+            // Check for code block fence
             if trimmed.hasPrefix("```") {
-                insideCodeBlock.toggle()
-                result.append(.text(line))  // Keep fence as plain text
+                if insideCodeBlock {
+                    // Closing fence - emit code block
+                    result.append(.codeBlock(language: codeBlockLanguage, code: codeBlockLines.joined(separator: "\n")))
+                    codeBlockLines = []
+                    codeBlockLanguage = ""
+                    insideCodeBlock = false
+                } else {
+                    // Opening fence - flush any pending text first
+                    if !currentTextLines.isEmpty {
+                        result.append(.textBlock(lines: currentTextLines))
+                        currentTextLines = []
+                    }
+                    // Extract language hint (e.g., ```swift, ```bash)
+                    codeBlockLanguage = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    insideCodeBlock = true
+                }
             } else if insideCodeBlock {
-                // Inside code block - no markdown parsing
-                result.append(.text(line))
+                codeBlockLines.append(line)
             } else {
-                // Outside code block - parse for headings
-                result.append(parseMarkdownLine(line))
+                currentTextLines.append(line)
             }
+        }
+
+        // Flush remaining content
+        if insideCodeBlock && !codeBlockLines.isEmpty {
+            // Unclosed code block - treat as code anyway
+            result.append(.codeBlock(language: codeBlockLanguage, code: codeBlockLines.joined(separator: "\n")))
+        } else if !currentTextLines.isEmpty {
+            result.append(.textBlock(lines: currentTextLines))
         }
 
         return result
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            ForEach(Array(parsedBlocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .codeBlock(let language, let code):
+                    CodeBlockView(language: language, code: code, searchText: searchText)
+                case .textBlock(let lines):
+                    textBlockView(lines: lines)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func textBlockView(lines: [String]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(parsedLines.enumerated()), id: \.offset) { _, line in
-                switch line {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                let parsed = parseMarkdownLine(line)
+                switch parsed {
                 case .heading(let level, let content):
                     headingView(level: level, content: content)
                 case .text(let content):
@@ -298,7 +381,6 @@ private struct MarkdownTextView: View {
             }
         }
         .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -316,10 +398,17 @@ private struct MarkdownTextView: View {
             .padding(.top, level == 1 ? 4 : 2)
     }
 
+    @ViewBuilder
     private func inlineMarkdownText(_ content: String) -> some View {
-        Text(inlineMarkdown(content))
-            .font(Typography.terminal)
-            .foregroundStyle(ColorSystem.Log.stdout)
+        if searchText.isEmpty {
+            Text(inlineMarkdown(content))
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.Log.stdout)
+        } else {
+            HighlightedText(content, highlighting: searchText)
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.Log.stdout)
+        }
     }
 
     /// Parse inline markdown (bold, italic, code, links)
@@ -330,7 +419,7 @@ private struct MarkdownTextView: View {
         return AttributedString(text)
     }
 
-    /// Parse a line to detect headings (only called outside code blocks)
+    /// Parse a line to detect headings
     private func parseMarkdownLine(_ line: String) -> MarkdownLine {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
@@ -351,10 +440,146 @@ private struct MarkdownTextView: View {
     }
 }
 
+/// Parsed markdown block types
+private enum MarkdownBlock {
+    case codeBlock(language: String, code: String)
+    case textBlock(lines: [String])
+}
+
 /// Parsed markdown line type
 private enum MarkdownLine {
     case heading(level: Int, content: String)
     case text(String)
+}
+
+// MARK: - Code Block View
+
+/// Styled code block with language label, icon, and copy button
+private struct CodeBlockView: View {
+    let language: String
+    let code: String
+    var searchText: String = ""
+    @State private var showCopied = false
+
+    /// Language-specific accent color
+    private var accentColor: Color {
+        switch language.lowercased() {
+        case "swift": return Color(hex: "#F05138")  // Swift orange
+        case "python", "py": return Color(hex: "#3776AB")  // Python blue
+        case "javascript", "js": return Color(hex: "#F7DF1E")  // JS yellow
+        case "typescript", "ts": return Color(hex: "#3178C6")  // TS blue
+        case "go", "golang": return Color(hex: "#00ADD8")  // Go cyan
+        case "rust", "rs": return Color(hex: "#DEA584")  // Rust orange
+        case "ruby", "rb": return Color(hex: "#CC342D")  // Ruby red
+        case "java": return Color(hex: "#ED8B00")  // Java orange
+        case "kotlin", "kt": return Color(hex: "#7F52FF")  // Kotlin purple
+        case "bash", "sh", "shell", "zsh": return Color(hex: "#4EAA25")  // Bash green
+        case "json": return Color(hex: "#CBCB41")  // JSON yellow
+        case "yaml", "yml": return Color(hex: "#CB171E")  // YAML red
+        case "html": return Color(hex: "#E34F26")  // HTML orange
+        case "css": return Color(hex: "#1572B6")  // CSS blue
+        case "sql": return Color(hex: "#CC2927")  // SQL red
+        case "c": return Color(hex: "#A8B9CC")  // C gray-blue
+        case "cpp", "c++": return Color(hex: "#00599C")  // C++ blue
+        case "csharp", "c#", "cs": return Color(hex: "#512BD4")  // C# purple
+        case "php": return Color(hex: "#777BB4")  // PHP purple
+        case "dart": return Color(hex: "#0175C2")  // Dart blue
+        case "markdown", "md": return Color(hex: "#083FA1")  // Markdown blue
+        default: return ColorSystem.textTertiary
+        }
+    }
+
+    /// Language icon (SF Symbol or text fallback)
+    private var languageIcon: String {
+        switch language.lowercased() {
+        case "swift": return "swift"
+        case "python", "py": return "sparkles"  // No Python icon, use sparkles
+        case "javascript", "js", "typescript", "ts": return "curlybraces"
+        case "go", "golang": return "chevron.left.forwardslash.chevron.right"
+        case "bash", "sh", "shell", "zsh": return "terminal"
+        case "json", "yaml", "yml": return "doc.text"
+        case "html", "css": return "globe"
+        case "sql": return "cylinder"
+        case "markdown", "md": return "text.justify"
+        default: return "doc.plaintext"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header with language icon, name, and copy button
+            HStack(spacing: 6) {
+                // Language icon and name
+                if !language.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: languageIcon)
+                            .font(.system(size: 10, weight: .medium))
+                        Text(language)
+                            .font(Typography.badge)
+                    }
+                    .foregroundStyle(accentColor)
+                } else {
+                    Text("code")
+                        .font(Typography.badge)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+
+                Spacer()
+
+                // Copy button
+                Button {
+                    UIPasteboard.general.string = code
+                    Haptics.light()
+                    withAnimation {
+                        showCopied = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        withAnimation {
+                            showCopied = false
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10))
+                        Text(showCopied ? "Copied" : "Copy")
+                            .font(Typography.badge)
+                    }
+                    .foregroundStyle(showCopied ? ColorSystem.success : ColorSystem.textTertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(ColorSystem.terminalBg.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBg.opacity(0.8))
+
+            // Code content with horizontal scroll and search highlighting
+            ScrollView(.horizontal, showsIndicators: false) {
+                Group {
+                    if searchText.isEmpty {
+                        Text(code)
+                    } else {
+                        HighlightedText(code, highlighting: searchText)
+                    }
+                }
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: true, vertical: true)
+                .padding(Spacing.sm)
+            }
+        }
+        .background(ColorSystem.terminalBgHighlight)
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+        .overlay(
+            RoundedRectangle(cornerRadius: CornerRadius.small)
+                .stroke(accentColor.opacity(0.3), lineWidth: 1)
+        )
+    }
 }
 
 // MARK: - Tool Call View
@@ -362,6 +587,7 @@ private enum MarkdownLine {
 /// Tool invocation display with status indicator
 struct ToolCallElementView: View {
     let content: ToolCallContent
+    var searchText: String = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xxs) {
@@ -370,11 +596,17 @@ struct ToolCallElementView: View {
                 .padding(.top, 5)
 
             // Tool name and params combined (no spaces around parentheses)
-            Text(toolDisplay)
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.Tool.name)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+            Group {
+                if searchText.isEmpty {
+                    Text(toolDisplay)
+                } else {
+                    HighlightedText(toolDisplay, highlighting: searchText)
+                }
+            }
+            .font(Typography.terminal)
+            .foregroundStyle(ColorSystem.Tool.name)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
 
@@ -445,6 +677,7 @@ struct ToolCallElementView: View {
 /// Collapsible tool result with error state
 struct ToolResultElementView: View {
     let content: ToolResultContent
+    var searchText: String = ""
     @State private var isExpanded = false
 
     private let previewLineCount = 3
@@ -467,12 +700,18 @@ struct ToolResultElementView: View {
                             .font(Typography.terminal)
                             .foregroundStyle(ColorSystem.textQuaternary)
 
-                        Text(previewText.isEmpty ? "(empty)" : previewText)
-                            .font(Typography.terminal)
-                            .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textSecondary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Group {
+                            if searchText.isEmpty {
+                                Text(previewText.isEmpty ? "(empty)" : previewText)
+                            } else {
+                                HighlightedText(previewText.isEmpty ? "(empty)" : previewText, highlighting: searchText)
+                            }
+                        }
+                        .font(Typography.terminal)
+                        .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textSecondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(minHeight: 20)
 
@@ -496,11 +735,17 @@ struct ToolResultElementView: View {
             // Expanded content
             if isExpanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(content.fullContent)
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textTertiary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Group {
+                        if searchText.isEmpty {
+                            Text(content.fullContent)
+                        } else {
+                            HighlightedText(content.fullContent, highlighting: searchText)
+                        }
+                    }
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textTertiary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     // Collapse button
                     Button {
@@ -685,6 +930,7 @@ struct DiffLineElementView: View {
 /// Collapsible thinking/reasoning block
 struct ThinkingElementView: View {
     let content: ThinkingContent
+    var searchText: String = ""
     @State private var isExpanded = false
 
     var body: some View {
@@ -715,20 +961,26 @@ struct ThinkingElementView: View {
             }
             .buttonStyle(.plain)
 
-            // Expanded content
+            // Expanded content with search highlighting
             if isExpanded {
-                Text(content.text)
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textTertiary)
-                    .italic()
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, Spacing.xs)
-                    .padding(.vertical, 4)
-                    .background(ColorSystem.terminalBgHighlight)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .padding(.leading, Spacing.sm)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                Group {
+                    if searchText.isEmpty {
+                        Text(content.text)
+                    } else {
+                        HighlightedText(content.text, highlighting: searchText)
+                    }
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+                .italic()
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Spacing.xs)
+                .padding(.vertical, 4)
+                .background(ColorSystem.terminalBgHighlight)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.leading, Spacing.sm)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(.vertical, Spacing.xxs)

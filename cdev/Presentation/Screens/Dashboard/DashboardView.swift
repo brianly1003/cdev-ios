@@ -43,15 +43,40 @@ struct DashboardView: View {
                         )
                     }
 
+                    // Search header (only visible when search is active)
+                    if viewModel.terminalSearchState.isActive && viewModel.selectedTab == .logs {
+                        TerminalSearchHeader(state: viewModel.terminalSearchState)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .onChange(of: viewModel.terminalSearchState.searchText) { _, _ in
+                                viewModel.performSearch()
+                            }
+                            .onChange(of: viewModel.terminalSearchState.activeFilters) { _, _ in
+                                viewModel.performSearch()
+                            }
+                    }
+
                     // Tab selector
                     CompactTabSelector(
                         selectedTab: $viewModel.selectedTab,
                         logsCount: viewModel.logsCountForBadge,
-                        diffsCount: viewModel.sourceControlViewModel.state.totalCount
+                        diffsCount: viewModel.sourceControlViewModel.state.totalCount,
+                        showSearchButton: viewModel.selectedTab == .logs,
+                        isSearchActive: viewModel.terminalSearchState.isActive,
+                        onSearchTap: {
+                            withAnimation(Animations.stateChange) {
+                                viewModel.terminalSearchState.isActive.toggle()
+                            }
+                        }
                     )
 
                     // Content - tap to dismiss keyboard
                     TabView(selection: $viewModel.selectedTab) {
+                        // Extract search values here so SwiftUI tracks them as dependencies
+                        // This ensures LogListView re-renders when search state changes
+                        let searchText = viewModel.terminalSearchState.searchText
+                        let matchingIds = viewModel.terminalSearchState.matchingElementIds
+                        let matchIndex = viewModel.terminalSearchState.currentMatchIndex
+
                         LogListView(
                             logs: viewModel.logs,
                             elements: viewModel.chatElements,  // NEW: Elements API UI
@@ -62,7 +87,10 @@ struct DashboardView: View {
                             streamingStartTime: viewModel.streamingStartTime,
                             hasMoreMessages: viewModel.messagesHasMore,
                             isLoadingMore: viewModel.isLoadingMoreMessages,
-                            onLoadMore: { await viewModel.loadMoreMessages() }
+                            onLoadMore: { await viewModel.loadMoreMessages() },
+                            searchText: searchText,
+                            matchingElementIds: matchingIds,
+                            currentMatchIndex: matchIndex
                         )
                         .tag(DashboardTab.logs)
 
@@ -185,6 +213,25 @@ struct DashboardView: View {
             AppLogger.log("[DashboardView] .task - calling refreshStatus")
             await viewModel.refreshStatus()
             AppLogger.log("[DashboardView] .task completed")
+        }
+        // iPad keyboard shortcuts (⌘F to search, Escape to dismiss)
+        .focusable()
+        .onKeyPress(phases: .down) { keyPress in
+            // ⌘F to activate search when on Terminal tab
+            if keyPress.key.character == "f" && keyPress.modifiers.contains(.command) && viewModel.selectedTab == .logs {
+                withAnimation(Animations.stateChange) {
+                    viewModel.terminalSearchState.isActive = true
+                }
+                return .handled
+            }
+            // Escape to dismiss search
+            if keyPress.key == .escape && viewModel.terminalSearchState.isActive {
+                withAnimation(Animations.stateChange) {
+                    viewModel.terminalSearchState.dismiss()
+                }
+                return .handled
+            }
+            return .ignored
         }
     }
 }
@@ -340,9 +387,6 @@ struct StatusBarView: View {
         .background(ColorSystem.terminalBgElevated)
         .onAppear {
             isPulsing = claudeState == .running
-            if isWatchingSession {
-                startWatchingPulse()
-            }
         }
         .onChange(of: claudeState) { _, newState in
             withAnimation(newState == .running ? Animations.pulse : .none) {
@@ -350,16 +394,16 @@ struct StatusBarView: View {
             }
         }
         .onChange(of: isWatchingSession) { _, watching in
-            if watching {
-                startWatchingPulse()
-            }
+            // Reset pulse state when watching status changes
+            // This ensures animation is properly tied to current state
+            watchingPulse = watching
         }
-    }
-
-    private func startWatchingPulse() {
-        withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-            watchingPulse = true
-        }
+        .animation(
+            isWatchingSession
+                ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+                : .default,
+            value: watchingPulse
+        )
     }
 }
 
@@ -369,6 +413,12 @@ struct CompactTabSelector: View {
     @Binding var selectedTab: DashboardTab
     let logsCount: Int
     let diffsCount: Int
+    var showSearchButton: Bool = false
+    var isSearchActive: Bool = false
+    var onSearchTap: (() -> Void)?
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var isCompact: Bool { sizeClass == .compact }
 
     private var tabCount: CGFloat {
         CGFloat(DashboardTab.allCases.count)
@@ -388,6 +438,21 @@ struct CompactTabSelector: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Search button (only for Terminal tab)
+            if showSearchButton {
+                Button {
+                    onSearchTap?()
+                    Haptics.selection()
+                } label: {
+                    Image(systemName: isSearchActive ? "xmark" : "magnifyingglass")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(isSearchActive ? ColorSystem.primary : ColorSystem.textSecondary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Tab buttons
             ForEach(DashboardTab.allCases, id: \.self) { tab in
                 Button {
                     withAnimation(Animations.tabSlide) {
@@ -423,17 +488,28 @@ struct CompactTabSelector: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // iPad keyboard hint
+            if !isCompact && showSearchButton && !isSearchActive {
+                Text("⌘F")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+                    .padding(.trailing, Spacing.xs)
+            }
         }
         .background(ColorSystem.terminalBgElevated)
         .overlay(alignment: .bottom) {
             // Animated selection indicator with glow
             GeometryReader { geo in
-                let tabWidth = geo.size.width / tabCount
+                // Adjust for search button width
+                let searchButtonWidth: CGFloat = showSearchButton ? 36 : 0
+                let availableWidth = geo.size.width - searchButtonWidth - (isCompact ? 0 : 30)
+                let tabWidth = availableWidth / tabCount
                 Rectangle()
                     .fill(ColorSystem.primary)
                     .frame(width: tabWidth, height: 2)
                     .shadow(color: ColorSystem.primaryGlow, radius: 4, y: 0)
-                    .offset(x: selectedIndex * tabWidth)
+                    .offset(x: searchButtonWidth + selectedIndex * tabWidth)
                     .animation(Animations.tabSlide, value: selectedTab)
             }
             .frame(height: 2)

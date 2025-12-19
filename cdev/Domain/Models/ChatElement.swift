@@ -396,7 +396,23 @@ extension ChatElement {
             timestamp = Date()
         }
 
-        // User message - simple text
+        // Check for context compaction first (marked by is_context_compaction field)
+        if payload.isContextCompaction == true {
+            let text = effectiveContent.textContent
+            // Skip system "Conversation compacted" message, only show user summary
+            if effectiveRole == "user" && !text.isEmpty {
+                elements.append(ChatElement(
+                    id: payload.uuid ?? UUID().uuidString,
+                    type: .contextCompaction,
+                    timestamp: timestamp,
+                    content: .contextCompaction(ContextCompactionContent(summary: text))
+                ))
+            }
+            // Return early - don't process as regular message
+            return elements
+        }
+
+        // User message - simple text input
         if effectiveRole == "user" {
             let text = effectiveContent.textContent
             if !text.isEmpty {

@@ -186,6 +186,7 @@ struct ClaudeMessagePayload: Codable {
     let role: String?           // cdev-agent sends role at payload level
     let content: ContentValue?  // cdev-agent sends content at payload level
     let stopReason: String?     // cdev-agent sends stop_reason
+    let isContextCompaction: Bool?  // Context compaction marker
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -197,6 +198,7 @@ struct ClaudeMessagePayload: Codable {
         case role
         case content
         case stopReason = "stop_reason"
+        case isContextCompaction = "is_context_compaction"
     }
 
     init(from decoder: Decoder) throws {
@@ -209,6 +211,7 @@ struct ClaudeMessagePayload: Codable {
         role = try container.decodeIfPresent(String.self, forKey: .role)
         content = try container.decodeIfPresent(ContentValue.self, forKey: .content)
         stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        isContextCompaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompaction)
 
         // Handle both sessionId and session_id
         if let sid = try container.decodeIfPresent(String.self, forKey: .sessionId) {
@@ -230,6 +233,7 @@ struct ClaudeMessagePayload: Codable {
         try container.encodeIfPresent(role, forKey: .role)
         try container.encodeIfPresent(content, forKey: .content)
         try container.encodeIfPresent(stopReason, forKey: .stopReason)
+        try container.encodeIfPresent(isContextCompaction, forKey: .isContextCompaction)
     }
 
     /// Unified access to role (from message or payload level)

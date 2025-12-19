@@ -180,7 +180,7 @@ struct SessionsResponse: Codable {
 
     /// Whether there are more sessions to load
     var hasMore: Bool {
-        guard let total = total, let limit = limit, let offset = offset else {
+        guard let total = total, let _ = limit, let offset = offset else {
             return false
         }
         return offset + sessions.count < total
