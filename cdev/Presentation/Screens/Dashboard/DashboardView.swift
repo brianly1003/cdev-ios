@@ -243,6 +243,12 @@ struct DashboardView: View {
                 viewModel.requestScroll(direction: direction)
             }
 
+            // Floating keyboard dismiss button
+            FloatingKeyboardDismissButton()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .padding(.bottom, Spacing.md)
+                .padding(.trailing, Spacing.md)
+
             // Reconnection toast (shown when connection is restored)
             VStack {
                 ReconnectedToast(
