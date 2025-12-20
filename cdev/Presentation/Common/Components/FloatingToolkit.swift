@@ -507,7 +507,6 @@ struct FloatingToolkitButton: View {
 
     @State private var isExpanded = false
     @State private var position: CGPoint = .zero
-    @State private var isKeyboardVisible = false
 
     // Drag state - managed by UIKit touch handler
     @State private var dragOffset: CGSize = .zero
@@ -532,8 +531,6 @@ struct FloatingToolkitButton: View {
     private let scrollActivationThreshold: CGFloat = 40  // How far to drag to activate
 
     // Observer tokens for proper cleanup (prevent memory leaks)
-    @State private var keyboardShowObserver: NSObjectProtocol?
-    @State private var keyboardHideObserver: NSObjectProtocol?
     @State private var orientationObserver: NSObjectProtocol?
 
     // Track screen size to detect orientation changes
@@ -550,7 +547,7 @@ struct FloatingToolkitButton: View {
         GeometryReader { geometry in
             ZStack {
                 // Dimmed background when expanded
-                if isExpanded && !isKeyboardVisible {
+                if isExpanded {
                     Color.black.opacity(0.4)
                         .ignoresSafeArea()
                         .onTapGesture {
@@ -560,11 +557,10 @@ struct FloatingToolkitButton: View {
                 }
 
                 // Menu items positioned around the button
-                if !isKeyboardVisible {
-                    // Calculate all positions once (O(1) per item, computed together)
-                    let positions = menuItemPositions(total: items.count, in: geometry)
+                // Calculate all positions once (O(1) per item, computed together)
+                let positions = menuItemPositions(total: items.count, in: geometry)
 
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         if isExpanded {
                             MenuItemView(item: item, size: menuItemSize) {
                                 closeMenu()
@@ -617,22 +613,18 @@ struct FloatingToolkitButton: View {
                     .simultaneousGesture(tapAndDragGesture(in: geometry))
                     .zIndex(2)
                     .transition(.scale.combined(with: .opacity))
-                }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isExpanded)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isForceTouchActive)
             .animation(.easeInOut(duration: 0.15), value: hoveredScrollDirection)
-            .animation(.easeInOut(duration: 0.2), value: isKeyboardVisible)
             .onAppear {
                 AppLogger.log("[FloatingToolkit] onAppear called")
                 initializePosition(in: geometry)
-                setupKeyboardObservers()
                 startIdleTimer()
                 lastScreenSize = geometry.size
             }
             .onDisappear {
                 AppLogger.log("[FloatingToolkit] onDisappear called")
-                removeKeyboardObservers()
                 cancelIdleTimer()
             }
             .onChange(of: geometry.size) { oldSize, newSize in
@@ -688,60 +680,6 @@ struct FloatingToolkitButton: View {
                 savedX = clampedX
                 savedY = clampedY
             }
-        }
-    }
-
-    // MARK: - Keyboard Handling
-
-    private func setupKeyboardObservers() {
-        // Remove any existing observers first
-        removeKeyboardObservers()
-        AppLogger.log("[FloatingToolkit] Setting up keyboard observers")
-
-        // Store observer tokens for proper cleanup
-        keyboardShowObserver = NotificationCenter.default.addObserver(
-            forName: UIResponder.keyboardWillShowNotification,
-            object: nil,
-            queue: .main
-        ) { [self] _ in
-            // Guard against duplicate notifications
-            guard !isKeyboardVisible else {
-                AppLogger.log("[FloatingToolkit] Keyboard show - SKIPPED (already visible)")
-                return
-            }
-            AppLogger.log("[FloatingToolkit] Keyboard will show - hiding toolkit (time: \(Date().timeIntervalSince1970))")
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isKeyboardVisible = true
-                if isExpanded { isExpanded = false }
-            }
-        }
-
-        keyboardHideObserver = NotificationCenter.default.addObserver(
-            forName: UIResponder.keyboardWillHideNotification,
-            object: nil,
-            queue: .main
-        ) { [self] _ in
-            // Guard against duplicate notifications
-            guard isKeyboardVisible else {
-                AppLogger.log("[FloatingToolkit] Keyboard hide - SKIPPED (already hidden)")
-                return
-            }
-            AppLogger.log("[FloatingToolkit] Keyboard will hide - showing toolkit (time: \(Date().timeIntervalSince1970))")
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isKeyboardVisible = false
-            }
-        }
-    }
-
-    private func removeKeyboardObservers() {
-        // Remove using stored tokens (correct way for block-based observers)
-        if let observer = keyboardShowObserver {
-            NotificationCenter.default.removeObserver(observer)
-            keyboardShowObserver = nil
-        }
-        if let observer = keyboardHideObserver {
-            NotificationCenter.default.removeObserver(observer)
-            keyboardHideObserver = nil
         }
     }
 

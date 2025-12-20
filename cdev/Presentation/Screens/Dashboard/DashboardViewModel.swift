@@ -52,6 +52,9 @@ final class DashboardViewModel: ObservableObject {
     @Published var isWatchingSession: Bool = false
     @Published var watchingSessionId: String?
 
+    // Force new session flag (set by /new command)
+    private var forceNewSession: Bool = false
+
     // Terminal Search State
     let terminalSearchState = TerminalSearchState()
     private var searchDebounceTask: Task<Void, Never>?
@@ -335,6 +338,7 @@ final class DashboardViewModel: ObservableObject {
                 // - continue: Continue a SPECIFIC session by ID (session_id REQUIRED)
                 //
                 // Flow:
+                // 0. If forceNewSession flag is set (from /new command) → start new session
                 // 1. If userSelectedSessionId exists → validate against server → if invalid, clear logs and start new
                 // 2. If no session selected → fetch sessions list → use most recent if exists
                 // 3. If sessions list is empty → start new session
@@ -342,7 +346,13 @@ final class DashboardViewModel: ObservableObject {
                 let mode: SessionMode
                 let sessionIdToSend: String?
 
-                if let selectedId = userSelectedSessionId, !selectedId.isEmpty {
+                if forceNewSession {
+                    // User explicitly requested new session via /new command
+                    mode = .new
+                    sessionIdToSend = nil
+                    forceNewSession = false  // Reset flag after use
+                    AppLogger.log("[Dashboard] Sending prompt: mode=new (forceNewSession flag)")
+                } else if let selectedId = userSelectedSessionId, !selectedId.isEmpty {
                     // Validate stored sessionId against server
                     let isValid = await validateSessionExists(selectedId)
 
@@ -639,7 +649,8 @@ final class DashboardViewModel: ObservableObject {
         seenElementIds.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
-        AppLogger.log("[Dashboard] Started new session - cleared session state")
+        forceNewSession = true  // Ensure next prompt uses mode: "new"
+        AppLogger.log("[Dashboard] Started new session - cleared session state, forceNewSession=true")
 
         // Add system message
         let newEntry = LogEntry(
@@ -1097,25 +1108,25 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .claudeLog:
-            // TESTING: Comment out claude_log handling to test claude_message only
-            // This helps verify if claude_message alone is sufficient for UI
-            AppLogger.log("[Dashboard] claude_log received (IGNORED for testing)")
-            break
-            /*
-            if let entry = LogEntry.from(event: event) {
-                await logCache.add(entry)
-                scheduleLogUpdate() // Debounced - prevents UI lag with rapid logs
+            // claude_log is used ONLY for extracting session_id from system/init events
+            // Content display uses claude_message events (structured format)
+            if case .claudeLog(let payload) = event.payload {
+                // Check for session initialization event (new session started)
+                if let parsed = payload.parsed,
+                   parsed.isSessionInit,
+                   let newSessionId = parsed.sessionId,
+                   !newSessionId.isEmpty {
+                    AppLogger.log("[Dashboard] claude_log system/init - new session_id: \(newSessionId)")
 
-                // NOTE: Don't convert claude_log to ChatElements
-                // claude_log is plain text output - not structured messages
-                // ChatElements should only come from claude_message events (structured)
-                // The legacy LogListView handles claude_log display properly
+                    // Update selected session and persist
+                    setSelectedSession(newSessionId)
+                    hasActiveConversation = true
+
+                    // Start watching this new session for real-time updates
+                    await startWatchingCurrentSession()
+                }
+                // Ignore all other claude_log content (claude_message handles UI)
             }
-            // NOTE: Do NOT update sessionId from log events!
-            // Session ID should only come from trusted sources:
-            // 1. /api/claude/sessions (loadRecentSessionHistory)
-            // 2. User explicit selection via /resume command
-            */
 
         case .claudeStatus:
             if case .claudeStatus(let payload) = event.payload,

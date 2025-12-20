@@ -10,7 +10,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private var session: URLSession?
     private var connectionInfo: ConnectionInfo?
     private var reconnectAttempts = 0
-    private var isReconnecting = false
+    @Atomic private var isReconnecting = false
+    private let reconnectLock = NSLock()
 
     @Atomic private var _connectionState: ConnectionState = .disconnected
     var connectionState: ConnectionState {
@@ -361,10 +362,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
     func connect(to connectionInfo: ConnectionInfo) async throws {
         self.connectionInfo = connectionInfo
-        reconnectAttempts = 0
+        // Only reset reconnect attempts for fresh connections, not during reconnection loop
+        if !isReconnecting {
+            reconnectAttempts = 0
+            // Only update to .connecting for fresh connections
+            // During reconnection, keep the .reconnecting(attempt:) state
+            updateState(.connecting)
+        }
         shouldAutoReconnect = true
-
-        updateState(.connecting)
 
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = Constants.Network.connectionTimeout
@@ -523,12 +528,20 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     func reconnect() async throws {
-        guard let connectionInfo = connectionInfo,
-              !isReconnecting,
-              shouldAutoReconnect else { return }
+        // Atomic check-and-set to prevent race conditions
+        // Also capture connectionInfo to use after the lock
+        let savedConnectionInfo: ConnectionInfo? = reconnectLock.withLock {
+            guard let info = connectionInfo,
+                  !isReconnecting,
+                  shouldAutoReconnect else { return nil }
+            isReconnecting = true
+            return info
+        }
+        guard let connectionInfo = savedConnectionInfo else { return }
 
-        isReconnecting = true
-        defer { isReconnecting = false }
+        defer {
+            reconnectLock.withLock { isReconnecting = false }
+        }
 
         // Loop through all attempts (fixes bug where only 1 attempt was made per call)
         while reconnectAttempts < Constants.Network.maxReconnectAttempts && shouldAutoReconnect {

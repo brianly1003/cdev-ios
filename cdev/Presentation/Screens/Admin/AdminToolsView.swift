@@ -83,6 +83,7 @@ struct AdminToolsView: View {
                 }
             }
             .background(ColorSystem.terminalBg)
+            .floatingKeyboardDismissButton()
             .navigationTitle("Debug Logs")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

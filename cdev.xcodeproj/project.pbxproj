@@ -61,6 +61,7 @@
 		AE05EB625891261F7E598062 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5E88E1B4FB5E8961B16FE2B0 /* Assets.xcassets */; };
 		AE67322B662946DED52B6F5A /* ResponsiveLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A788F3B2EF0098378C7021CF /* ResponsiveLayout.swift */; };
 		AFF6BFB90F633E2136C3BCF6 /* DebugLogTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24095590A3C79755616E8E39 /* DebugLogTypes.swift */; };
+		B9A8CBA66BC0B19FB2FE9E5C /* FloatingKeyboardDismissButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */; };
 		BE98168A1C78FA3D36847993 /* DiffEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 532C4D5A4C249E8736D3A99B /* DiffEntry.swift */; };
 		C05E58CF6376471ECAFE0D46 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C134CDCDC43F5EBEBAD4F46F /* KeychainService.swift */; };
 		C06562567AA8EE70C642BFFF /* ElementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37D9ADF2B12D7F0FA702BCC /* ElementView.swift */; };
@@ -111,6 +112,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingKeyboardDismissButton.swift; sourceTree = "<group>"; };
 		0333578E8E5D6052061F9550 /* AgentCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCommand.swift; sourceTree = "<group>"; };
 		0506631280A96B48BA613082 /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
 		0556DECE53C5878722626932 /* FileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileRepository.swift; sourceTree = "<group>"; };
@@ -672,6 +674,7 @@
 				8432BF51A96402805348C138 /* ChatMessageView.swift */,
 				4F8DAB87223622C34B9FC2C2 /* ConnectionBanner.swift */,
 				E37D9ADF2B12D7F0FA702BCC /* ElementView.swift */,
+				00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */,
 				39A9FE817775280D126DB8AA /* FloatingToolkit.swift */,
 				0EF1DE3FDDAE59D2A2E9F467 /* InteractionBanner.swift */,
 				624A07A99501D68A8E6C516B /* SessionPickerView.swift */,
@@ -837,6 +840,7 @@
 				CDAA96C006C0FDCFF4DBDC44 /* FileRepositoryProtocol.swift in Sources */,
 				8A5E9E41AEC55B56733F53D7 /* FileRowView.swift in Sources */,
 				6DB1DB22EEDA6625C75199D0 /* FileViewerView.swift in Sources */,
+				B9A8CBA66BC0B19FB2FE9E5C /* FloatingKeyboardDismissButton.swift in Sources */,
 				534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */,
 				83B21CEABB25D8074CE5364B /* GitModels.swift in Sources */,
 				AD85B790A3930CA9F0A8844C /* Gradients.swift in Sources */,

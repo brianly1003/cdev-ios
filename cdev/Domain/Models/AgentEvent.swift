@@ -167,11 +167,33 @@ struct ClaudeLogPayload: Codable {
     let line: String?
     let stream: String? // "stdout" or "stderr"
     let sessionId: String?
+    let parsed: ClaudeLogParsed?  // Parsed JSON content from line
 
     enum CodingKeys: String, CodingKey {
         case line
         case stream
         case sessionId = "session_id"
+        case parsed
+    }
+}
+
+/// Parsed content from claude_log line (extracted by cdev-agent)
+/// Used to capture session_id from system/init events
+struct ClaudeLogParsed: Codable {
+    let type: String?       // "system", "result", etc.
+    let subtype: String?    // "init" for session initialization (optional)
+    let sessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case subtype
+        case sessionId = "session_id"
+    }
+
+    /// Check if this is a session initialization event
+    /// cdev-agent sends type="system" with session_id for init events
+    var isSessionInit: Bool {
+        type == "system" && sessionId != nil && !(sessionId?.isEmpty ?? true)
     }
 }
 
