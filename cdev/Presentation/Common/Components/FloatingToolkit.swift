@@ -1147,7 +1147,7 @@ private struct MainButtonView: View {
         ZStack {
             // Outer glow (intensified during force touch)
             Circle()
-                .fill(ColorSystem.primary.opacity(isForceTouchActive ? 0.4 : 0.2))
+                .fill(ColorSystem.brand.opacity(isForceTouchActive ? 0.4 : 0.2))
                 .frame(width: size + (isForceTouchActive ? 16 : 8), height: size + (isForceTouchActive ? 16 : 8))
                 .blur(radius: isForceTouchActive ? 8 : 4)
 
@@ -1155,13 +1155,13 @@ private struct MainButtonView: View {
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: [ColorSystem.primary, ColorSystem.primaryDim],
+                        colors: [ColorSystem.brand, ColorSystem.brandDim],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
                 .frame(width: size, height: size)
-                .shadow(color: ColorSystem.primaryGlow, radius: isDragging || isForceTouchActive ? 12 : 6)
+                .shadow(color: ColorSystem.brandGlow, radius: isDragging || isForceTouchActive ? 12 : 6)
 
             // Icon (changes during force touch)
             Image(systemName: isForceTouchActive ? "arrow.up.arrow.down" : (isExpanded ? "xmark" : "wrench.and.screwdriver.fill"))
