@@ -650,11 +650,14 @@ struct FloatingToolkitButton: View {
 
     /// Handle screen size change (rotation) - clamp position to valid bounds or reset to default
     private func handleScreenSizeChange(newSize: CGSize, in geometry: GeometryProxy) {
+        // Guard against invalid screen sizes during keyboard animation
+        guard newSize.width > 0 && newSize.height > 100 else { return }
+
         let padding: CGFloat = 10
         let minX = buttonSize / 2 + padding
-        let maxX = newSize.width - buttonSize / 2 - padding
+        let maxX = max(minX + 1, newSize.width - buttonSize / 2 - padding)
         let minY = buttonSize / 2 + padding + geometry.safeAreaInsets.top
-        let maxY = newSize.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50
+        let maxY = max(minY + 1, newSize.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50)
 
         // Check if current position is outside new bounds
         let isOutOfBounds = position.x < minX || position.x > maxX ||
@@ -664,7 +667,7 @@ struct FloatingToolkitButton: View {
             AppLogger.log("[FloatingToolkit] Position out of bounds after rotation, resetting to default")
             // Reset to default position (bottom-left corner)
             let defaultX = buttonSize / 2 + 20
-            let defaultY = newSize.height - buttonSize / 2 - 120
+            let defaultY = max(minY, newSize.height - buttonSize / 2 - 120)
 
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 position = CGPoint(x: defaultX, y: defaultY)
@@ -786,10 +789,14 @@ struct FloatingToolkitButton: View {
     // MARK: - Position Management
 
     private func initializePosition(in geometry: GeometryProxy) {
+        // Guard against invalid screen sizes during keyboard animation
+        guard geometry.size.height > 100 else { return }
+
         if savedX < 0 || savedY < 0 {
             // Default: bottom-LEFT corner (away from Settings button in top-right)
             let defaultX = buttonSize / 2 + 20
-            let defaultY = geometry.size.height - buttonSize / 2 - 120
+            let minY = buttonSize / 2 + 10 + geometry.safeAreaInsets.top
+            let defaultY = max(minY, geometry.size.height - buttonSize / 2 - 120)
             position = CGPoint(x: defaultX, y: defaultY)
             savedX = defaultX
             savedY = defaultY
@@ -827,9 +834,9 @@ struct FloatingToolkitButton: View {
         // Screen bounds for clamping (with padding for menu item size + label)
         let itemPadding: CGFloat = menuItemSize / 2 + 30  // Extra space for label
         let minX = itemPadding
-        let maxX = geometry.size.width - itemPadding
+        let maxX = max(minX + 1, geometry.size.width - itemPadding) // Guard against negative
         let minY = geometry.safeAreaInsets.top + itemPadding
-        let maxY = geometry.size.height - geometry.safeAreaInsets.bottom - itemPadding - 50
+        let maxY = max(minY + 1, geometry.size.height - geometry.safeAreaInsets.bottom - itemPadding - 50) // Guard against negative
 
         // Pre-allocate array for efficiency
         var positions = [CGPoint]()
@@ -1012,12 +1019,12 @@ struct FloatingToolkitButton: View {
         var newX = position.x + translation.width
         var newY = position.y + translation.height
 
-        // Bounds
+        // Bounds (with guards against negative values during keyboard animation)
         let padding: CGFloat = 10
         let minX = buttonSize / 2 + padding
-        let maxX = geometry.size.width - buttonSize / 2 - padding
+        let maxX = max(minX + 1, geometry.size.width - buttonSize / 2 - padding)
         let minY = buttonSize / 2 + padding + geometry.safeAreaInsets.top
-        let maxY = geometry.size.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50
+        let maxY = max(minY + 1, geometry.size.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50)
 
         newX = max(minX, min(maxX, newX))
         newY = max(minY, min(maxY, newY))

@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Compact search bar for file explorer
 /// Style matches TerminalSearchBar for consistency
+/// Uses ResponsiveLayout for iPhone/iPad adaptation
 struct ExplorerSearchBar: View {
     @Binding var query: String
     let isSearching: Bool
@@ -11,6 +12,7 @@ struct ExplorerSearchBar: View {
     @FocusState private var isFocused: Bool
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
     private var isCompact: Bool { sizeClass == .compact }
 
     var body: some View {
@@ -64,8 +66,8 @@ struct ExplorerSearchBar: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.xs)
+        .padding(.horizontal, layout.standardPadding)
+        .frame(height: layout.buttonHeight)  // Fixed height for consistent sizing
         .background(ColorSystem.terminalBgElevated)
     }
 

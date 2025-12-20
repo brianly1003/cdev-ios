@@ -1624,6 +1624,36 @@ final class DashboardViewModel: ObservableObject {
         claudeState = .idle
     }
 
+    /// Retry connection to the last active workspace
+    func retryConnection() async {
+        AppLogger.log("[Dashboard] Retrying connection")
+
+        // Get the active workspace and try to reconnect
+        if let workspace = WorkspaceStore.shared.activeWorkspace {
+            let connectionInfo = ConnectionInfo(
+                webSocketURL: workspace.webSocketURL,
+                httpURL: workspace.httpURL,
+                sessionId: workspace.sessionId ?? "",
+                repoName: workspace.name
+            )
+            do {
+                try await webSocketService.connect(to: connectionInfo)
+                AppLogger.log("[Dashboard] Retry connection successful")
+            } catch {
+                AppLogger.error(error, context: "Retry connection")
+                self.error = .connectionFailed(underlying: error)
+            }
+        } else {
+            AppLogger.log("[Dashboard] No active workspace to retry connection")
+        }
+    }
+
+    /// Cancel ongoing connection attempt
+    func cancelConnection() {
+        AppLogger.log("[Dashboard] Cancelling connection")
+        webSocketService.disconnect()
+    }
+
     /// Clear all logs and diffs
     private func clearLogsAndDiffs() async {
         logs = []

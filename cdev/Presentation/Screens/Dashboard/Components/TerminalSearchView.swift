@@ -138,6 +138,20 @@ struct TerminalSearchBar: View {
                 .submitLabel(.search)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+
+                        // Keyboard dismiss button
+                        Button {
+                            isFocused = false
+                        } label: {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .font(.system(size: 16))
+                                .foregroundStyle(ColorSystem.primary)
+                        }
+                    }
+                }
 
             // Match count and navigation (only when has text)
             if !state.searchText.isEmpty {

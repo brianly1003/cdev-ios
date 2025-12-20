@@ -24,7 +24,7 @@ cdev-ios is an iOS client for cdev-agent following **Clean Architecture + MVVM**
 cdev/
 ├── App/                    # DI Container, AppState, Entry Point
 ├── Core/                   # Utilities, Extensions, Design System
-│   ├── Design/            # Colors, Typography, Gradients
+│   ├── Design/            # Colors, Typography, Gradients, ResponsiveLayout
 │   ├── Extensions/        # View, String, Date extensions
 │   ├── Utilities/         # Constants, Spacing, Haptics, Logger
 │   ├── Errors/            # AppError types
@@ -146,24 +146,57 @@ This app is designed for developers doing "vibe coding" on mobile - monitoring C
 
 ### Responsive Design (iPad/iPhone)
 
-```swift
-// Always detect size class for responsive layouts
-@Environment(\.horizontalSizeClass) private var sizeClass
-private var isCompact: Bool { sizeClass == .compact }
+**CRITICAL: Use `ResponsiveLayout` for all new UI components**
 
-// iPhone: Full-width sheets, stacked layouts
-// iPad: Split views, auto-focus search, keyboard shortcuts
-if isCompact {
-    // iPhone layout
-} else {
-    // iPad layout with more information density
+The `ResponsiveLayout` system provides centralized, consistent sizing across iPhone and iPad. Always use it instead of manual `isCompact` checks.
+
+```swift
+// ✅ CORRECT - Use ResponsiveLayout
+struct MyView: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        HStack(spacing: layout.contentSpacing) {
+            Image(systemName: "star")
+                .font(.system(size: layout.iconMedium))
+
+            Text("Title")
+                .font(layout.bodyFont)
+        }
+        .padding(.horizontal, layout.standardPadding)
+    }
 }
+
+// ❌ WRONG - Manual ternary expressions
+.padding(.horizontal, isCompact ? 12 : 16)  // Use layout.standardPadding
+.font(.system(size: isCompact ? 12 : 14))   // Use layout.iconMedium
 ```
+
+**ResponsiveLayout Properties:**
+
+| Category | Properties |
+|----------|------------|
+| Spacing | `smallPadding`, `standardPadding`, `largePadding`, `contentSpacing`, `sectionSpacing` |
+| Icons | `iconSmall` (9/10), `iconMedium` (12/14), `iconLarge` (16/18), `iconXLarge` (24/28) |
+| Components | `buttonHeight`, `indicatorSize`, `indicatorSizeSmall`, `dotSize`, `avatarSize` |
+| Typography | `bodyFont`, `captionFont`, `labelFont`, `terminalFont` |
+| Lines | `borderWidth`, `borderWidthThick`, `shadowRadius`, `shadowRadiusLarge` |
+
+**Quick Reference:**
+```swift
+layout.standardPadding  // 12pt iPhone, 16pt iPad
+layout.iconMedium       // 12pt iPhone, 14pt iPad
+layout.indicatorSize    // 32pt iPhone, 36pt iPad
+layout.bodyFont         // Typography.body iPhone, Typography.bodyBold iPad
+```
+
+See `docs/RESPONSIVE-LAYOUT.md` for full documentation and examples.
 
 **Responsive Patterns:**
 - iPhone: Sheets use full width, single-column layouts
 - iPad: Side-by-side layouts, keyboard shortcut hints (⌘K)
-- Both: Same components, different spacing/sizing
+- Both: Same components, different spacing/sizing via ResponsiveLayout
 
 ### List Performance (100+ Items)
 
@@ -383,3 +416,18 @@ When asked to commit, use conventional format:
 - `docs: update design notes`
 
 Do not include Co-Authored-By lines.
+
+## Documentation
+
+Additional documentation is available in the `docs/` folder:
+
+| Document | Description |
+|----------|-------------|
+| `docs/RESPONSIVE-LAYOUT.md` | Complete guide to using ResponsiveLayout for iPhone/iPad |
+
+**Key Design System Files:**
+- `cdev/Core/Design/ResponsiveLayout.swift` - Centralized responsive sizing
+- `cdev/Core/Design/ColorSystem.swift` - Color palette
+- `cdev/Core/Design/Typography.swift` - Font definitions
+- `cdev/Core/Design/Animations.swift` - Animation presets
+- `cdev/Core/Utilities/Spacing.swift` - Base spacing values

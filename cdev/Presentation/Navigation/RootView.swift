@@ -1,31 +1,19 @@
 import SwiftUI
 
 /// Root view - handles connection state and navigation
+/// Non-blocking design: Dashboard is shown during connecting/reconnecting so users can continue working
 struct RootView: View {
     @StateObject var appState: AppState
 
     var body: some View {
         Group {
-            switch appState.connectionState {
-            case .disconnected, .failed:
-                // If has saved workspaces, show Dashboard (user can reconnect via workspace switcher)
-                // If no workspaces, show Pairing for first-time setup
-                if appState.hasSavedWorkspaces {
-                    DashboardView(viewModel: appState.makeDashboardViewModel())
-                } else {
-                    PairingView(viewModel: appState.makePairingViewModel())
-                }
-
-            case .connecting, .reconnecting:
-                // Show connecting state with cancel option
-                ConnectingView(
-                    state: appState.connectionState,
-                    onCancel: { appState.cancelConnection() }
-                )
-
-            case .connected:
-                // Show main dashboard
+            // If has saved workspaces, always show Dashboard (connection status shown inline)
+            // This allows users to continue viewing Terminal, Changes, Explorer while reconnecting
+            if appState.hasSavedWorkspaces {
                 DashboardView(viewModel: appState.makeDashboardViewModel())
+            } else {
+                // No workspaces - show Pairing for first-time setup
+                PairingView(viewModel: appState.makePairingViewModel())
             }
         }
         .animation(.easeInOut(duration: 0.3), value: appState.connectionState.isConnected)

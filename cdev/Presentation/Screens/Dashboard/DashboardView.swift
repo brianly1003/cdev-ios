@@ -9,6 +9,8 @@ struct DashboardView: View {
     @State private var showDebugLogs = false
     @State private var showWorkspaceSwitcher = false
     @State private var showPairing = false
+    @State private var showReconnectedToast = false
+    @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
 
     /// Toolkit items - Easy to extend! Just add more .add() calls
@@ -31,6 +33,18 @@ struct DashboardView: View {
                         sessionId: viewModel.agentStatus.sessionId,
                         isWatchingSession: viewModel.isWatchingSession,
                         onWorkspaceTap: { showWorkspaceSwitcher = true }
+                    )
+
+                    // Connection status banner (non-blocking)
+                    // Shows when disconnected/connecting/reconnecting/failed
+                    ConnectionBanner(
+                        connectionState: viewModel.connectionState,
+                        onRetry: {
+                            Task { await viewModel.retryConnection() }
+                        },
+                        onCancel: {
+                            viewModel.cancelConnection()
+                        }
                     )
 
                     // Pending interaction banner (if any)
@@ -116,7 +130,7 @@ struct DashboardView: View {
                     .dismissKeyboardOnTap()
                     .background(ColorSystem.terminalBg)
 
-                    // Action bar - outside TabView, always visible when on logs tab
+                    // Action bar - only show on logs tab
                     if viewModel.selectedTab == .logs {
                         ActionBarView(
                             claudeState: viewModel.claudeState,
@@ -131,6 +145,22 @@ struct DashboardView: View {
                 }
                 .background(ColorSystem.terminalBg)
                 .animation(Animations.stateChange, value: viewModel.selectedTab)
+                // Dismiss keyboard and reset search when switching tabs
+                .onChange(of: viewModel.selectedTab) { oldTab, newTab in
+                    // Dismiss keyboard globally
+                    hideKeyboard()
+                    isInputFocused = false
+
+                    // Reset Terminal search when leaving logs tab
+                    if oldTab == .logs && viewModel.terminalSearchState.isActive {
+                        viewModel.terminalSearchState.dismiss()
+                    }
+
+                    // Reset Explorer search when leaving explorer tab
+                    if oldTab == .explorer {
+                        viewModel.explorerViewModel.clearSearch()
+                    }
+                }
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) {
@@ -208,10 +238,34 @@ struct DashboardView: View {
                 // Request scroll to top or bottom
                 viewModel.requestScroll(direction: direction)
             }
+
+            // Reconnection toast (shown when connection is restored)
+            VStack {
+                ReconnectedToast(
+                    isPresented: $showReconnectedToast,
+                    message: "Connection restored"
+                )
+                .padding(.top, 60) // Below safe area
+                Spacer()
+            }
         }
         .errorAlert($viewModel.error)
         .onAppear {
             AppLogger.log("[DashboardView] onAppear - UI should be interactive now")
+            previousConnectionState = viewModel.connectionState
+        }
+        // Track connection state changes for reconnection toast
+        .onChange(of: viewModel.connectionState) { oldState, newState in
+            // Show toast when transitioning from disconnected/reconnecting to connected
+            let wasDisconnected = !oldState.isConnected
+            let isNowConnected = newState.isConnected
+
+            if wasDisconnected && isNowConnected {
+                withAnimation(Animations.bannerTransition) {
+                    showReconnectedToast = true
+                }
+                Haptics.success()
+            }
         }
         .task(priority: .utility) {
             AppLogger.log("[DashboardView] .task started - waiting 500ms before refreshStatus")
@@ -262,20 +316,8 @@ struct StatusBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Spacing.xs) {
-                // Connection indicator with glow
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(connectionState.isConnected ? ColorSystem.success : ColorSystem.error)
-                        .frame(width: 6, height: 6)
-                        .shadow(
-                            color: (connectionState.isConnected ? ColorSystem.success : ColorSystem.error).opacity(0.5),
-                            radius: 2
-                        )
-
-                    Text(connectionState.isConnected ? "Online" : "Offline")
-                        .font(Typography.statusLabel)
-                        .foregroundStyle(ColorSystem.textSecondary)
-                }
+                // Connection indicator with sophisticated animations
+                ConnectionStatusIndicator(state: connectionState)
 
                 Divider()
                     .frame(height: 12)
@@ -455,7 +497,7 @@ struct CompactTabSelector: View {
                     Image(systemName: isSearchActive ? "xmark" : "magnifyingglass")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(isSearchActive ? ColorSystem.primary : ColorSystem.textSecondary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
             }
@@ -490,8 +532,7 @@ struct CompactTabSelector: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    .padding(.vertical, Spacing.xs)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)  // Fill container height
                     .foregroundStyle(selectedTab == tab ? ColorSystem.primary : ColorSystem.textSecondary)
                 }
                 .buttonStyle(.plain)
@@ -505,20 +546,24 @@ struct CompactTabSelector: View {
                     .padding(.trailing, Spacing.xs)
             }
         }
+        .frame(height: 32)  // Fixed height for consistent tab bar sizing
         .background(ColorSystem.terminalBgElevated)
         .overlay(alignment: .bottom) {
             // Animated selection indicator with glow
             GeometryReader { geo in
-                // Adjust for search button width
-                let searchButtonWidth: CGFloat = showSearchButton ? 36 : 0
-                let availableWidth = geo.size.width - searchButtonWidth - (isCompact ? 0 : 30)
-                let tabWidth = availableWidth / tabCount
-                Rectangle()
-                    .fill(ColorSystem.primary)
-                    .frame(width: tabWidth, height: 2)
-                    .shadow(color: ColorSystem.primaryGlow, radius: 4, y: 0)
-                    .offset(x: searchButtonWidth + selectedIndex * tabWidth)
-                    .animation(Animations.tabSlide, value: selectedTab)
+                // Guard against invalid geometry during layout transitions
+                if geo.size.width > 50 {
+                    // Adjust for search button width
+                    let searchButtonWidth: CGFloat = showSearchButton ? 32 : 0
+                    let availableWidth = max(1, geo.size.width - searchButtonWidth - (isCompact ? 0 : 30))
+                    let tabWidth = availableWidth / tabCount
+                    Rectangle()
+                        .fill(ColorSystem.primary)
+                        .frame(width: tabWidth, height: 2)
+                        .shadow(color: ColorSystem.primaryGlow, radius: 4, y: 0)
+                        .offset(x: searchButtonWidth + selectedIndex * tabWidth)
+                        .animation(Animations.tabSlide, value: selectedTab)
+                }
             }
             .frame(height: 2)
         }

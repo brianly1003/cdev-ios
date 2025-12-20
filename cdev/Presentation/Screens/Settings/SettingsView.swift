@@ -1,17 +1,24 @@
 import SwiftUI
 
-/// Settings view - Pulse Terminal design system
+/// Settings view - Compact design for mobile developers
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    // Display settings
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.syntaxHighlighting) private var syntaxHighlighting = true
     @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = false
+
+    // Behavior settings
     @AppStorage(Constants.UserDefaults.hapticFeedback) private var hapticFeedback = true
     @AppStorage(Constants.UserDefaults.autoReconnect) private var autoReconnect = true
 
     var onDisconnect: (() -> Void)?
     @State private var showDisconnectConfirm = false
     @State private var showClearDataConfirm = false
+
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     var body: some View {
         NavigationStack {
@@ -20,45 +27,57 @@ struct SettingsView: View {
                     .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: Spacing.md) {
-                        // Display Section
-                        SettingsSection(title: "Display", icon: "eye") {
+                    VStack(spacing: Spacing.sm) {
+                        // Appearance Section (Themes coming soon)
+                        SettingsSection(title: "Appearance", icon: "paintpalette") {
                             SettingsToggleRow(
                                 icon: "clock",
-                                title: "Show Timestamps",
-                                subtitle: "Display time for each log entry",
+                                title: "Timestamps",
                                 isOn: $showTimestamps
                             )
 
                             SettingsToggleRow(
                                 icon: "paintbrush",
                                 title: "Syntax Highlighting",
-                                subtitle: "Colorize code in terminal output",
                                 isOn: $syntaxHighlighting
                             )
 
                             SettingsToggleRow(
                                 icon: "number",
-                                title: "Show Session ID",
-                                subtitle: "Display session identifier in status bar",
+                                title: "Session ID",
                                 isOn: $showSessionId
+                            )
+
+                            SettingsNavRow(
+                                icon: "moon.stars",
+                                title: "Theme",
+                                value: "Dark",
+                                disabled: true
                             )
                         }
 
                         // Behavior Section
-                        SettingsSection(title: "Behavior", icon: "gearshape") {
+                        SettingsSection(title: "Behavior", icon: "slider.horizontal.3") {
                             SettingsToggleRow(
                                 icon: "iphone.radiowaves.left.and.right",
                                 title: "Haptic Feedback",
-                                subtitle: "Vibration on interactions",
                                 isOn: $hapticFeedback
                             )
 
                             SettingsToggleRow(
                                 icon: "arrow.triangle.2.circlepath",
                                 title: "Auto-Reconnect",
-                                subtitle: "Reconnect to last workspace on launch",
                                 isOn: $autoReconnect
+                            )
+                        }
+
+                        // Toolkit Section (Coming soon)
+                        SettingsSection(title: "Toolkit", icon: "wrench.and.screwdriver") {
+                            SettingsNavRow(
+                                icon: "square.grid.2x2",
+                                title: "Configure Tools",
+                                value: "5 active",
+                                disabled: true
                             )
                         }
 
@@ -67,7 +86,6 @@ struct SettingsView: View {
                             SettingsButtonRow(
                                 icon: "xmark.circle",
                                 title: "Disconnect",
-                                subtitle: "Disconnect from current workspace",
                                 style: .destructive,
                                 disabled: onDisconnect == nil
                             ) {
@@ -79,8 +97,7 @@ struct SettingsView: View {
                         SettingsSection(title: "Data", icon: "externaldrive") {
                             SettingsButtonRow(
                                 icon: "trash",
-                                title: "Clear Saved Workspaces",
-                                subtitle: "Remove all saved connection history",
+                                title: "Clear Workspaces",
                                 style: .destructive
                             ) {
                                 showClearDataConfirm = true
@@ -98,34 +115,32 @@ struct SettingsView: View {
                             SettingsLinkRow(
                                 icon: "chevron.left.forwardslash.chevron.right",
                                 title: "Source Code",
-                                subtitle: "GitHub Repository",
                                 url: URL(string: "https://github.com/brianly1003/cdev-ios")!
                             )
 
                             SettingsLinkRow(
                                 icon: "ladybug",
                                 title: "Report Issue",
-                                subtitle: "Submit bug reports",
                                 url: URL(string: "https://github.com/brianly1003/cdev-ios/issues")!
                             )
                         }
 
                         // Footer
-                        VStack(spacing: Spacing.xxs) {
+                        VStack(spacing: 2) {
                             Text("cdev")
                                 .font(Typography.bodyBold)
                                 .foregroundStyle(ColorSystem.textSecondary)
 
-                            Text("Mobile companion for Claude Code")
+                            Text("by Brian Ly")
                                 .font(Typography.caption1)
                                 .foregroundStyle(ColorSystem.textTertiary)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.top, Spacing.md)
-                        .padding(.bottom, Spacing.xl)
+                        .padding(.top, Spacing.sm)
+                        .padding(.bottom, Spacing.lg)
                     }
-                    .padding(.horizontal, Spacing.sm)
-                    .padding(.top, Spacing.sm)
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.top, Spacing.xs)
                 }
             }
             .navigationTitle("Settings")
@@ -169,7 +184,7 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Settings Section
+// MARK: - Settings Section (Compact)
 
 private struct SettingsSection<Content: View>: View {
     let title: String
@@ -177,76 +192,110 @@ private struct SettingsSection<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
             // Section Header
-            HStack(spacing: Spacing.xxs) {
+            HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.system(size: 10))
                 Text(title.uppercased())
                     .font(Typography.badge)
             }
             .foregroundStyle(ColorSystem.textTertiary)
-            .padding(.horizontal, Spacing.sm)
+            .padding(.horizontal, Spacing.xs)
 
             // Section Content
-            VStack(spacing: 1) {
+            VStack(spacing: 0.5) {
                 content
             }
-            .background(ColorSystem.terminalBgElevated)
-            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
         }
     }
 }
 
-// MARK: - Settings Toggle Row
+// MARK: - Settings Toggle Row (Compact)
 
 private struct SettingsToggleRow: View {
     let icon: String
     let title: String
-    let subtitle: String
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(spacing: Spacing.sm) {
-            // Icon
+        HStack(spacing: Spacing.xs) {
             Image(systemName: icon)
                 .font(.system(size: 14))
                 .foregroundStyle(ColorSystem.primary)
-                .frame(width: 24)
+                .frame(width: 20)
 
-            // Text
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(Typography.body)
-                    .foregroundStyle(ColorSystem.textPrimary)
-
-                Text(subtitle)
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textTertiary)
-            }
+            Text(title)
+                .font(Typography.body)
+                .foregroundStyle(ColorSystem.textPrimary)
 
             Spacer()
 
-            // Toggle
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .tint(ColorSystem.primary)
+                .scaleEffect(0.85)
                 .onChange(of: isOn) { _, _ in
                     Haptics.selection()
                 }
         }
         .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
         .background(ColorSystem.terminalBgElevated)
     }
 }
 
-// MARK: - Settings Button Row
+// MARK: - Settings Nav Row (Coming Soon placeholder)
+
+private struct SettingsNavRow: View {
+    let icon: String
+    let title: String
+    let value: String
+    var disabled: Bool = false
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(disabled ? ColorSystem.textQuaternary : ColorSystem.primary)
+                .frame(width: 20)
+
+            Text(title)
+                .font(Typography.body)
+                .foregroundStyle(disabled ? ColorSystem.textTertiary : ColorSystem.textPrimary)
+
+            Spacer()
+
+            Text(value)
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textQuaternary)
+
+            if disabled {
+                Text("Soon")
+                    .font(Typography.badge)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
+        .background(ColorSystem.terminalBgElevated)
+    }
+}
+
+// MARK: - Settings Button Row (Compact)
 
 private struct SettingsButtonRow: View {
     let icon: String
     let title: String
-    let subtitle: String
     var style: ButtonStyle = .normal
     var disabled: Bool = false
     let action: () -> Void
@@ -270,33 +319,24 @@ private struct SettingsButtonRow: View {
             action()
             Haptics.light()
         } label: {
-            HStack(spacing: Spacing.sm) {
-                // Icon
+            HStack(spacing: Spacing.xs) {
                 Image(systemName: icon)
                     .font(.system(size: 14))
                     .foregroundStyle(iconColor)
-                    .frame(width: 24)
+                    .frame(width: 20)
 
-                // Text
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(Typography.body)
-                        .foregroundStyle(textColor)
-
-                    Text(subtitle)
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(ColorSystem.textTertiary)
-                }
+                Text(title)
+                    .font(Typography.body)
+                    .foregroundStyle(textColor)
 
                 Spacer()
 
-                // Chevron
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(ColorSystem.textQuaternary)
             }
             .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
             .background(ColorSystem.terminalBgElevated)
         }
         .buttonStyle(.plain)
@@ -304,7 +344,7 @@ private struct SettingsButtonRow: View {
     }
 }
 
-// MARK: - Settings Info Row
+// MARK: - Settings Info Row (Compact)
 
 private struct SettingsInfoRow: View {
     let icon: String
@@ -312,68 +352,55 @@ private struct SettingsInfoRow: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: Spacing.sm) {
-            // Icon
+        HStack(spacing: Spacing.xs) {
             Image(systemName: icon)
                 .font(.system(size: 14))
                 .foregroundStyle(ColorSystem.primary)
-                .frame(width: 24)
+                .frame(width: 20)
 
-            // Title
             Text(title)
                 .font(Typography.body)
                 .foregroundStyle(ColorSystem.textPrimary)
 
             Spacer()
 
-            // Value
             Text(value)
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.textTertiary)
         }
         .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
         .background(ColorSystem.terminalBgElevated)
     }
 }
 
-// MARK: - Settings Link Row
+// MARK: - Settings Link Row (Compact)
 
 private struct SettingsLinkRow: View {
     let icon: String
     let title: String
-    let subtitle: String
     let url: URL
 
     var body: some View {
         Link(destination: url) {
-            HStack(spacing: Spacing.sm) {
-                // Icon
+            HStack(spacing: Spacing.xs) {
                 Image(systemName: icon)
                     .font(.system(size: 14))
                     .foregroundStyle(ColorSystem.primary)
-                    .frame(width: 24)
+                    .frame(width: 20)
 
-                // Text
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(Typography.body)
-                        .foregroundStyle(ColorSystem.textPrimary)
-
-                    Text(subtitle)
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(ColorSystem.textTertiary)
-                }
+                Text(title)
+                    .font(Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
 
                 Spacer()
 
-                // External link indicator
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 10))
                     .foregroundStyle(ColorSystem.textQuaternary)
             }
             .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
             .background(ColorSystem.terminalBgElevated)
         }
     }

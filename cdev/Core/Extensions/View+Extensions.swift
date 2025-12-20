@@ -149,6 +149,40 @@ struct KeyboardShowModifier: ViewModifier {
     }
 }
 
+// MARK: - Keyboard Adaptive Modifier
+
+/// Tracks keyboard height and provides it as padding
+/// Use this when automatic keyboard avoidance doesn't work (e.g., with TabView .page style)
+struct KeyboardAdaptiveModifier: ViewModifier {
+    @State private var keyboardHeight: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.bottom, keyboardHeight)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+                guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                let animationDuration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+                withAnimation(.easeOut(duration: animationDuration)) {
+                    keyboardHeight = keyboardFrame.height
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+                let animationDuration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+                withAnimation(.easeOut(duration: animationDuration)) {
+                    keyboardHeight = 0
+                }
+            }
+    }
+}
+
+extension View {
+    /// Adds padding equal to keyboard height when keyboard is shown
+    /// Use when automatic keyboard avoidance doesn't work
+    func keyboardAdaptive() -> some View {
+        modifier(KeyboardAdaptiveModifier())
+    }
+}
+
 // MARK: - Button Press Effect
 
 struct ButtonPressEffect: ViewModifier {
