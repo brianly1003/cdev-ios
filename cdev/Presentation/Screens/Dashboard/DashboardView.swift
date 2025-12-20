@@ -243,10 +243,10 @@ struct DashboardView: View {
                 viewModel.requestScroll(direction: direction)
             }
 
-            // Floating keyboard dismiss button (positioned above chat input)
+            // Floating keyboard dismiss button (positioned above chat input on Terminal tab only)
             FloatingKeyboardDismissButton()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .padding(.bottom, 80) // Above ActionBarView
+                .padding(.bottom, viewModel.selectedTab == .logs ? 80 : Spacing.md) // Above ActionBarView on Terminal
                 .padding(.trailing, Spacing.md)
 
             // Reconnection toast (shown when connection is restored)
