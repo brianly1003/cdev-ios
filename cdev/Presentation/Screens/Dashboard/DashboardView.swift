@@ -16,9 +16,17 @@ struct DashboardView: View {
     /// Toolkit items - Easy to extend! Just add more .add() calls
     /// See PredefinedTool enum for available tools, or use .addCustom() for new ones
     private var toolkitItems: [ToolkitItem] {
-        ToolkitBuilder()
+        var builder = ToolkitBuilder()
             .add(.debugLogs { showDebugLogs = true })
-            .build()
+
+        // Add reconnect button when disconnected/failed
+        if !viewModel.connectionState.isConnected {
+            builder = builder.add(.reconnect {
+                Task { await viewModel.retryConnection() }
+            })
+        }
+
+        return builder.build()
     }
 
     var body: some View {
