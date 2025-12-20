@@ -26,6 +26,7 @@ struct FloatingKeyboardDismissButton: View {
                         .clipShape(Circle())
                         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
                 }
+                .opacity(0.8)
                 .transition(.scale.combined(with: .opacity))
             }
         }

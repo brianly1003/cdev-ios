@@ -243,10 +243,10 @@ struct DashboardView: View {
                 viewModel.requestScroll(direction: direction)
             }
 
-            // Floating keyboard dismiss button
+            // Floating keyboard dismiss button (positioned above chat input)
             FloatingKeyboardDismissButton()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .padding(.bottom, Spacing.md)
+                .padding(.bottom, 80) // Above ActionBarView
                 .padding(.trailing, Spacing.md)
 
             // Reconnection toast (shown when connection is restored)
