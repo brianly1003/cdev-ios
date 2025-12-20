@@ -349,8 +349,8 @@ struct StatusBarView: View {
                         .foregroundStyle(ColorSystem.Status.color(for: claudeState))
                 }
 
-                // Live indicator when watching session
-                if isWatchingSession {
+                // Live indicator when watching session (only when connected)
+                if isWatchingSession && connectionState.isConnected {
                     HStack(spacing: 3) {
                         Circle()
                             .fill(ColorSystem.error)
