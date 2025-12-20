@@ -578,7 +578,8 @@ private struct ElementsScrollView: View {
                             .id("bottom")
                     }
                     .padding(.horizontal, Spacing.xs)
-                    .padding(.vertical, Spacing.xs)
+                    .padding(.top, Spacing.xs)
+                    .padding(.bottom, Spacing.xl)
                 }
                 .refreshable {
                     // Pull-to-refresh triggers load more (older messages)
@@ -679,7 +680,7 @@ private struct ElementsScrollView: View {
 
     /// Debounced scroll - cancels previous scroll task and schedules new one
     private func scheduleScroll(proxy: ScrollViewProxy, animated: Bool) {
-        AppLogger.log("[ElementsScrollView] scheduleScroll called - animated=\(animated), elementsCount=\(elements.count)")
+        AppLogger.log("[ElementsScrollView] scheduleScroll called - animated=\(animated), elementsCount=\(elements.count), isStreaming=\(isStreaming)")
         guard !elements.isEmpty else {
             AppLogger.log("[ElementsScrollView] scheduleScroll - SKIPPED (elements empty)")
             return
@@ -698,9 +699,9 @@ private struct ElementsScrollView: View {
 
             lastScrolledCount = elements.count
 
-            // Scroll to last element ID to force content realization in LazyVStack
-            // Using element ID instead of "bottom" anchor to work around SwiftUI bug
-            let targetId = elements.last?.id ?? "bottom"
+            // Always scroll to "bottom" anchor (after the bottom padding)
+            // to ensure new messages and streaming indicator don't overlap content.
+            let targetId = "bottom"
             AppLogger.log("[ElementsScrollView] scheduleScroll executing - targetId=\(targetId), animated=\(animated), elementsCount=\(elements.count)")
             if animated {
                 withAnimation(Animations.logAppear) {
@@ -721,10 +722,8 @@ private struct ElementsScrollView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
 
-            // Scroll to last element ID to force content realization
-            let targetId = elements.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo(targetId, anchor: .bottom)
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
     }
@@ -737,10 +736,8 @@ private struct ElementsScrollView: View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
 
-            // Scroll to last element ID to force content realization
-            let targetId = elements.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.15)) {
-                proxy.scrollTo(targetId, anchor: .bottom)
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
     }
@@ -800,34 +797,20 @@ private struct ElementsScrollView: View {
 
             switch direction {
             case .top:
-                // Scroll to first element to force content realization
-                if let firstId = elements.first?.id {
-                    AppLogger.log("[ElementsScrollView] Scrolling to TOP - targetId=\(firstId), anchor=.top")
-                    withAnimation(scrollAnimation) {
-                        proxy.scrollTo(firstId, anchor: .top)
-                    }
-                    AppLogger.log("[ElementsScrollView] scrollTo completed for TOP")
-                } else {
-                    AppLogger.log("[ElementsScrollView] WARNING: No first element, using 'top' anchor")
-                    withAnimation(scrollAnimation) {
-                        proxy.scrollTo("top", anchor: .top)
-                    }
+                // Always scroll to "top" anchor (before the top padding)
+                AppLogger.log("[ElementsScrollView] Scrolling to TOP - anchor=.top, elementsCount=\(elements.count)")
+                withAnimation(scrollAnimation) {
+                    proxy.scrollTo("top", anchor: .top)
                 }
+                AppLogger.log("[ElementsScrollView] scrollTo completed for TOP")
 
             case .bottom:
-                // Scroll to last element with .bottom anchor (natural for scroll-to-bottom)
-                if let lastId = elements.last?.id {
-                    AppLogger.log("[ElementsScrollView] Scrolling to BOTTOM - targetId=\(lastId), anchor=.bottom, elementsCount=\(elements.count)")
-                    withAnimation(scrollAnimation) {
-                        proxy.scrollTo(lastId, anchor: .bottom)
-                    }
-                    AppLogger.log("[ElementsScrollView] scrollTo completed for BOTTOM")
-                } else {
-                    AppLogger.log("[ElementsScrollView] WARNING: No last element, using 'bottom' anchor")
-                    withAnimation(scrollAnimation) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
+                // Always scroll to "bottom" anchor (after the bottom padding)
+                AppLogger.log("[ElementsScrollView] Scrolling to BOTTOM - anchor=.bottom, elementsCount=\(elements.count)")
+                withAnimation(scrollAnimation) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
                 }
+                AppLogger.log("[ElementsScrollView] scrollTo completed for BOTTOM")
             }
 
             // Log state after scroll

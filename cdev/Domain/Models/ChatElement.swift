@@ -303,8 +303,11 @@ struct ContextCompactionContent: Codable, Equatable {
 
 extension ChatElement {
     /// Create from user prompt
-    static func userInput(_ text: String) -> ChatElement {
-        ChatElement(
+    /// Uses content-based ID for deduplication with WebSocket events
+    static func userInput(_ text: String, sessionId: String? = nil) -> ChatElement {
+        let contentBasedId = generateContentBasedId(role: "user", text: text, sessionId: sessionId)
+        return ChatElement(
+            id: contentBasedId,
             type: .userInput,
             content: .userInput(UserInputContent(text: text))
         )
@@ -416,8 +419,11 @@ extension ChatElement {
         if effectiveRole == "user" {
             let text = effectiveContent.textContent
             if !text.isEmpty {
+                // Generate deterministic ID based on content when uuid is nil
+                // This enables deduplication of user messages from WebSocket events
+                let messageId = payload.uuid ?? generateContentBasedId(role: "user", text: text, sessionId: payload.sessionId)
                 elements.append(ChatElement(
-                    id: payload.uuid ?? UUID().uuidString,
+                    id: messageId,
                     type: .userInput,
                     timestamp: timestamp,
                     content: .userInput(UserInputContent(text: text))
@@ -427,7 +433,8 @@ extension ChatElement {
         }
 
         // Assistant message - may have multiple content blocks
-        let baseId = payload.uuid ?? UUID().uuidString
+        // Generate deterministic ID based on content when uuid is nil
+        let baseId = payload.uuid ?? generateContentBasedId(role: "assistant", text: effectiveContent.textContent, sessionId: payload.sessionId)
 
         switch effectiveContent {
         case .text(let text):
@@ -639,4 +646,19 @@ private func extractToolCall(from text: String) -> (tool: String, params: [Strin
     }
 
     return (tool, params)
+}
+
+/// Generate a deterministic ID based on message content
+/// Used when WebSocket events don't include a uuid field
+/// This enables deduplication of messages that arrive from multiple sources
+private func generateContentBasedId(role: String, text: String, sessionId: String?) -> String {
+    // Use first 100 chars of content to create a stable hash
+    // Combined with role and sessionId for uniqueness across sessions
+    let contentPrefix = String(text.prefix(100))
+    let hashInput = "\(role):\(sessionId ?? ""):\(contentPrefix)"
+
+    // Simple hash using hashValue (consistent within app session)
+    // For cross-session consistency, we'd need a proper hash like SHA256
+    let hash = abs(hashInput.hashValue)
+    return "content-\(role)-\(hash)"
 }

@@ -97,6 +97,10 @@ final class DashboardViewModel: ObservableObject {
     private var logUpdateScheduled = false
     private var diffUpdateScheduled = false
 
+    // Debouncing for chat elements updates (claude_message events)
+    private var chatElementsUpdateScheduled = false
+    private var pendingChatElements: [ChatElement] = []
+
     // Prevent duplicate initial loads
     private var isInitialLoadInProgress = false
     private var hasCompletedInitialLoad = false
@@ -229,6 +233,43 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    /// Queue chat elements for debounced UI update
+    /// Elements are deduplicated and batched before updating the UI
+    private func queueChatElements(_ elements: [ChatElement]) {
+        // Filter duplicates before adding to pending queue
+        for element in elements {
+            guard !seenElementIds.contains(element.id) else { continue }
+            seenElementIds.insert(element.id)
+            pendingChatElements.append(element)
+        }
+
+        // Schedule debounced update if not already scheduled
+        scheduleChatElementsUpdate()
+    }
+
+    /// Schedule a debounced chat elements UI update
+    /// Batches rapid claude_message events to prevent UI lag
+    private func scheduleChatElementsUpdate() {
+        guard !chatElementsUpdateScheduled else { return }
+        chatElementsUpdateScheduled = true
+
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms debounce
+            guard let self = self else { return }
+
+            // Move pending elements to main array
+            if !self.pendingChatElements.isEmpty {
+                let count = self.pendingChatElements.count
+                self.chatElements.append(contentsOf: self.pendingChatElements)
+                self.pendingChatElements.removeAll()
+                self.trimChatElementsIfNeeded()
+                AppLogger.log("[Dashboard] Batched \(count) chat elements (debounced update)")
+            }
+
+            self.chatElementsUpdateScheduled = false
+        }
+    }
+
     /// Force immediate log update (for user actions)
     private func forceLogUpdate() async {
         logUpdateScheduled = false
@@ -275,8 +316,9 @@ final class DashboardViewModel: ObservableObject {
         await forceLogUpdate() // Immediate for user action
 
         // Also add as ChatElement for sophisticated UI
-        let userElement = ChatElement.userInput(userMessage)
-        chatElements.append(userElement)
+        // Use content-based ID with sessionId for deduplication with WebSocket events
+        let userElement = ChatElement.userInput(userMessage, sessionId: userSelectedSessionId)
+        addElementIfNew(userElement)  // Use deduplication method
 
         do {
             // If Claude is waiting for a response, use respondToClaude
@@ -949,6 +991,11 @@ final class DashboardViewModel: ObservableObject {
                 // Also create ChatElements from session message (may have multiple blocks)
                 let chatMessage = ChatMessage.from(sessionMessage: message)
                 let elements = convertChatMessageToElements(chatMessage)
+                // Log first few messages for debugging duplicate issue
+                if index < 3 {
+                    AppLogger.log("[Dashboard] History msg[\(index)] - uuid: \(message.uuid ?? "nil"), computed id: \(message.id), chatMessage.id: \(chatMessage.id)")
+                    AppLogger.log("[Dashboard] History msg[\(index)] - element IDs: \(elements.map { $0.id })")
+                }
                 // Use deduplication method (handles Set management internally)
                 addElementsIfNew(elements)
 
@@ -1020,11 +1067,12 @@ final class DashboardViewModel: ObservableObject {
             // NEW: Structured message with content blocks
             // Convert to ChatElements for sophisticated UI
             if case .claudeMessage(let payload) = event.payload {
+                AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil")")
                 let elements = ChatElement.from(payload: payload)
-                // Use deduplication method for O(1) lookup
-                let addedCount = addElementsIfNew(elements)
-                if addedCount > 0 {
-                    AppLogger.log("[Dashboard] Added \(addedCount) chat elements from claude_message")
+
+                // Queue elements for debounced UI update (batches rapid events)
+                if !elements.isEmpty {
+                    queueChatElements(elements)
                 }
 
                 // Update streaming indicator state
@@ -1049,6 +1097,11 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .claudeLog:
+            // TESTING: Comment out claude_log handling to test claude_message only
+            // This helps verify if claude_message alone is sufficient for UI
+            AppLogger.log("[Dashboard] claude_log received (IGNORED for testing)")
+            break
+            /*
             if let entry = LogEntry.from(event: event) {
                 await logCache.add(entry)
                 scheduleLogUpdate() // Debounced - prevents UI lag with rapid logs
@@ -1062,6 +1115,7 @@ final class DashboardViewModel: ObservableObject {
             // Session ID should only come from trusted sources:
             // 1. /api/claude/sessions (loadRecentSessionHistory)
             // 2. User explicit selection via /resume command
+            */
 
         case .claudeStatus:
             if case .claudeStatus(let payload) = event.payload,
