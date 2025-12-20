@@ -131,6 +131,7 @@ struct DashboardView: View {
                     .background(ColorSystem.terminalBg)
 
                     // Action bar - only show on logs tab
+                    // Uses manual keyboard handling, so ignore SwiftUI's automatic keyboard avoidance
                     if viewModel.selectedTab == .logs {
                         ActionBarView(
                             claudeState: viewModel.claudeState,
@@ -143,6 +144,7 @@ struct DashboardView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
+                .ignoresSafeArea(.keyboard, edges: viewModel.selectedTab == .logs ? .bottom : [])
                 .background(ColorSystem.terminalBg)
                 .animation(Animations.stateChange, value: viewModel.selectedTab)
                 // Dismiss keyboard and reset search when switching tabs
@@ -659,6 +661,9 @@ struct ActionBarView: View {
     let onSend: () -> Void
     let onStop: () -> Void
 
+    // Keyboard height tracking for proper positioning
+    @State private var keyboardHeight: CGFloat = 0
+
     /// Filtered commands based on current input
     private var suggestedCommands: [BuiltInCommand] {
         BuiltInCommand.matching(promptText)
@@ -751,9 +756,12 @@ struct ActionBarView: View {
             .padding(.vertical, Spacing.sm)
             .background(ColorSystem.terminalBgElevated)
         }
+        // Only add keyboard padding when THIS input is focused (not search bar)
+        .padding(.bottom, isFocused.wrappedValue ? keyboardHeight : 0)
         .background(ColorSystem.terminalBg)
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
+        .animation(.easeOut(duration: 0.25), value: keyboardHeight)
         // Dismiss keyboard when Claude starts running - don't auto-focus when done
         .onChange(of: claudeState) { _, newState in
             if newState == .running {
@@ -762,6 +770,24 @@ struct ActionBarView: View {
         }
         .onChange(of: isFocused.wrappedValue) { oldValue, newValue in
             AppLogger.log("[ActionBarView] Focus changed: \(oldValue) -> \(newValue)")
+            // Reset keyboard height when losing focus
+            if !newValue {
+                keyboardHeight = 0
+            }
+        }
+        // Track keyboard height for positioning above keyboard
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+            // Only track keyboard when this input is focused
+            guard isFocused.wrappedValue else { return }
+            guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            // Subtract safe area bottom since we're inside the safe area
+            let safeAreaBottom = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first?.windows.first?.safeAreaInsets.bottom ?? 0
+            keyboardHeight = keyboardFrame.height - safeAreaBottom
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardHeight = 0
         }
     }
 }
