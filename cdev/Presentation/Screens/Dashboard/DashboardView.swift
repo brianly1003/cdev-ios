@@ -144,7 +144,9 @@ struct DashboardView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .ignoresSafeArea(.keyboard, edges: viewModel.selectedTab == .logs ? .bottom : [])
+                // Only ignore keyboard safe area when chat input is focused (uses manual handling)
+                // When search bar is focused, let SwiftUI handle keyboard avoidance normally
+                .ignoresSafeArea(.keyboard, edges: isInputFocused ? .bottom : [])
                 .background(ColorSystem.terminalBg)
                 .animation(Animations.stateChange, value: viewModel.selectedTab)
                 // Dismiss keyboard and reset search when switching tabs
