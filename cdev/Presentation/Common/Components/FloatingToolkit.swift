@@ -541,7 +541,7 @@ struct FloatingToolkitButton: View {
 
     private let buttonSize: CGFloat = 48
     private let menuItemSize: CGFloat = 44
-    private let expandedRadius: CGFloat = 75
+    private let expandedRadius: CGFloat = 95  // Increased for better spacing with labels
 
     var body: some View {
         GeometryReader { geometry in
@@ -763,7 +763,7 @@ struct FloatingToolkitButton: View {
         // Calculate base angle once for all items
         let baseAngle = calculateOptimalBaseAngle(for: currentPos, in: geometry)
 
-        let angleSpread: Double = min(Double(total - 1) * 40, 160)
+        let angleSpread: Double = min(Double(total - 1) * 55, 160)  // Increased angle per item
         let angleStep = total > 1 ? angleSpread / Double(total - 1) : 0
 
         // Determine if we're on the left side of screen
