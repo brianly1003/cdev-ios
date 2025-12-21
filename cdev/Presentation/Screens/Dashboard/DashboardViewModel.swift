@@ -191,8 +191,16 @@ final class DashboardViewModel: ObservableObject {
                 // Wait for UI to be fully interactive before loading data
                 // This prevents hang when user tries to interact during initial load
                 try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+
+                // Skip if already loaded (e.g., by reconnection handler)
+                guard !hasCompletedInitialLoad else {
+                    AppLogger.log("[DashboardViewModel] init Task - skipping, already loaded")
+                    return
+                }
+
                 AppLogger.log("[DashboardViewModel] init Task - starting loadRecentSessionHistory")
                 await loadRecentSessionHistory()
+                // refreshGitStatus after loadRecentSessionHistory sets hasCompletedInitialLoad
                 AppLogger.log("[DashboardViewModel] init Task - starting refreshGitStatus")
                 await refreshGitStatus()
                 AppLogger.log("[DashboardViewModel] init Task - completed")
@@ -840,22 +848,24 @@ final class DashboardViewModel: ObservableObject {
 
     /// Refresh git status from API
     func refreshGitStatus() async {
-        // Refresh source control view
+        // Refresh source control view (this fetches git status)
         await sourceControlViewModel.refresh()
 
-        // Also update legacy diff cache for backward compatibility
-        do {
-            let gitStatus = try await _agentRepository.getGitStatus()
-            // Clear existing entries and add fresh ones from API
-            await diffCache.clear()
-            for file in gitStatus.files {
-                let entry = DiffEntry.from(gitFile: file)
-                await diffCache.add(entry)
-            }
-            await forceDiffUpdate()
-        } catch {
-            AppLogger.error(error, context: "Refresh git status")
+        // Update legacy diff cache from sourceControlViewModel state (no extra API call)
+        await diffCache.clear()
+        let allFiles = sourceControlViewModel.state.stagedFiles + sourceControlViewModel.state.allUnstagedFiles
+        for file in allFiles {
+            let entry = DiffEntry(
+                id: file.id,
+                filePath: file.path,
+                diff: file.diff,
+                additions: file.additions,
+                deletions: file.deletions,
+                changeType: FileChangeType(rawValue: file.status.rawValue)
+            )
+            await diffCache.add(entry)
         }
+        await forceDiffUpdate()
     }
 
     /// Clear logs and chat elements
@@ -864,6 +874,9 @@ final class DashboardViewModel: ObservableObject {
         logs = []
         chatElements = []
         seenElementIds.removeAll()
+        // Reset pagination so next load starts from beginning
+        messagesNextOffset = 0
+        messagesHasMore = true  // Allow loading again
         Haptics.light()
     }
 
@@ -1049,15 +1062,14 @@ final class DashboardViewModel: ObservableObject {
 
                 // Handle reconnection - re-establish session watch and reload data
                 if !wasConnected && state.isConnected {
-                    AppLogger.log("[Dashboard] Reconnected - loading history and git status in 300ms")
+                    AppLogger.log("[Dashboard] Reconnected - loading data in 300ms")
                     // Delay to let UI settle after connection state change
                     // This prevents hang when user tries to interact during load
                     try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
                     AppLogger.log("[Dashboard] Reconnected - starting loadRecentSessionHistory")
                     await self.loadRecentSessionHistory()
-                    AppLogger.log("[Dashboard] Reconnected - starting refreshGitStatus")
-                    await self.refreshGitStatus()
-                    AppLogger.log("[Dashboard] Reconnected - starting refreshStatus")
+                    // refreshStatus() calls refreshGitStatus() internally when hasCompletedInitialLoad is true
+                    AppLogger.log("[Dashboard] Reconnected - starting refreshStatus (includes git status)")
                     await self.refreshStatus()
 
                     // Re-establish session watch for live mode

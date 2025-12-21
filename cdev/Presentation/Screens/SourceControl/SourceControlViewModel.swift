@@ -15,6 +15,15 @@ final class SourceControlViewModel: ObservableObject {
 
     private let agentRepository: AgentRepositoryProtocol
 
+    // MARK: - Debounce
+
+    /// Last refresh timestamp for debouncing
+    private var lastRefreshTime: Date?
+    /// Minimum interval between refreshes (500ms)
+    private let refreshDebounceInterval: TimeInterval = 0.5
+    /// Flag to track if refresh is in progress
+    private var isRefreshing: Bool = false
+
     // MARK: - Init
 
     init(agentRepository: AgentRepositoryProtocol? = nil) {
@@ -24,7 +33,25 @@ final class SourceControlViewModel: ObservableObject {
     // MARK: - Refresh
 
     /// Refresh git status from server using enhanced API
+    /// Debounced to prevent rapid successive calls
     func refresh() async {
+        // Skip if refresh in progress
+        guard !isRefreshing else {
+            AppLogger.log("[SourceControl] Skipping refresh - already in progress")
+            return
+        }
+
+        // Debounce: skip if refreshed recently
+        if let lastTime = lastRefreshTime,
+           Date().timeIntervalSince(lastTime) < refreshDebounceInterval {
+            AppLogger.log("[SourceControl] Skipping refresh - debounced")
+            return
+        }
+
+        isRefreshing = true
+        lastRefreshTime = Date()
+        defer { isRefreshing = false }
+
         state.isLoading = true
         state.lastError = nil
 

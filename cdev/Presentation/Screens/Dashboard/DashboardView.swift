@@ -706,11 +706,13 @@ struct ActionBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Command suggestions (above the input)
+            // Leave space on right for floating toolkit button
             if showSuggestions {
                 CommandSuggestionsView(commands: suggestedCommands) { command in
                     promptText = command
                 }
-                .padding(.horizontal, Spacing.sm)
+                .padding(.leading, Spacing.sm)
+                .padding(.trailing, 70)  // Space for floating toolkit
                 .padding(.bottom, Spacing.xs)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }

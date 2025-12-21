@@ -15,12 +15,20 @@ struct PairingView: View {
         sizeClass == .compact
     }
 
+    /// Dismiss keyboard
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
-                // Background
+                // Background - tap to dismiss keyboard
                 ColorSystem.terminalBg
                     .ignoresSafeArea()
+                    .onTapGesture {
+                        dismissKeyboard()
+                    }
 
                 // Content
                 if isCompact {
@@ -114,6 +122,10 @@ struct PairingView: View {
 
                 Spacer(minLength: Spacing.xl)
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissKeyboard()
+            }
         }
         .scrollDismissesKeyboard(.interactively)
     }
@@ -142,6 +154,10 @@ struct PairingView: View {
             }
             .frame(maxWidth: .infinity)
             .background(ColorSystem.terminalBg)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissKeyboard()
+            }
 
             // Divider
             Rectangle()
@@ -180,6 +196,10 @@ struct PairingView: View {
             }
             .frame(maxWidth: .infinity)
             .background(ColorSystem.terminalBgElevated)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissKeyboard()
+            }
         }
     }
 }

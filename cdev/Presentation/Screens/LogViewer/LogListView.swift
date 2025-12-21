@@ -48,11 +48,8 @@ struct LogListView: View {
         let _ = AppLogger.log("[LogListView] Rendering: elements=\(elements.count), logs=\(logs.count), useElementsView=\(useElementsView)")
         Group {
             if elements.isEmpty && logs.isEmpty {
-                EmptyStateView(
-                    icon: Icons.terminal,
-                    title: "No Output",
-                    subtitle: "Claude's output will appear here"
-                )
+                // Empty state with pull-to-refresh support
+                emptyStateView
             } else if useElementsView && !elements.isEmpty {
                 // NEW: Sophisticated Elements API view
                 elementsListView
@@ -60,15 +57,38 @@ struct LogListView: View {
                 // Legacy: LogEntry-based view
                 logsListView
             } else {
-                EmptyStateView(
-                    icon: Icons.terminal,
-                    title: "No Output",
-                    subtitle: "Claude's output will appear here"
-                )
+                // Empty state with pull-to-refresh support
+                emptyStateView
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ColorSystem.terminalBg)
+    }
+
+    // MARK: - Empty State View (with pull-to-refresh)
+
+    @ViewBuilder
+    private var emptyStateView: some View {
+        ScrollView {
+            EmptyStateView(
+                icon: Icons.terminal,
+                title: "No Output",
+                subtitle: "Claude's output will appear here"
+            )
+            .frame(maxWidth: .infinity, minHeight: 300)
+        }
+        .refreshable {
+            // Pull-to-refresh triggers load more (older messages)
+            if let onLoadMore = onLoadMore {
+                AppLogger.log("[LogListView] Empty state pull-to-refresh triggered")
+                await withCheckedContinuation { continuation in
+                    Task.detached {
+                        await onLoadMore()
+                        continuation.resume()
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Elements List View (NEW)
