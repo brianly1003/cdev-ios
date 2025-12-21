@@ -84,43 +84,39 @@ struct SourceControlView: View {
                         onCommitAndPush: { Task { await viewModel.commitAndPush() } }
                     )
 
-                    // Staged Changes Section
-                    if !viewModel.state.stagedFiles.isEmpty {
-                        FileChangesSection(
-                            title: "Staged Changes",
-                            files: viewModel.state.stagedFiles,
-                            isStaged: true,
-                            isExpanded: $viewModel.stagedExpanded,
-                            onStageAll: nil,
-                            onUnstageAll: { Task { await viewModel.unstageAll() } },
-                            onFileAction: { file, action in
-                                handleFileAction(file: file, action: action)
-                            },
-                            onFileTap: { file in
-                                selectedFile = file
-                                Haptics.selection()
-                            }
-                        )
-                    }
+                    // Staged Changes Section (always visible)
+                    FileChangesSection(
+                        title: "Staged Changes",
+                        files: viewModel.state.stagedFiles,
+                        isStaged: true,
+                        isExpanded: $viewModel.stagedExpanded,
+                        onStageAll: nil,
+                        onUnstageAll: viewModel.state.stagedFiles.isEmpty ? nil : { Task { await viewModel.unstageAll() } },
+                        onFileAction: { file, action in
+                            handleFileAction(file: file, action: action)
+                        },
+                        onFileTap: { file in
+                            selectedFile = file
+                            Haptics.selection()
+                        }
+                    )
 
-                    // Unstaged Changes Section (Modified + Untracked combined)
-                    if !viewModel.state.allUnstagedFiles.isEmpty {
-                        FileChangesSection(
-                            title: "Changes",
-                            files: viewModel.state.allUnstagedFiles,
-                            isStaged: false,
-                            isExpanded: $viewModel.changesExpanded,
-                            onStageAll: { Task { await viewModel.stageAll() } },
-                            onUnstageAll: nil,
-                            onFileAction: { file, action in
-                                handleFileAction(file: file, action: action)
-                            },
-                            onFileTap: { file in
-                                selectedFile = file
-                                Haptics.selection()
-                            }
-                        )
-                    }
+                    // Unstaged Changes Section (always visible)
+                    FileChangesSection(
+                        title: "Changes",
+                        files: viewModel.state.allUnstagedFiles,
+                        isStaged: false,
+                        isExpanded: $viewModel.changesExpanded,
+                        onStageAll: viewModel.state.allUnstagedFiles.isEmpty ? nil : { Task { await viewModel.stageAll() } },
+                        onUnstageAll: nil,
+                        onFileAction: { file, action in
+                            handleFileAction(file: file, action: action)
+                        },
+                        onFileTap: { file in
+                            selectedFile = file
+                            Haptics.selection()
+                        }
+                    )
 
                     // Conflicts Section (if any)
                     if !viewModel.state.conflictedFiles.isEmpty {
@@ -394,17 +390,6 @@ struct CommitInputView: View {
                         .submitLabel(.done)
                         .padding(.vertical, Spacing.xs)
                         .padding(.leading, Spacing.sm)
-                        .toolbar {
-                            ToolbarItemGroup(placement: .keyboard) {
-                                Spacer()
-                                Button {
-                                    isFocused = false
-                                } label: {
-                                    Image(systemName: "keyboard.chevron.compact.down")
-                                        .foregroundStyle(ColorSystem.primary)
-                                }
-                            }
-                        }
 
                     // Commit button / menu
                     if isLoading {

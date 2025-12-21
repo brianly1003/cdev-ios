@@ -18,6 +18,9 @@ struct DashboardView: View {
     private var toolkitItems: [ToolkitItem] {
         var builder = ToolkitBuilder()
             .add(.debugLogs { showDebugLogs = true })
+            .add(.refresh { Task { await viewModel.refreshStatus() } })
+            .add(.clearLogs { Task { await viewModel.clearLogs() } })
+            .add(.settings { showSettings = true })
 
         // Add reconnect button when disconnected/failed
         if !viewModel.connectionState.isConnected {
@@ -719,22 +722,24 @@ struct ActionBarView: View {
                         .transition(Animations.fadeScale)
                 }
 
-                // Prompt input with Pulse Terminal styling
+                // Prompt input with Pulse Terminal styling + rainbow "ultrathink" detection
                 HStack(spacing: Spacing.xs) {
-                    TextField(placeholderText, text: $promptText, axis: .vertical)
-                        .font(Typography.inputField)
-                        .foregroundStyle(ColorSystem.textPrimary)
-                        .lineLimit(1...3)
-                        .focused(isFocused)
-                        .submitLabel(.send)
-                        .disabled(claudeState == .running)
-                        .padding(.vertical, Spacing.sm)
-                        .padding(.leading, Spacing.sm)
-                        .onSubmit {
+                    RainbowTextField(
+                        placeholder: placeholderText,
+                        text: $promptText,
+                        font: Typography.inputField,
+                        axis: .vertical,
+                        lineLimit: 1...3,
+                        isDisabled: claudeState == .running,
+                        onSubmit: {
                             if !isSendDisabled {
                                 onSend()
                             }
                         }
+                    )
+                    .focused(isFocused)
+                    .padding(.vertical, Spacing.sm)
+                    .padding(.leading, Spacing.sm)
 
                     // Send button with glow
                     Button(action: onSend) {

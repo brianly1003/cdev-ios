@@ -541,7 +541,7 @@ struct FloatingToolkitButton: View {
 
     private let buttonSize: CGFloat = 48
     private let menuItemSize: CGFloat = 44
-    private let expandedRadius: CGFloat = 95  // Increased for better spacing with labels
+    private let expandedRadius: CGFloat = 75
 
     var body: some View {
         GeometryReader { geometry in
@@ -750,60 +750,130 @@ struct FloatingToolkitButton: View {
         )
     }
 
-    /// Calculate all menu item positions at once (single base angle calculation)
-    /// Returns array of CGPoints for each menu item - O(n) with minimal overhead
-    /// Items are arranged so that item[0] (Debug Logs) is always at the bottom of the arc
-    /// Positions are clamped to stay within screen bounds
+    /// Calculate all menu item positions at once
+    /// - Normal: Single-layer 180° fan at same radius
+    /// - Corner: Multi-layer fan radiating outward (Layer 1: 2 buttons, Layer 2: up to 5, Layer 3: overflow)
     private func menuItemPositions(total: Int, in geometry: GeometryProxy) -> [CGPoint] {
         guard total > 0 else { return [] }
 
         let currentPos = currentPosition(in: geometry)
-        let screenCenter = geometry.size.width / 2
+        let screenWidth = geometry.size.width
+        let screenHeight = geometry.size.height
 
-        // Calculate base angle once for all items
-        let baseAngle = calculateOptimalBaseAngle(for: currentPos, in: geometry)
+        // Detect corner position
+        let cornerThreshold: CGFloat = 100
+        let nearLeft = currentPos.x < cornerThreshold
+        let nearRight = currentPos.x > screenWidth - cornerThreshold
+        let nearTop = currentPos.y < geometry.safeAreaInsets.top + cornerThreshold
+        let nearBottom = currentPos.y > screenHeight - geometry.safeAreaInsets.bottom - cornerThreshold - 50
+        let isInCorner = (nearLeft || nearRight) && (nearTop || nearBottom)
 
-        let angleSpread: Double = min(Double(total - 1) * 55, 160)  // Increased angle per item
-        let angleStep = total > 1 ? angleSpread / Double(total - 1) : 0
-
-        // Determine if we're on the left side of screen
-        let isOnLeftSide = currentPos.x < screenCenter
-
-        // Screen bounds for clamping (with padding for menu item size + label)
-        let itemPadding: CGFloat = menuItemSize / 2 + 30  // Extra space for label
+        // Screen bounds for clamping
+        let itemPadding: CGFloat = menuItemSize / 2 + 25
         let minX = itemPadding
-        let maxX = max(minX + 1, geometry.size.width - itemPadding) // Guard against negative
+        let maxX = max(minX + 1, screenWidth - itemPadding)
         let minY = geometry.safeAreaInsets.top + itemPadding
-        let maxY = max(minY + 1, geometry.size.height - geometry.safeAreaInsets.bottom - itemPadding - 50) // Guard against negative
+        let maxY = max(minY + 1, screenHeight - geometry.safeAreaInsets.bottom - itemPadding - 50)
 
-        // Pre-allocate array for efficiency
         var positions = [CGPoint]()
         positions.reserveCapacity(total)
 
-        for index in 0..<total {
-            // On left side: start from bottom of arc (higher angle = more downward)
-            // On right side: start from bottom of arc (lower angle = more downward for negative angles)
-            let adjustedIndex: Int
-            if isOnLeftSide {
-                // Left side: reverse order so item[0] is at bottom
-                adjustedIndex = total - 1 - index
-            } else {
-                // Right side: normal order, item[0] at bottom
-                adjustedIndex = index
+        // Fan blade layout: 180° arc centered on optimal direction
+        let baseAngle = calculateOptimalBaseAngle(for: currentPos, in: geometry)
+        let angleSpread: Double = 180
+
+        if isInCorner && total > 2 {
+            // Multi-layer corner layout: items radiate outward in layers
+            // Layer 1 (closest): 2 buttons with narrow spread
+            // Layer 2 (middle): up to 5 buttons with wider spread
+            // Layer 3 (furthest): remaining buttons with full spread
+            let layer1Radius = expandedRadius * 0.9
+            let layer2Radius = expandedRadius * 1.5
+            let layer3Radius = expandedRadius * 2.1
+
+            let maxPerLayer = 5
+            let layer1Count = min(2, total)
+            let remaining = total - layer1Count
+            let layer2Count = min(maxPerLayer, remaining)
+            let layer3Count = remaining - layer2Count
+
+            // Layer 1: wider spread (80°) for 2 buttons to avoid overlap
+            let layer1Spread: Double = 80
+            if layer1Count > 0 {
+                let step = layer1Count > 1 ? layer1Spread / Double(layer1Count - 1) : 0
+                for i in 0..<layer1Count {
+                    let angle = baseAngle - layer1Spread / 2 + step * Double(i)
+                    let radians = angle * .pi / 180
+                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer1Radius
+                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer1Radius
+                    positions.append(CGPoint(
+                        x: max(minX, min(maxX, rawX)),
+                        y: max(minY, min(maxY, rawY))
+                    ))
+                }
             }
 
-            let startAngle = baseAngle - angleSpread / 2
-            let angle = startAngle + Double(adjustedIndex) * angleStep
-            let radians = angle * .pi / 180
+            // Layer 2: wider spread (100°) centered on baseAngle
+            let layer2Spread: Double = 100
+            if layer2Count > 0 {
+                let step = layer2Count > 1 ? layer2Spread / Double(layer2Count - 1) : 0
+                for i in 0..<layer2Count {
+                    let angle = baseAngle - layer2Spread / 2 + step * Double(i)
+                    let radians = angle * .pi / 180
+                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer2Radius
+                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer2Radius
+                    positions.append(CGPoint(
+                        x: max(minX, min(maxX, rawX)),
+                        y: max(minY, min(maxY, rawY))
+                    ))
+                }
+            }
 
-            // Calculate position and clamp to screen bounds
-            let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * expandedRadius
-            let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * expandedRadius
+            // Layer 3: full spread (140°) centered on baseAngle
+            let layer3Spread: Double = 140
+            if layer3Count > 0 {
+                let step = layer3Count > 1 ? layer3Spread / Double(layer3Count - 1) : 0
+                for i in 0..<layer3Count {
+                    let angle = baseAngle - layer3Spread / 2 + step * Double(i)
+                    let radians = angle * .pi / 180
+                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer3Radius
+                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer3Radius
+                    positions.append(CGPoint(
+                        x: max(minX, min(maxX, rawX)),
+                        y: max(minY, min(maxY, rawY))
+                    ))
+                }
+            }
 
-            positions.append(CGPoint(
-                x: max(minX, min(maxX, rawX)),
-                y: max(minY, min(maxY, rawY))
-            ))
+        } else {
+            // Normal case: 180° fan, multi-layer if more than 5 buttons
+            // Layer 1: up to 5 buttons at standard radius
+            // Layer 2: buttons 6-8 at outer radius
+            let maxPerLayer = 5
+            let layer1Radius = expandedRadius
+            let layer2Radius = expandedRadius * 1.45
+
+            let layer1Count = min(maxPerLayer, total)
+            let layer2Count = total - layer1Count
+
+            // Helper to add positions for a layer
+            func addLayerPositions(count: Int, radius: CGFloat) {
+                guard count > 0 else { return }
+                let step = count > 1 ? angleSpread / Double(count - 1) : 0
+                for i in 0..<count {
+                    let angle = baseAngle - angleSpread / 2 + step * Double(i)
+                    let radians = angle * .pi / 180
+                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * radius
+                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * radius
+                    positions.append(CGPoint(
+                        x: max(minX, min(maxX, rawX)),
+                        y: max(minY, min(maxY, rawY))
+                    ))
+                }
+            }
+
+            addLayerPositions(count: layer1Count, radius: layer1Radius)
+            addLayerPositions(count: layer2Count, radius: layer2Radius)
         }
 
         return positions

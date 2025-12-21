@@ -5,6 +5,60 @@
 
 ---
 
+## Unique Features (Competitive Advantages)
+
+These features differentiate cdev-ios from other AI coding tool mobile clients:
+
+### 1. Floating Toolkit (AssistiveTouch-style)
+- **Fan blade menu layout** - Buttons arranged in 180° arc, auto-adapts to screen position
+- **Multi-layer corner detection** - When in corner, buttons radiate outward in 2-3 tiers
+- **Long-press scroll gesture** - Hold + swipe up/down to scroll to top/bottom
+- **Smart edge snapping** - Draggable, remembers position, snaps to edges
+- **Idle fade** - Fades to 50% opacity after 4s, less intrusive
+
+### 2. Real-time Session Watching
+- **LIVE indicator** - Pulsing badge shows active streaming connection
+- **WebSocket event streaming** - Zero-latency log updates
+- **Auto-watch/unwatch** - Automatically manages session subscriptions
+- **Element deduplication** - O(1) lookup prevents duplicate messages
+
+### 3. Terminal with Advanced Search
+- **Quick filter chips** - One-tap filters: User, Claude, Tools, Errors, Code
+- **Inline highlighting** - Search matches highlighted in yellow within text
+- **Match navigation** - Previous/next buttons to jump between matches
+- **Code block search** - Searches inside ``` code blocks
+
+### 4. Mobile Source Control
+- **Stage/Unstage from mobile** - Full git staging area
+- **Inline action buttons** - No swipe gestures needed, visible buttons
+- **Commit & Push** - Complete git workflow from phone
+- **Branch sync status** - Shows ahead/behind counts
+
+### 5. Remote File Explorer
+- **Breadcrumb navigation** - Tap any path segment to jump
+- **Syntax highlighting** - 20+ languages supported in viewer
+- **LRU caching** - Instant navigation for recently visited
+- **Search with fuzzy matching** - Find files quickly
+
+### 6. Hybrid Communication Architecture
+- **HTTP for commands** - Reliable, works during WebSocket reconnection
+- **WebSocket for streaming** - Low-latency real-time updates
+- **Exponential backoff reconnection** - Robust network handling
+- **Optimistic UI** - Instant feedback before server response
+
+### 7. Multi-Workspace Support
+- **QR code pairing** - Scan to connect instantly
+- **Workspace switcher** - Switch between multiple cdev-agent instances
+- **Secure credential storage** - Keychain-based token storage
+
+### 8. Developer-First UX
+- **Compact UI** - Maximum information density
+- **Terminal-style output** - Familiar to developers
+- **One-tap permissions** - Approve/deny without typing
+- **Context compaction indicator** - Shows Claude's context usage
+
+---
+
 ## Critical Design Principles
 
 ### 1. COMPACT UI - Developer Productivity First
@@ -59,6 +113,7 @@ This is NOT a typical consumer app. This is a **developer tool** for monitoring 
 | Orange (#FF9500) | Waiting, Warning, Attention needed |
 | Red (#FF3B30) | Error, Stopped, Deletions |
 | Blue (#007AFF) | Primary actions, Info |
+| Coral (#FF6B4A) | Brand color, Toolkit button |
 | Gray | Idle, Context, Secondary |
 
 ---
@@ -95,14 +150,33 @@ This is NOT a typical consumer app. This is a **developer tool** for monitoring 
 - Auto-scroll to bottom
 - Text selection enabled
 
-### Changes View
+### Changes View (Source Control)
 
-**Purpose:** Display file diffs
+**Purpose:** Git staging area and file diffs
+
+**Layout:**
+```
+┌─────────────────────────────────────┐
+│ ⎇ main                    ↓ ↑ ↻    │  ← Branch header
+├─────────────────────────────────────┤
+│ Commit message                  ✓   │  ← Commit input
+├─────────────────────────────────────┤
+│ ▼ Staged Changes    0               │  ← Always visible
+├─────────────────────────────────────┤
+│ ▼ Changes           1    + Stage All│  ← Always visible
+│ │ text.txt          U  [+] [↩]      │
+└─────────────────────────────────────┘
+```
 
 **Features:**
+- Branch header with pull/push/refresh buttons
+- Commit message input with commit menu
+- **Staged Changes section** - Always visible (even when empty)
+- **Changes section** - Always visible (even when empty)
 - File list with icons by extension
 - +/- stats for each file
-- Tap to expand full diff
+- Inline action buttons: Stage (+), Unstage (-), Discard (↩)
+- Tap file to view full diff
 - Syntax-highlighted diff view
 - Addition/deletion backgrounds
 
