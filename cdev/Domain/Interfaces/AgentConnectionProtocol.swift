@@ -17,9 +17,6 @@ protocol AgentConnectionProtocol: AnyObject {
     /// Disconnect from agent
     func disconnect()
 
-    /// Send command to agent
-    func send(command: AgentCommand) async throws
-
     /// Check if currently connected
     var isConnected: Bool { get }
 }
@@ -31,6 +28,9 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
 
     /// Ping server to check connection health
     func ping() async throws -> Bool
+
+    /// Send raw data (for JSON-RPC messages)
+    func send(data: Data) async throws
 
     /// Handle app becoming active (foreground)
     func handleAppDidBecomeActive()

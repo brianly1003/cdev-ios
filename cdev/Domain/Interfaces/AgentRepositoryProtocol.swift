@@ -119,6 +119,13 @@ struct GitStatusResponse: Codable {
         case repoRoot = "repo_root"
     }
 
+    /// Memberwise initializer for programmatic creation
+    init(files: [GitFileStatus], repoName: String?, repoRoot: String?) {
+        self.files = files
+        self.repoName = repoName
+        self.repoRoot = repoRoot
+    }
+
     /// Custom decoder to handle null files array from Go
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -140,6 +147,14 @@ struct GitStatusResponse: Codable {
             case status
             case isStaged = "is_staged"
             case isUntracked = "is_untracked"
+        }
+
+        /// Memberwise initializer for programmatic creation
+        init(path: String, status: String, isStaged: Bool, isUntracked: Bool) {
+            self.path = path
+            self.status = status
+            self.isStaged = isStaged
+            self.isUntracked = isUntracked
         }
 
         /// Convert git status to change type
@@ -178,6 +193,15 @@ struct SessionsResponse: Codable {
     let limit: Int?
     let offset: Int?
 
+    /// Memberwise initializer for programmatic creation (e.g., from RPC)
+    init(sessions: [SessionInfo], current: String? = nil, total: Int? = nil, limit: Int? = nil, offset: Int? = nil) {
+        self.sessions = sessions
+        self.current = current
+        self.total = total
+        self.limit = limit
+        self.offset = offset
+    }
+
     /// Whether there are more sessions to load
     var hasMore: Bool {
         guard let total = total, let _ = limit, let offset = offset else {
@@ -206,6 +230,15 @@ struct SessionsResponse: Codable {
             case lastUpdated = "last_updated"
             case branch
         }
+
+        /// Memberwise initializer for programmatic creation (e.g., from RPC)
+        init(sessionId: String, summary: String, messageCount: Int, lastUpdated: String, branch: String? = nil) {
+            self.sessionId = sessionId
+            self.summary = summary
+            self.messageCount = messageCount
+            self.lastUpdated = lastUpdated
+            self.branch = branch
+        }
     }
 }
 
@@ -223,6 +256,27 @@ struct SessionMessagesResponse: Codable {
     // Performance metrics (optional)
     let cacheHit: Bool?
     let queryTimeMs: Double?
+
+    /// Memberwise initializer for programmatic creation (e.g., from RPC)
+    init(
+        sessionId: String,
+        messages: [SessionMessage],
+        total: Int,
+        limit: Int,
+        offset: Int,
+        hasMore: Bool,
+        cacheHit: Bool? = nil,
+        queryTimeMs: Double? = nil
+    ) {
+        self.sessionId = sessionId
+        self.messages = messages
+        self.total = total
+        self.limit = limit
+        self.offset = offset
+        self.hasMore = hasMore
+        self.cacheHit = cacheHit
+        self.queryTimeMs = queryTimeMs
+    }
 
     /// Computed count for backward compatibility
     var count: Int { messages.count }
@@ -261,6 +315,25 @@ struct SessionMessagesResponse: Codable {
             case isContextCompaction = "is_context_compaction"
         }
 
+        /// Memberwise initializer for programmatic creation (e.g., from RPC)
+        init(
+            type: String,
+            uuid: String? = nil,
+            sessionId: String? = nil,
+            timestamp: String? = nil,
+            gitBranch: String? = nil,
+            message: MessageContent,
+            isContextCompaction: Bool? = nil
+        ) {
+            self.type = type
+            self.uuid = uuid
+            self.sessionId = sessionId
+            self.timestamp = timestamp
+            self.gitBranch = gitBranch
+            self.message = message
+            self.isContextCompaction = isContextCompaction
+        }
+
         /// Nested message content
         struct MessageContent: Codable {
             let role: String?
@@ -281,6 +354,14 @@ struct SessionMessagesResponse: Codable {
 
             enum CodingKeys: String, CodingKey {
                 case role, content, model, usage
+            }
+
+            /// Memberwise initializer for programmatic creation
+            init(role: String?, content: ContentType?, model: String? = nil, usage: Usage? = nil) {
+                self.role = role
+                self.content = content
+                self.model = model
+                self.usage = usage
             }
         }
 

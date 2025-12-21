@@ -74,6 +74,14 @@ struct SourceControlView: View {
                         onRefresh: { Task { await onRefresh() } }
                     )
 
+                    // Error Banner (if any)
+                    if let error = viewModel.state.lastError {
+                        GitErrorBanner(
+                            message: error,
+                            onDismiss: { viewModel.state.lastError = nil }
+                        )
+                    }
+
                     // Commit Input Section
                     CommitInputView(
                         message: $viewModel.state.commitMessage,
@@ -176,6 +184,14 @@ struct SourceControlView: View {
                 onPush: { Task { await viewModel.push() } },
                 onRefresh: { Task { await onRefresh() } }
             )
+
+            // Error Banner (if any)
+            if let error = viewModel.state.lastError {
+                GitErrorBanner(
+                    message: error,
+                    onDismiss: { viewModel.state.lastError = nil }
+                )
+            }
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -707,6 +723,48 @@ struct DiffDetailSheet: View {
                 changeType: FileChangeType(rawValue: file.status.rawValue)
             ))
         }
+    }
+}
+
+// MARK: - Git Error Banner
+
+/// Compact error banner for git operations - consistent with terminal theme
+struct GitErrorBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(ColorSystem.error)
+
+            Text(message)
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textPrimary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: Spacing.xs)
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
+        .background(ColorSystem.error.opacity(0.12))
+        .overlay(
+            Rectangle()
+                .fill(ColorSystem.error)
+                .frame(width: 3),
+            alignment: .leading
+        )
     }
 }
 

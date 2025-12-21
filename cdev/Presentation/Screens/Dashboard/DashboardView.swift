@@ -362,10 +362,10 @@ struct StatusBarView: View {
 
                 // Live indicator when watching session (only when connected)
                 if isWatchingSession && connectionState.isConnected {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         Circle()
                             .fill(ColorSystem.error)
-                            .frame(width: 5, height: 5)
+                            .frame(width: 6, height: 6)
                             .scaleEffect(watchingPulse ? 1.3 : 1.0)
                             .opacity(watchingPulse ? 0.7 : 1.0)
 

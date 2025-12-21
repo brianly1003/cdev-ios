@@ -536,6 +536,11 @@ struct FloatingToolkitButton: View {
     // Track screen size to detect orientation changes
     @State private var lastScreenSize: CGSize = .zero
 
+    // Keyboard tracking
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var positionBeforeKeyboard: CGPoint?
+    @State private var safeAreaTop: CGFloat = 0
+
     @AppStorage("toolkit_position_x") private var savedX: Double = -1
     @AppStorage("toolkit_position_y") private var savedY: Double = -1
 
@@ -622,12 +627,22 @@ struct FloatingToolkitButton: View {
                 initializePosition(in: geometry)
                 startIdleTimer()
                 lastScreenSize = geometry.size
+                safeAreaTop = geometry.safeAreaInsets.top
             }
             .onDisappear {
                 AppLogger.log("[FloatingToolkit] onDisappear called")
                 cancelIdleTimer()
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+                handleKeyboardWillShow(notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                handleKeyboardWillHide()
+            }
             .onChange(of: geometry.size) { oldSize, newSize in
+                // Update safe area for keyboard handling
+                safeAreaTop = geometry.safeAreaInsets.top
+
                 // Detect orientation change (screen size changed significantly)
                 if lastScreenSize != .zero && lastScreenSize != newSize {
                     AppLogger.log("[FloatingToolkit] Screen size changed: \(oldSize) -> \(newSize)")
@@ -645,11 +660,22 @@ struct FloatingToolkitButton: View {
         // Guard against invalid screen sizes during keyboard animation
         guard newSize.width > 0 && newSize.height > 100 else { return }
 
+        // Use screen bounds for consistent positioning
+        // This prevents the button from being repositioned when keyboard appears/disappears
+        let screenBounds = UIScreen.main.bounds
+
+        // Only handle actual orientation changes (width change), not keyboard (height-only change)
+        // Keyboard changes height but not width
+        if abs(newSize.width - lastScreenSize.width) < 1 {
+            // Width unchanged - this is likely keyboard, not rotation
+            return
+        }
+
         let padding: CGFloat = 10
         let minX = buttonSize / 2 + padding
-        let maxX = max(minX + 1, newSize.width - buttonSize / 2 - padding)
+        let maxX = max(minX + 1, screenBounds.width - buttonSize / 2 - padding)
         let minY = buttonSize / 2 + padding + geometry.safeAreaInsets.top
-        let maxY = max(minY + 1, newSize.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50)
+        let maxY = max(minY + 1, screenBounds.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50)
 
         // Check if current position is outside new bounds
         let isOutOfBounds = position.x < minX || position.x > maxX ||
@@ -707,6 +733,64 @@ struct FloatingToolkitButton: View {
         startIdleTimer()
     }
 
+    // MARK: - Keyboard Handling
+
+    /// Handle keyboard appearing - move toolkit above keyboard if overlapping
+    private func handleKeyboardWillShow(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let keyboardFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            return
+        }
+
+        // Use keyboard frame's Y position directly (more accurate than calculating from height)
+        let keyboardTop = keyboardFrame.origin.y
+        keyboardHeight = keyboardFrame.height
+
+        // Get animation duration, default to 0.25 if not available
+        let duration = (userInfo[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+
+        // Account for app's input bar above keyboard (typically 50-70pt)
+        // Use larger clearance to ensure toolkit is fully visible
+        let inputBarHeight: CGFloat = 70
+        let effectiveKeyboardTop = keyboardTop - inputBarHeight
+
+        // Check if toolkit would overlap with keyboard + input bar area
+        let toolkitBottom = position.y + buttonSize / 2
+
+        AppLogger.log("[FloatingToolkit] Keyboard show: keyboardTop=\(keyboardTop), effectiveTop=\(effectiveKeyboardTop), toolkitBottom=\(toolkitBottom), position.y=\(position.y)")
+
+        // If toolkit overlaps keyboard area (including input bar), move it above
+        if toolkitBottom > effectiveKeyboardTop {
+            // Save position before keyboard (only if not already saved)
+            if positionBeforeKeyboard == nil {
+                positionBeforeKeyboard = position
+            }
+
+            let newY = effectiveKeyboardTop - buttonSize / 2 - 20  // 20pt above effective keyboard area
+            let minY = buttonSize / 2 + 10 + safeAreaTop
+
+            withAnimation(.easeOut(duration: duration)) {
+                position.y = max(minY, newY)
+            }
+
+            AppLogger.log("[FloatingToolkit] Moved above keyboard: newY=\(newY), final=\(max(minY, newY))")
+        }
+    }
+
+    /// Handle keyboard hiding - restore position if it was moved
+    private func handleKeyboardWillHide() {
+        keyboardHeight = 0
+
+        // Restore position if we moved it for keyboard
+        if let originalPosition = positionBeforeKeyboard {
+            withAnimation(.easeOut(duration: 0.25)) {
+                position = originalPosition
+            }
+            positionBeforeKeyboard = nil
+            AppLogger.log("[FloatingToolkit] Restored position after keyboard hide")
+        }
+    }
+
     // MARK: - Actions
 
     private func toggleMenu() {
@@ -757,8 +841,11 @@ struct FloatingToolkitButton: View {
         guard total > 0 else { return [] }
 
         let currentPos = currentPosition(in: geometry)
-        let screenWidth = geometry.size.width
-        let screenHeight = geometry.size.height
+        // Use actual screen bounds, not keyboard-adjusted geometry height
+        // This prevents menu items from jumping when keyboard appears
+        let screenBounds = UIScreen.main.bounds
+        let screenWidth = screenBounds.width
+        let screenHeight = screenBounds.height
 
         // Detect corner position
         let cornerThreshold: CGFloat = 100
@@ -883,8 +970,11 @@ struct FloatingToolkitButton: View {
     /// Points menu items toward the center of available screen space
     @inline(__always)
     private func calculateOptimalBaseAngle(for position: CGPoint, in geometry: GeometryProxy) -> Double {
-        let screenWidth = geometry.size.width
-        let screenHeight = geometry.size.height
+        // Use actual screen bounds, not keyboard-adjusted geometry
+        // This prevents menu direction from changing when keyboard appears
+        let screenBounds = UIScreen.main.bounds
+        let screenWidth = screenBounds.width
+        let screenHeight = screenBounds.height
         let menuSpace = expandedRadius + menuItemSize / 2 + 10
         let threshold: CGFloat = 20
 
@@ -1027,12 +1117,14 @@ struct FloatingToolkitButton: View {
         var newX = position.x + translation.width
         var newY = position.y + translation.height
 
-        // Bounds (with guards against negative values during keyboard animation)
+        // Use screen bounds to allow dragging near keyboard
+        // geometry.size shrinks when keyboard appears, but we want full screen bounds
+        let screenBounds = UIScreen.main.bounds
         let padding: CGFloat = 10
         let minX = buttonSize / 2 + padding
-        let maxX = max(minX + 1, geometry.size.width - buttonSize / 2 - padding)
+        let maxX = max(minX + 1, screenBounds.width - buttonSize / 2 - padding)
         let minY = buttonSize / 2 + padding + geometry.safeAreaInsets.top
-        let maxY = max(minY + 1, geometry.size.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50)
+        let maxY = max(minY + 1, screenBounds.height - buttonSize / 2 - padding - geometry.safeAreaInsets.bottom - 50)
 
         newX = max(minX, min(maxX, newX))
         newY = max(minY, min(maxY, newY))

@@ -310,6 +310,16 @@ struct GitCommitResponse: Decodable {
         case success, sha, message, pushed, error
         case filesCommitted = "files_committed"
     }
+
+    /// Memberwise initializer for programmatic creation
+    init(success: Bool, commitHash: String? = nil, message: String? = nil, filesCommitted: Int? = nil, pushed: Bool? = nil, error: String? = nil) {
+        self.success = success
+        self.sha = commitHash
+        self.message = message
+        self.filesCommitted = filesCommitted
+        self.pushed = pushed
+        self.error = error
+    }
 }
 
 /// Response from push/pull operations
@@ -329,6 +339,17 @@ struct GitSyncResponse: Decodable {
         case filesChanged = "files_changed"
         case conflictedFiles = "conflicted_files"
     }
+
+    /// Memberwise initializer for programmatic creation
+    init(success: Bool, message: String? = nil, commitsPushed: Int? = nil, commitsPulled: Int? = nil, filesChanged: Int? = nil, conflictedFiles: [String]? = nil, error: String? = nil) {
+        self.success = success
+        self.message = message
+        self.commitsPushed = commitsPushed
+        self.commitsPulled = commitsPulled
+        self.filesChanged = filesChanged
+        self.conflictedFiles = conflictedFiles
+        self.error = error
+    }
 }
 
 /// Response from stage/unstage/discard operations
@@ -345,6 +366,16 @@ struct GitOperationResponse: Decodable {
         case stagedCount = "staged_count"
         case unstagedCount = "unstaged_count"
         case discardedCount = "discarded_count"
+    }
+
+    /// Memberwise initializer for programmatic creation
+    init(success: Bool, message: String? = nil, stagedCount: Int? = nil, unstagedCount: Int? = nil, discardedCount: Int? = nil, error: String? = nil) {
+        self.success = success
+        self.message = message
+        self.stagedCount = stagedCount
+        self.unstagedCount = unstagedCount
+        self.discardedCount = discardedCount
+        self.error = error
     }
 }
 
@@ -385,6 +416,31 @@ struct GitStatusExtendedResponse: Decodable {
     let repoName: String?
     let repoRoot: String?
 
+    /// Memberwise initializer for programmatic creation (e.g., from RPC)
+    init(
+        branch: String? = nil,
+        upstream: String? = nil,
+        ahead: Int? = nil,
+        behind: Int? = nil,
+        staged: [GitFileInfo]? = nil,
+        unstaged: [GitFileInfo]? = nil,
+        untracked: [GitFileInfo]? = nil,
+        conflicted: [GitFileInfo]? = nil,
+        repoName: String? = nil,
+        repoRoot: String? = nil
+    ) {
+        self.branch = branch
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
+        self.staged = staged
+        self.unstaged = unstaged
+        self.untracked = untracked
+        self.conflicted = conflicted
+        self.repoName = repoName
+        self.repoRoot = repoRoot
+    }
+
     enum CodingKeys: String, CodingKey {
         case branch, upstream, ahead, behind
         case staged, unstaged, untracked, conflicted
@@ -397,6 +453,14 @@ struct GitStatusExtendedResponse: Decodable {
         let status: String?
         let additions: Int?
         let deletions: Int?
+
+        /// Memberwise initializer for programmatic creation
+        init(path: String, status: String? = nil, additions: Int? = nil, deletions: Int? = nil) {
+            self.path = path
+            self.status = status
+            self.additions = additions
+            self.deletions = deletions
+        }
 
         var fileStatus: GitFileStatus {
             switch status?.uppercased() {

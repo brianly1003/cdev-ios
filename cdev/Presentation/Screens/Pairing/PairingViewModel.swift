@@ -98,7 +98,14 @@ final class PairingViewModel: ObservableObject {
         // Derive HTTP URL from WebSocket URL
         var httpURLComponents = URLComponents(url: wsURL, resolvingAgainstBaseURL: false)
         httpURLComponents?.scheme = wsURL.scheme == "wss" ? "https" : "http"
-        httpURLComponents?.port = Constants.Network.defaultHTTPPort
+        httpURLComponents?.path = ""  // Remove /ws path for HTTP base URL
+
+        // Only set port for local connections without explicit port
+        // Dev tunnels and other proxies use standard ports (80/443)
+        let isLocalConnection = wsURL.host == "localhost" || wsURL.host == "127.0.0.1" || wsURL.host?.hasPrefix("192.168.") == true
+        if isLocalConnection && wsURL.port == nil {
+            httpURLComponents?.port = Constants.Network.defaultHTTPPort
+        }
 
         guard let httpURL = httpURLComponents?.url else {
             error = .invalidQRCode

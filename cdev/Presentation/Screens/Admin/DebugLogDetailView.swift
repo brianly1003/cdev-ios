@@ -165,10 +165,11 @@ private struct HTTPDetailSection: View {
 
                 // Request body
                 if let body = details.requestBody, !body.isEmpty {
+                    let formattedBody = formatJSON(body)
                     CollapsibleCodeBlock(
                         title: "Request Body",
-                        content: formatJSON(body),
-                        onCopy: { onCopy(body) }
+                        content: formattedBody,
+                        onCopy: { onCopy(formattedBody) }
                     )
                 }
             }
@@ -201,10 +202,11 @@ private struct HTTPDetailSection: View {
 
                     // Response body
                     if let body = details.responseBody, !body.isEmpty {
+                        let formattedBody = formatJSON(body)
                         CollapsibleCodeBlock(
                             title: "Response Body",
-                            content: formatJSON(body),
-                            onCopy: { onCopy(body) }
+                            content: formattedBody,
+                            onCopy: { onCopy(formattedBody) }
                         )
                     }
                 }
@@ -256,10 +258,11 @@ private struct WebSocketDetailSection: View {
 
                 // Payload
                 if let payload = details.payload, !payload.isEmpty {
+                    let formattedPayload = formatJSON(payload)
                     CollapsibleCodeBlock(
                         title: "Payload",
-                        content: formatJSON(payload),
-                        onCopy: { onCopy(payload) }
+                        content: formattedPayload,
+                        onCopy: { onCopy(formattedPayload) }
                     )
                 }
             }

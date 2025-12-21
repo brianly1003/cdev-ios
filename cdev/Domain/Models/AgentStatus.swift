@@ -40,6 +40,35 @@ struct AgentStatus: Equatable {
         )
     }
 
+    /// Create from JSON-RPC status/get result
+    static func from(rpcResult: StatusGetResult) -> AgentStatus {
+        // Parse agent state string to ClaudeState
+        let claudeState: ClaudeState
+        switch rpcResult.agentState?.lowercased() {
+        case "running", "starting":
+            claudeState = .running
+        case "idle":
+            claudeState = .idle
+        case "waiting":
+            claudeState = .waiting
+        case "error":
+            claudeState = .error
+        case "stopped", "stopping":
+            claudeState = .stopped
+        default:
+            claudeState = .idle
+        }
+
+        return AgentStatus(
+            claudeState: claudeState,
+            sessionId: rpcResult.sessionId,
+            repoName: rpcResult.repoName,
+            repoPath: rpcResult.repoPath,
+            connectedClients: rpcResult.connectedClients ?? 0,
+            uptime: TimeInterval(rpcResult.uptimeSeconds ?? 0)
+        )
+    }
+
     /// Formatted uptime string
     var uptimeString: String {
         let formatter = DateComponentsFormatter()

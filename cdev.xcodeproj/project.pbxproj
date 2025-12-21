@@ -36,6 +36,10 @@
 		4F35262FDFB5FF812D09AE1F /* SessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624A07A99501D68A8E6C516B /* SessionPickerView.swift */; };
 		534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A9FE817775280D126DB8AA /* FloatingToolkit.swift */; };
 		RAINBOW01A2B3C4D5E6F789AB /* RainbowTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */; };
+		JSONRPC05BLD00000000001 /* JSONRPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */; };
+		JSONRPC06BLD00000000002 /* JSONRPCError.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC02ERR00000000002 /* JSONRPCError.swift */; };
+		JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC03CLI00000000003 /* JSONRPCClient.swift */; };
+		JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */; };
 		5F7CD8A29D740BE40F4870E1 /* WebSocketService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F133E2E074F2129012086C /* WebSocketService.swift */; };
 		69B8681B0ADAA035D9D68658 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A8C4D8842CD324E7E0199BF /* DashboardView.swift */; };
 		6D21B1BE994D76A4F6E49E1C /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6BC02BC16D7CC3133DF7BDD /* AppLogger.swift */; };
@@ -139,6 +143,10 @@
 		3775CC571AA812FFD8C4E704 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		39A9FE817775280D126DB8AA /* FloatingToolkit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingToolkit.swift; sourceTree = "<group>"; };
 		RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RainbowTextField.swift; sourceTree = "<group>"; };
+		JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMessage.swift; sourceTree = "<group>"; };
+		JSONRPC02ERR00000000002 /* JSONRPCError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCError.swift; sourceTree = "<group>"; };
+		JSONRPC03CLI00000000003 /* JSONRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCClient.swift; sourceTree = "<group>"; };
+		JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMethods.swift; sourceTree = "<group>"; };
 		3F31CDD6E3F73B041AC22D6A /* RespondToClaudeUseCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RespondToClaudeUseCase.swift; sourceTree = "<group>"; };
 		40E24E3FCF289C210585C2DA /* AgentRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRepository.swift; sourceTree = "<group>"; };
 		45882D15B447F594CF96D3CE /* PairingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingViewModel.swift; sourceTree = "<group>"; };
@@ -586,11 +594,23 @@
 				F2137B4CC5806C42B92AF589 /* WorkspaceStore.swift */,
 				273ED048A89241326434BE27 /* Cache */,
 				93EFD054618BBC346FBF32B2 /* HTTP */,
+				JSONRPC04GRP00000000004 /* JSONRPC */,
 				CF8DD4FC585D76B029A4BCB7 /* Keychain */,
 				2F8F091359BCD01CCB774AA4 /* QRCode */,
 				F5AB644FE702CA8BA81BFEB7 /* WebSocket */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		JSONRPC04GRP00000000004 /* JSONRPC */ = {
+			isa = PBXGroup;
+			children = (
+				JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */,
+				JSONRPC02ERR00000000002 /* JSONRPCError.swift */,
+				JSONRPC03CLI00000000003 /* JSONRPCClient.swift */,
+				JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */,
+			);
+			path = JSONRPC;
 			sourceTree = "<group>";
 		};
 		E158C01178557ABD8198F2A3 /* DiffViewer */ = {
@@ -881,6 +901,10 @@
 				1391B9C793E53FE882B95C73 /* View+Extensions.swift in Sources */,
 				C5EA0F5773CCAA9640072D81 /* VirtualizedCodeView.swift in Sources */,
 				5F7CD8A29D740BE40F4870E1 /* WebSocketService.swift in Sources */,
+				JSONRPC05BLD00000000001 /* JSONRPCMessage.swift in Sources */,
+				JSONRPC06BLD00000000002 /* JSONRPCError.swift in Sources */,
+				JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */,
+				JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */,
 				F4E3F52FA7F59B20502A055A /* Workspace.swift in Sources */,
 				288F3112419DC015659DD54E /* WorkspaceStore.swift in Sources */,
 				469BC4C939D1431230E830B3 /* WorkspaceSwitcher.swift in Sources */,

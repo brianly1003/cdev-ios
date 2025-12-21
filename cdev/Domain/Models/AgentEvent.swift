@@ -21,6 +21,7 @@ enum AgentEventType: String, Codable {
     case fileContent = "file_content"
     case heartbeat = "heartbeat"
     case error = "error"
+    case deprecationWarning = "deprecation_warning"  // Server deprecation notices
 }
 
 /// Base event structure from agent
@@ -77,6 +78,7 @@ enum AgentEventPayload: Codable {
     case fileContent(FileContentPayload)
     case heartbeat(HeartbeatPayload)
     case error(ErrorPayload)
+    case deprecationWarning(DeprecationWarningPayload)  // Server deprecation notices
     case unknown
 
     init(from decoder: Decoder) throws {
@@ -115,6 +117,8 @@ enum AgentEventPayload: Codable {
             self = .heartbeat(payload)
         } else if let payload = try? container.decode(ErrorPayload.self), payload.message != nil {
             self = .error(payload)
+        } else if let payload = try? container.decode(DeprecationWarningPayload.self), payload.message != nil {
+            self = .deprecationWarning(payload)
         } else {
             self = .unknown
         }
@@ -154,6 +158,8 @@ enum AgentEventPayload: Codable {
         case .heartbeat(let payload):
             try container.encode(payload)
         case .error(let payload):
+            try container.encode(payload)
+        case .deprecationWarning(let payload):
             try container.encode(payload)
         case .unknown:
             try container.encodeNil()
@@ -638,6 +644,15 @@ struct ErrorPayload: Codable {
         case code
         case requestId = "request_id"
     }
+}
+
+/// Deprecation warning payload from server
+struct DeprecationWarningPayload: Codable {
+    let message: String?
+    let command: String?
+    let documentation: String?
+    let removal: String?
+    let migration: [String: String]?
 }
 
 // MARK: - Claude State

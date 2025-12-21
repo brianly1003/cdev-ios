@@ -7,7 +7,17 @@ struct AdminToolsView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @StateObject private var logStore = DebugLogStore.shared
 
-    @State private var selectedCategory: DebugLogCategory = .all
+    /// Persisted filter category (survives app restart)
+    @AppStorage("debugLogFilterCategory") private var selectedCategoryRaw: String = DebugLogCategory.all.rawValue
+
+    private var selectedCategory: DebugLogCategory {
+        get { DebugLogCategory(rawValue: selectedCategoryRaw) ?? .all }
+    }
+
+    private func setSelectedCategory(_ category: DebugLogCategory) {
+        selectedCategoryRaw = category.rawValue
+    }
+
     @State private var searchText = ""
     @State private var selectedLog: DebugLogEntry?
 
@@ -35,7 +45,10 @@ struct AdminToolsView: View {
             VStack(spacing: 0) {
                 // Category filter bar
                 CategoryFilterBar(
-                    selectedCategory: $selectedCategory,
+                    selectedCategory: Binding(
+                        get: { selectedCategory },
+                        set: { setSelectedCategory($0) }
+                    ),
                     logCounts: logCounts
                 )
 

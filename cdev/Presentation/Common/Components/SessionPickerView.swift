@@ -23,7 +23,8 @@ struct SessionPickerView: View {
             return sessions
         }
         return sessions.filter { session in
-            session.summary.localizedCaseInsensitiveContains(searchText)
+            session.summary.localizedCaseInsensitiveContains(searchText) ||
+            session.sessionId.localizedCaseInsensitiveContains(searchText)
         }
     }
 
@@ -78,7 +79,7 @@ struct SessionPickerView: View {
                                     isCurrentSession: session.sessionId == currentSessionId
                                 )
                             }
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8))
                             .listRowBackground(
                                 session.sessionId == currentSessionId
                                     ? ColorSystem.success.opacity(0.08)
@@ -125,7 +126,7 @@ struct SessionPickerView: View {
                                 }
                                 .padding(.vertical, Spacing.sm)
                             }
-                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8))
                             .listRowBackground(ColorSystem.terminalBg)
                             .listRowSeparator(.hidden)
                             .disabled(isLoadingMore)
@@ -187,15 +188,23 @@ struct SessionRowView: View {
                 .fill(isCurrentSession ? ColorSystem.success : ColorSystem.textQuaternary)
                 .frame(width: 6, height: 6)
 
-            // Summary
-            Text(session.summary)
-                .font(Typography.terminal)
-                .foregroundStyle(isCurrentSession ? ColorSystem.success : ColorSystem.textPrimary)
-                .lineLimit(1)
+            // Summary and Session ID
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.summary)
+                    .font(Typography.terminal)
+                    .foregroundStyle(isCurrentSession ? ColorSystem.success : ColorSystem.textPrimary)
+                    .lineLimit(1)
+
+                // Session ID (small, truncated)
+                Text(session.sessionId)
+                    .font(Typography.terminalTimestamp)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+                    .lineLimit(1)
+            }
 
             Spacer(minLength: Spacing.xs)
 
-            // Compact meta
+            // Compact meta - close to chevron
             HStack(spacing: 4) {
                 Text(session.compactTime)
                     .font(Typography.terminalSmall)
@@ -215,9 +224,9 @@ struct SessionRowView: View {
             }
         }
         .padding(.leading, Spacing.sm)
-        .padding(.trailing, Spacing.md)  // More trailing space for chevron
-        .padding(.vertical, Spacing.sm)
-        .frame(minHeight: 44)
+        .padding(.trailing, Spacing.xs)  // Minimal trailing - content close to chevron
+        .padding(.vertical, Spacing.xs)
+        .frame(height: 48)
         .overlay(
             Rectangle()
                 .fill(ColorSystem.terminalBgHighlight)
@@ -230,12 +239,24 @@ struct SessionRowView: View {
 // MARK: - SessionInfo Extension
 
 extension SessionsResponse.SessionInfo {
+    /// Parse ISO8601 date with or without fractional seconds
+    private func parseDate(_ dateString: String) -> Date? {
+        // Try with fractional seconds first
+        let formatterWithFractional = ISO8601DateFormatter()
+        formatterWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatterWithFractional.date(from: dateString) {
+            return date
+        }
+
+        // Try without fractional seconds (e.g., "2025-12-21T23:15:08+07:00")
+        let formatterWithoutFractional = ISO8601DateFormatter()
+        formatterWithoutFractional.formatOptions = [.withInternetDateTime]
+        return formatterWithoutFractional.date(from: dateString)
+    }
+
     /// Relative time string (e.g., "4 min ago")
     var relativeTime: String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        guard let date = formatter.date(from: lastUpdated) else {
+        guard let date = parseDate(lastUpdated) else {
             return lastUpdated
         }
 
@@ -258,10 +279,7 @@ extension SessionsResponse.SessionInfo {
 
     /// Compact time string (e.g., "5m", "2h", "3d")
     var compactTime: String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        guard let date = formatter.date(from: lastUpdated) else {
+        guard let date = parseDate(lastUpdated) else {
             return "--"
         }
 

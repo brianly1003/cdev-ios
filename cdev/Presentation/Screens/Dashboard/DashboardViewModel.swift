@@ -1047,17 +1047,44 @@ final class DashboardViewModel: ObservableObject {
                 self.connectionState = state
                 AppLogger.log("[Dashboard] Connection state changed: wasConnected=\(wasConnected), isNowConnected=\(state.isConnected)")
 
-                // Load history when connection is first established
+                // Handle reconnection - re-establish session watch and reload data
                 if !wasConnected && state.isConnected {
-                    AppLogger.log("[Dashboard] First connection - loading history and git status in 300ms")
+                    AppLogger.log("[Dashboard] Reconnected - loading history and git status in 300ms")
                     // Delay to let UI settle after connection state change
                     // This prevents hang when user tries to interact during load
                     try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
-                    AppLogger.log("[Dashboard] First connection - starting loadRecentSessionHistory")
+                    AppLogger.log("[Dashboard] Reconnected - starting loadRecentSessionHistory")
                     await self.loadRecentSessionHistory()
-                    AppLogger.log("[Dashboard] First connection - starting refreshGitStatus")
+                    AppLogger.log("[Dashboard] Reconnected - starting refreshGitStatus")
                     await self.refreshGitStatus()
-                    AppLogger.log("[Dashboard] First connection - load completed")
+                    AppLogger.log("[Dashboard] Reconnected - starting refreshStatus")
+                    await self.refreshStatus()
+
+                    // Re-establish session watch for live mode
+                    // Use userSelectedSessionId or agentStatus.sessionId
+                    let sessionToWatch = self.userSelectedSessionId ?? self.agentStatus.sessionId
+                    AppLogger.log("[Dashboard] Reconnected - checking session watch: userSelectedSessionId=\(self.userSelectedSessionId ?? "nil"), agentStatus.sessionId=\(self.agentStatus.sessionId ?? "nil")")
+                    if let sessionId = sessionToWatch, !sessionId.isEmpty {
+                        AppLogger.log("[Dashboard] Reconnected - re-establishing session watch for: \(sessionId)")
+                        self.isWatchingSession = false  // Reset so watch can be re-established
+                        self.watchingSessionId = nil
+                        // Set userSelectedSessionId if not set
+                        if self.userSelectedSessionId == nil {
+                            self.userSelectedSessionId = sessionId
+                        }
+                        await self.startWatchingCurrentSession()
+                    } else {
+                        AppLogger.log("[Dashboard] Reconnected - no session to watch")
+                    }
+
+                    AppLogger.log("[Dashboard] Reconnected - load completed")
+                }
+
+                // Reset watching state on disconnect
+                if wasConnected && !state.isConnected {
+                    AppLogger.log("[Dashboard] Disconnected - resetting watch state")
+                    self.isWatchingSession = false
+                    self.watchingSessionId = nil
                 }
             }
         }
@@ -1560,11 +1587,10 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             try await webSocketService.watchSession(sessionId)
-            // Optimistic UI update - show LIVE indicator immediately
-            // Server will confirm with session_watch_started event
+            // JSON-RPC response confirms watching - set state immediately
             isWatchingSession = true
             watchingSessionId = sessionId
-            AppLogger.log("[Dashboard] Watch request sent for session: \(sessionId)")
+            AppLogger.log("[Dashboard] Now watching session: \(sessionId)")
         } catch {
             AppLogger.error(error, context: "Watch session")
         }

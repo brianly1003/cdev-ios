@@ -46,6 +46,19 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
 
+    // MARK: - JSON-RPC Support
+
+    /// JSON-RPC client for request/response correlation
+    private var rpcClient: JSONRPCClient?
+
+    /// Flag to enable JSON-RPC mode (set after successful initialize handshake)
+    @Atomic private var useJSONRPC = false
+
+    /// Track pending request IDs to method names for response correlation (with timestamp for cleanup)
+    private var pendingRequestMethods: [String: (method: String, timestamp: Date)] = [:]
+    private let pendingRequestMethodsLock = NSLock()
+    private static let pendingRequestTimeout: TimeInterval = 60  // Clean up after 60 seconds
+
     // MARK: - Session Watching State
 
     /// Currently watched session ID (publicly accessible)
@@ -122,6 +135,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Stop network monitoring
         stopNetworkMonitor()
+
+        // Cancel pending RPC requests
+        if let client = rpcClient {
+            Task {
+                await client.cancelAllPending()
+            }
+        }
+        rpcClient = nil
+        useJSONRPC = false
 
         // Cancel WebSocket and session
         webSocket?.cancel(with: .goingAway, reason: nil)
@@ -416,6 +438,26 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Start stability timers on successful connection
         startTimers()
+
+        // JSON-RPC initialization is REQUIRED
+        let supported = await tryJSONRPCInitialize()
+        if !supported {
+            // Clean up on JSON-RPC init failure
+            webSocket?.cancel(with: .abnormalClosure, reason: nil)
+            webSocket = nil
+            self.session?.invalidateAndCancel()
+            self.session = nil
+            stopTimers()
+
+            let errorMessage = "Server does not support JSON-RPC 2.0"
+            updateState(.failed(reason: errorMessage))
+            throw AppError.connectionFailed(underlying: NSError(
+                domain: "WebSocketService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: errorMessage]
+            ))
+        }
+        AppLogger.webSocket("JSON-RPC mode enabled")
     }
 
     private func waitForConnection(connectionInfo: ConnectionInfo) async throws {
@@ -424,6 +466,33 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            // Thread-safe wrapper to ensure continuation is only resumed once
+            // This prevents crashes during reconnection when callback may fire multiple times
+            final class ThrowingContinuationBox: @unchecked Sendable {
+                private var continuation: CheckedContinuation<Void, Error>?
+                private let lock = NSLock()
+
+                init(_ c: CheckedContinuation<Void, Error>) { continuation = c }
+
+                func resume() {
+                    lock.lock()
+                    let c = continuation
+                    continuation = nil
+                    lock.unlock()
+                    c?.resume()
+                }
+
+                func resume(throwing error: Error) {
+                    lock.lock()
+                    let c = continuation
+                    continuation = nil
+                    lock.unlock()
+                    c?.resume(throwing: error)
+                }
+            }
+
+            let box = ThrowingContinuationBox(continuation)
+
             // Start receiving messages
             self.receiveMessage()
 
@@ -431,15 +500,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             currentSocket.sendPing { [weak self] error in
                 // Verify socket is still the current one
                 guard self?.webSocket === currentSocket else {
-                    continuation.resume(throwing: AppError.connectionFailed(underlying: nil))
+                    box.resume(throwing: AppError.connectionFailed(underlying: nil))
                     return
                 }
 
                 if let error = error {
-                    continuation.resume(throwing: AppError.connectionFailed(underlying: error))
+                    box.resume(throwing: AppError.connectionFailed(underlying: error))
                 } else {
                     self?.updateState(.connected(connectionInfo))
-                    continuation.resume()
+                    box.resume()
                 }
             }
         }
@@ -504,6 +573,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Clear watched session state
         _watchedSessionId = nil
+
+        // Clear pending request tracking to prevent memory buildup
+        pendingRequestMethodsLock.lock()
+        pendingRequestMethods.removeAll()
+        pendingRequestMethodsLock.unlock()
 
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
@@ -591,60 +665,141 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         guard let currentSocket = webSocket else { return false }
 
         return await withCheckedContinuation { [weak self] continuation in
+            // Thread-safe wrapper to ensure continuation is only resumed once
+            // This prevents crashes during reconnection when callback may fire multiple times
+            final class ContinuationBox: @unchecked Sendable {
+                private var continuation: CheckedContinuation<Bool, Never>?
+                private let lock = NSLock()
+
+                init(_ c: CheckedContinuation<Bool, Never>) { continuation = c }
+
+                func resume(returning value: Bool) {
+                    lock.lock()
+                    let c = continuation
+                    continuation = nil  // Clear to prevent reuse
+                    lock.unlock()
+                    c?.resume(returning: value)
+                }
+            }
+
+            let box = ContinuationBox(continuation)
+
             currentSocket.sendPing { error in
                 // Verify socket is still the current one before resuming
                 guard self?.webSocket === currentSocket else {
                     // Socket changed, treat as failure but don't crash
-                    continuation.resume(returning: false)
+                    box.resume(returning: false)
                     return
                 }
-                continuation.resume(returning: error == nil)
+                box.resume(returning: error == nil)
             }
         }
     }
 
     // MARK: - Send
 
-    func send(command: AgentCommand) async throws {
+    /// Send raw data (for JSON-RPC messages)
+    func send(data: Data) async throws {
         guard let webSocket = webSocket else {
             throw AppError.webSocketDisconnected
         }
-
-        let data = try jsonEncoder.encode(command)
 
         guard let jsonString = String(data: data, encoding: .utf8) else {
             throw AppError.encodingFailed(underlying: NSError(domain: "WebSocket", code: -1))
         }
 
-        AppLogger.webSocket("Sending command: \(command.command.rawValue)")
+        // Extract method name and request ID for logging (single JSON parse)
+        let (method, requestId) = extractJSONRPCMethodAndId(data: data)
+        let displayMethod = method ?? "request"
+
+        // Track request ID -> method for response correlation
+        if let requestId = requestId, let method = method {
+            pendingRequestMethodsLock.lock()
+            pendingRequestMethods[requestId] = (method: method, timestamp: Date())
+            // Periodic cleanup of stale entries (only if dictionary is getting large)
+            if pendingRequestMethods.count > 50 {
+                cleanupStaleRequests()
+            }
+            pendingRequestMethodsLock.unlock()
+        }
+
+        AppLogger.webSocket("Sending JSON-RPC \(displayMethod)")
 
         do {
             try await webSocket.send(.string(jsonString))
 
-            // Log outgoing command to debug store
+            // Log outgoing data to debug store
             Task { @MainActor in
                 DebugLogStore.shared.logWebSocket(
                     direction: .outgoing,
-                    title: command.command.rawValue,
-                    eventType: command.command.rawValue,
-                    payload: jsonString
+                    title: "→ \(displayMethod)",
+                    eventType: "jsonrpc_\(displayMethod.replacingOccurrences(of: "/", with: "_"))",
+                    // payload: jsonString.count < 2000 ? jsonString : String(jsonString.prefix(2000)) + "..."
+                    payload: jsonString  // Full payload for copy support
                 )
             }
         } catch {
-            AppLogger.webSocket("Send failed: \(error)", type: .error)
+            AppLogger.webSocket("Send raw data failed: \(error)", type: .error)
+            throw AppError.webSocketMessageFailed(underlying: error)
+        }
+    }
 
-            // Log send error to debug store
-            Task { @MainActor in
-                DebugLogStore.shared.logWebSocket(
-                    direction: .outgoing,
-                    title: "Send failed: \(command.command.rawValue)",
-                    eventType: command.command.rawValue,
-                    payload: "\(error)",
-                    level: .error
-                )
+    // MARK: - JSON-RPC Support
+
+    /// Get the JSON-RPC client (creates if needed)
+    func getJSONRPCClient() -> JSONRPCClient {
+        if let client = rpcClient {
+            return client
+        }
+        let client = JSONRPCClient(webSocket: self, requestTimeout: 30.0)
+        rpcClient = client
+        return client
+    }
+
+    /// Check if JSON-RPC mode is enabled
+    var isJSONRPCEnabled: Bool {
+        useJSONRPC
+    }
+
+    /// Attempt JSON-RPC initialize handshake
+    /// Returns true if server supports JSON-RPC, false otherwise
+    func tryJSONRPCInitialize() async -> Bool {
+        let client = getJSONRPCClient()
+
+        do {
+            let params = InitializeParams(
+                clientInfo: .cdevIOS,
+                capabilities: nil
+            )
+
+            let result: InitializeResult = try await client.request(
+                method: JSONRPCMethod.initialize,
+                params: params
+            )
+
+            // Success - server supports JSON-RPC
+            useJSONRPC = true
+            AppLogger.webSocket("JSON-RPC initialized: server=\(result.serverInfo?.name ?? "unknown") v\(result.serverInfo?.version ?? "?")")
+
+            if let capabilities = result.capabilities {
+                if let agents = capabilities.agents {
+                    AppLogger.webSocket("Available agents: \(agents.joined(separator: ", "))")
+                }
+                if let features = capabilities.features {
+                    AppLogger.webSocket("Features: \(features.joined(separator: ", "))")
+                }
             }
 
-            throw AppError.webSocketMessageFailed(underlying: error)
+            // Send 'initialized' notification to confirm we've processed the response
+            try? await client.notify(method: JSONRPCMethod.initialized, params: nil as EmptyParams?)
+
+            return true
+        } catch {
+            // Server doesn't support JSON-RPC or error occurred
+            // Fall back to legacy protocol
+            AppLogger.webSocket("JSON-RPC initialize failed (using legacy protocol): \(error.localizedDescription)", type: .info)
+            useJSONRPC = false
+            return false
         }
     }
 
@@ -744,6 +899,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         for line in lines {
             guard let data = line.data(using: .utf8) else { continue }
 
+            // Check if this is a JSON-RPC message
+            let messageType = JSONRPCMessageType.detect(from: data)
+            if messageType != .unknown {
+                handleJSONRPCMessage(data: data, messageType: messageType, rawLine: line)
+                continue
+            }
+
+            // Legacy event format
             do {
                 let event = try jsonDecoder.decode(AgentEvent.self, from: data)
 
@@ -758,6 +921,19 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                             eventType: "heartbeat",
                             payload: nil
                         )
+                    }
+                    continue
+                }
+
+                // Handle deprecation warnings - log but don't forward to event stream
+                if event.type == .deprecationWarning {
+                    if case .deprecationWarning(let payload) = event.payload {
+                        AppLogger.webSocket("⚠️ DEPRECATION: \(payload.message ?? "Unknown")", type: .warning)
+                        if let migration = payload.migration {
+                            for (oldCmd, newCmd) in migration {
+                                AppLogger.webSocket("  Migration: \(oldCmd) → \(newCmd)", type: .info)
+                            }
+                        }
                     }
                     continue
                 }
@@ -779,7 +955,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                         direction: .incoming,
                         title: event.type.rawValue,
                         eventType: event.type.rawValue,
-                        payload: line.count < 2000 ? line : String(line.prefix(2000)) + "..."
+                        // payload: line.count < 2000 ? line : String(line.prefix(2000)) + "..."
+                        payload: line  // Full payload for copy support
                     )
                 }
             } catch {
@@ -791,11 +968,210 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                         direction: .incoming,
                         title: "Parse error",
                         eventType: nil,
-                        payload: "\(error)\n\nRaw: \(line.prefix(500))",
+                        // payload: "\(error)\n\nRaw: \(line.prefix(500))",
+                        payload: "\(error)\n\nRaw: \(line)",  // Full payload for copy support
                         level: .error
                     )
                 }
             }
+        }
+    }
+
+    /// Handle JSON-RPC messages (responses and notifications)
+    private func handleJSONRPCMessage(data: Data, messageType: JSONRPCMessageType, rawLine: String) {
+        switch messageType {
+        case .response:
+            // Route to RPC client for request correlation
+            if let client = rpcClient {
+                Task {
+                    await client.handleMessage(data)
+                }
+            }
+
+            // Parse response once and extract all needed info
+            let responseInfo = parseJSONRPCResponse(data: data)
+
+            // Look up the method name from tracked requests
+            var methodName: String?
+            if let responseId = responseInfo.id {
+                pendingRequestMethodsLock.lock()
+                methodName = pendingRequestMethods.removeValue(forKey: responseId)?.method
+                pendingRequestMethodsLock.unlock()
+            }
+            let displayMethod = methodName ?? "response"
+
+            if responseInfo.isError {
+                AppLogger.webSocket("JSON-RPC error for \(displayMethod): \(responseInfo.errorMessage ?? "Unknown error")", type: .error)
+            } else {
+                AppLogger.webSocket("JSON-RPC response: \(displayMethod)")
+            }
+
+            // Log to debug store with appropriate level (capture values to avoid retain cycles)
+            let title = responseInfo.isError
+                ? "⚠️ \(displayMethod): \(responseInfo.errorMessage ?? "Error")"
+                : "← \(displayMethod)"
+            let eventType = responseInfo.isError ? "jsonrpc_error" : "jsonrpc_response"
+            let level: DebugLogLevel = responseInfo.isError ? .error : .info
+            // let payload = rawLine.count < 2000 ? rawLine : String(rawLine.prefix(2000)) + "..."
+            let payload = rawLine  // Full payload for copy support
+
+            Task { @MainActor in
+                DebugLogStore.shared.logWebSocket(
+                    direction: .incoming,
+                    title: title,
+                    eventType: eventType,
+                    payload: payload,
+                    level: level
+                )
+            }
+
+        case .notification:
+            // Parse notification and convert to AgentEvent if possible
+            handleJSONRPCNotification(data: data, rawLine: rawLine)
+
+        case .request:
+            // Server-to-client requests not expected in current protocol
+            AppLogger.webSocket("Unexpected JSON-RPC request from server", type: .warning)
+
+        case .unknown:
+            break
+        }
+    }
+
+    /// Handle JSON-RPC notification - convert to AgentEvent if applicable
+    private func handleJSONRPCNotification(data: Data, rawLine: String) {
+        do {
+            let notification = try jsonDecoder.decode(JSONRPCRawNotification.self, from: data)
+            let method = notification.method
+
+            AppLogger.webSocket("JSON-RPC notification: \(method)")
+
+            // Log to debug store
+            Task { @MainActor in
+                DebugLogStore.shared.logWebSocket(
+                    direction: .incoming,
+                    title: "JSON-RPC: \(method)",
+                    eventType: method,
+                    // payload: rawLine.count < 2000 ? rawLine : String(rawLine.prefix(2000)) + "..."
+                    payload: rawLine  // Full payload for copy support
+                )
+            }
+
+            // Try to convert known notification methods to AgentEvent
+            // This allows existing event handling code to work with JSON-RPC notifications
+            if let event = convertNotificationToEvent(method: method, params: notification.params) {
+                // Handle heartbeat events - don't forward to event stream
+                if event.type == .heartbeat {
+                    return
+                }
+
+                // Broadcast to event stream subscribers
+                eventContinuationsLock.lock()
+                let eventContinuations = Array(eventStreamContinuations.values)
+                eventContinuationsLock.unlock()
+
+                for continuation in eventContinuations {
+                    continuation.yield(event)
+                }
+            }
+        } catch {
+            AppLogger.webSocket("JSON-RPC notification parse error: \(error)", type: .warning)
+        }
+    }
+
+    /// Convert JSON-RPC notification to AgentEvent
+    private func convertNotificationToEvent(method: String, params: AnyCodable?) -> AgentEvent? {
+        // Map notification methods to event types
+        // This bridges the JSON-RPC format to existing event handling
+        guard let paramsDict = params?.dictionaryValue else { return nil }
+
+        // Strip "event/" prefix from method name if present
+        // JSON-RPC uses "event/claude_message" but AgentEventType expects "claude_message"
+        let eventType = method.hasPrefix("event/") ? String(method.dropFirst(6)) : method
+
+        // Re-encode params to Data for AgentEvent decoding
+        // AgentEvent expects: { "event": "...", "payload": {...}, "id": "...", "timestamp": "..." }
+        // JSON-RPC provides: { "method": "event/...", "params": {...} }
+        do {
+            var eventDict: [String: Any] = [:]
+            eventDict["event"] = eventType  // Add event type (without "event/" prefix)
+            eventDict["payload"] = paramsDict  // Wrap params in payload key
+            eventDict["id"] = UUID().uuidString
+            eventDict["timestamp"] = ISO8601DateFormatter().string(from: Date())
+
+            let eventData = try JSONSerialization.data(withJSONObject: eventDict)
+            return try jsonDecoder.decode(AgentEvent.self, from: eventData)
+        } catch {
+            // Only log to console - avoid DebugLogStore for high-frequency errors
+            AppLogger.webSocket("Failed to convert notification '\(eventType)': \(error)", type: .warning)
+            return nil
+        }
+    }
+
+    // MARK: - JSON-RPC Parsing Helpers (Optimized - single parse)
+
+    /// Parsed JSON-RPC response info
+    private struct JSONRPCResponseInfo {
+        let id: String?
+        let isError: Bool
+        let errorMessage: String?
+    }
+
+    /// Parse JSON-RPC response once and extract all needed info
+    private func parseJSONRPCResponse(data: Data) -> JSONRPCResponseInfo {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return JSONRPCResponseInfo(id: nil, isError: false, errorMessage: nil)
+        }
+
+        // Extract ID
+        let id: String?
+        if let idString = json["id"] as? String {
+            id = idString
+        } else if let idInt = json["id"] as? Int {
+            id = String(idInt)
+        } else {
+            id = nil
+        }
+
+        // Check for error
+        let isError = json["error"] != nil
+        var errorMessage: String?
+        if let error = json["error"] as? [String: Any] {
+            let code = error["code"] as? Int
+            let message = error["message"] as? String
+            if let code = code, let message = message {
+                errorMessage = "[\(code)] \(message)"
+            } else {
+                errorMessage = message
+            }
+        }
+
+        return JSONRPCResponseInfo(id: id, isError: isError, errorMessage: errorMessage)
+    }
+
+    /// Extract method name and request ID from JSON-RPC request (single parse)
+    private func extractJSONRPCMethodAndId(data: Data) -> (method: String?, id: String?) {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (nil, nil)
+        }
+        let method = json["method"] as? String
+        let id: String?
+        if let idString = json["id"] as? String {
+            id = idString
+        } else if let idInt = json["id"] as? Int {
+            id = String(idInt)
+        } else {
+            id = nil
+        }
+        return (method, id)
+    }
+
+    /// Clean up stale pending request entries (called with lock held)
+    private func cleanupStaleRequests() {
+        let now = Date()
+        let timeout = Self.pendingRequestTimeout
+        pendingRequestMethods = pendingRequestMethods.filter { _, value in
+            now.timeIntervalSince(value.timestamp) < timeout
         }
     }
 
@@ -922,11 +1298,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         AppLogger.webSocket("Starting watch for session: \(sessionId)")
-        let command = AgentCommand.watchSession(sessionId: sessionId)
-        try await send(command: command)
 
-        // Optimistically set watched session ID
-        // Server will confirm with session_watch_started event
+        // Use JSON-RPC (required)
+        let client = getJSONRPCClient()
+        let params = SessionWatchParams(sessionId: sessionId)
+        let _: SessionWatchResult = try await client.request(
+            method: JSONRPCMethod.sessionWatch,
+            params: params
+        )
         _watchedSessionId = sessionId
     }
 
@@ -949,8 +1328,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         AppLogger.webSocket("Stopping watch for session: \(previousSessionId ?? "unknown")")
-        let command = AgentCommand.unwatchSession()
-        try await send(command: command)
+
+        // Use JSON-RPC (required)
+        let client = getJSONRPCClient()
+        let params = SessionWatchParams(sessionId: previousSessionId ?? "")
+        let _: SessionUnwatchResult = try await client.request(
+            method: JSONRPCMethod.sessionUnwatch,
+            params: params
+        )
     }
 }
 
