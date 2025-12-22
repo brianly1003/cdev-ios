@@ -170,8 +170,7 @@ struct SessionPickerView: View {
                 Text("This will permanently delete all \(sessions.count) sessions.")
             }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .responsiveSheet()
         .preferredColorScheme(.dark)
     }
 }

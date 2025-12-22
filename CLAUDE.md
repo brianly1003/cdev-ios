@@ -475,6 +475,8 @@ Additional documentation is available in the `docs/` folder:
 | Document | Description |
 |----------|-------------|
 | `docs/RESPONSIVE-LAYOUT.md` | Complete guide to using ResponsiveLayout for iPhone/iPad |
+| `docs/MULTI-DEVICE-BEST-PRACTICES.md` | Best practices for multi-device development (gestures, sheets, layouts) |
+| `docs/MESSAGE-TYPE-MAPPING.md` | JSON-RPC message types to iOS ElementContent mapping |
 
 **Key Design System Files:**
 - `cdev/Core/Design/ResponsiveLayout.swift` - Centralized responsive sizing

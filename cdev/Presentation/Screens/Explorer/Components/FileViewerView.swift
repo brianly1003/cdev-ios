@@ -80,8 +80,7 @@ struct FileViewerView: View {
                 editorStatusBar
             }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .responsiveSheet()
         .presentationBackground(ColorSystem.Editor.background)
         .onChange(of: searchQuery) { _, newValue in
             // Debounce search input to reduce CPU usage

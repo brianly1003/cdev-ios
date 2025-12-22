@@ -207,3 +207,29 @@ extension View {
         modifier(ButtonPressEffect())
     }
 }
+
+// MARK: - Responsive Sheet Presentation
+
+/// Modifier for device-appropriate sheet presentation
+/// - iPhone: Medium and large detents (swipeable)
+/// - iPad: Large only (full height for more content)
+struct ResponsiveSheetModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private var isCompact: Bool { sizeClass == .compact }
+
+    func body(content: Content) -> some View {
+        content
+            .presentationDetents(isCompact ? [.medium, .large] : [.large])
+            .presentationDragIndicator(.visible)
+    }
+}
+
+extension View {
+    /// Apply responsive sheet presentation detents
+    /// - iPhone: [.medium, .large] for swipeable half/full
+    /// - iPad: [.large] for full height
+    func responsiveSheet() -> some View {
+        modifier(ResponsiveSheetModifier())
+    }
+}

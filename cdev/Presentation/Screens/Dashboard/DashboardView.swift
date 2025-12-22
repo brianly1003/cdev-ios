@@ -194,13 +194,13 @@ struct DashboardView: View {
                 }
                 .sheet(isPresented: $showDebugLogs) {
                     AdminToolsView()
-                        .presentationDetents([.medium, .large])
-                        .presentationDragIndicator(.visible)
+                        .responsiveSheet()
                 }
                 .sheet(isPresented: $showSettings) {
                     SettingsView(onDisconnect: {
                         Task { await viewModel.disconnect() }
                     })
+                    .responsiveSheet()
                 }
                 .sheet(isPresented: $viewModel.showSessionPicker) {
                     SessionPickerView(
@@ -238,8 +238,7 @@ struct DashboardView: View {
                             Task { await viewModel.disconnect() }
                         }
                     )
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+                    .responsiveSheet()
                 }
                 .sheet(isPresented: $showPairing) {
                     if let pairingViewModel = viewModel.makePairingViewModel() {

@@ -121,8 +121,7 @@ struct AdminToolsView: View {
                                 }
                             }
                     }
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+                    .responsiveSheet()
                 }
             }
         }
