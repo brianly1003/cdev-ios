@@ -180,11 +180,16 @@ private struct RainbowData {
     /// - Time: O(n) where n = text length
     /// - Space: O(n) for attributedText + O(k) for keywordCharIndices where k = keyword chars
     /// - Pre-computes keyword positions for O(1) lookup during animation
+    /// - Also detects leading "!" for bash mode and colors it blue
     static func compute(text: String) -> RainbowData {
         let n = text.count
 
         // Early exit: text too short or too long (performance guard)
         guard n >= keywordLength, n <= maxProcessLength else {
+            // Still check for bash mode even if text is short
+            if n > 0 && text.hasPrefix("!") {
+                return computeBashMode(text: text)
+            }
             return RainbowData(
                 hasKeyword: false,
                 attributedText: AttributedString(),
@@ -202,10 +207,21 @@ private struct RainbowData {
         var result = AttributedString()
         var keywordIndices = Set<Int>()  // O(1) lookup, O(k) space
         var hasKeyword = false
+        var hasBashMode = false  // Track bash mode separately
         var firstKeywordIndex: Int = -1
         var i = 0
 
         while i < n {
+            // BASH MODE: Check for leading "!" characters and color them green
+            if chars[i] == "!" && (i == 0 || chars[0..<i].allSatisfy { $0.isWhitespace }) {
+                hasBashMode = true  // Mark that we found bash mode
+                var charAttr = AttributedString(String(chars[i]))
+                charAttr.foregroundColor = ColorSystem.success  // Green for bash commands
+                result.append(charAttr)
+                i += 1
+                continue
+            }
+
             // Check if we can match keyword at position i
             if i <= n - keywordLength && matchesKeyword(chars: chars, at: i) {
                 // Check word boundary
@@ -247,7 +263,7 @@ private struct RainbowData {
         let firstPosition = hasKeyword ? CGFloat(firstKeywordIndex) / CGFloat(n) : 0
 
         return RainbowData(
-            hasKeyword: hasKeyword,
+            hasKeyword: hasKeyword || hasBashMode,  // Show overlay if we have keywords OR bash mode
             attributedText: result,
             baseText: text,
             keywordCharIndices: keywordIndices,
@@ -266,6 +282,36 @@ private struct RainbowData {
             }
         }
         return true
+    }
+
+    /// Compute bash mode styling for short text (just leading "!" in green)
+    /// Used when text is too short for main algorithm but starts with "!"
+    private static func computeBashMode(text: String) -> RainbowData {
+        var result = AttributedString()
+        let chars = Array(text)
+
+        for (index, char) in chars.enumerated() {
+            var charAttr = AttributedString(String(char))
+
+            // Color leading "!" green, rest as normal text
+            if char == "!" && (index == 0 || chars[0..<index].allSatisfy { $0.isWhitespace }) {
+                charAttr.foregroundColor = ColorSystem.success  // Green for bash commands
+            } else {
+                charAttr.foregroundColor = ColorSystem.textPrimary
+            }
+
+            result.append(charAttr)
+        }
+
+        return RainbowData(
+            hasKeyword: true,  // Has styled content (bash mode "!")
+            attributedText: result,
+            baseText: text,
+            keywordCharIndices: [],  // Empty set = no shimmer effect
+            firstKeywordPosition: 0,
+            totalCharacters: text.count,
+            firstKeywordIndex: 0
+        )
     }
 }
 

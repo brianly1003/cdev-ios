@@ -252,12 +252,26 @@ private struct UserPromptRow: View {
     let content: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 4) {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(ColorSystem.Log.user)
+        let cleanContent = content.hasPrefix("> ") ? String(content.dropFirst(2)) : content
+        let isBashCommand = cleanContent.hasPrefix("!")
+        let promptColor = isBashCommand ? ColorSystem.success : ColorSystem.Log.user
+        // Strip leading "!" from text if it's a bash command (we show it as prompt symbol)
+        let displayText = isBashCommand ? String(cleanContent.dropFirst()).trimmingCharacters(in: .whitespaces) : cleanContent
 
-            Text(content.hasPrefix("> ") ? String(content.dropFirst(2)) : content)
+        HStack(alignment: .top, spacing: 4) {
+            if isBashCommand {
+                // Bash command - show "!" in green
+                Text("!")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(promptColor)
+            } else {
+                // Regular user message - show chevron
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(promptColor)
+            }
+
+            Text(displayText)
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.Log.user)
                 .textSelection(.enabled)

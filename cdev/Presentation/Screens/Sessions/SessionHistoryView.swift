@@ -214,13 +214,25 @@ struct ChatMessageRow: View {
     private var roleIndicator: some View {
         switch message.role {
         case "user":
+            let isBashCommand = message.textContent.hasPrefix("!")
+            let iconColor = isBashCommand ? ColorSystem.success : ColorSystem.Log.user
+
             HStack(spacing: 3) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
+                if isBashCommand {
+                    // Bash command - show "!" in green
+                    Text("!")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(iconColor)
+                } else {
+                    // Regular user message - show chevron
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(iconColor)
+                }
                 Text("you")
                     .fontWeight(.semibold)
+                    .foregroundStyle(ColorSystem.Log.user)
             }
-            .foregroundStyle(ColorSystem.Log.user)
 
         case "assistant":
             HStack(spacing: 3) {
@@ -280,7 +292,11 @@ private struct UserMessageContent: View {
     let message: SessionMessagesResponse.SessionMessage
 
     var body: some View {
-        Text(message.textContent)
+        let isBashCommand = message.textContent.hasPrefix("!")
+        // Strip leading "!" from text if it's a bash command (shown in role indicator)
+        let displayText = isBashCommand ? String(message.textContent.dropFirst()).trimmingCharacters(in: .whitespaces) : message.textContent
+
+        Text(displayText)
             .font(Typography.terminal)
             .foregroundStyle(ColorSystem.Log.user)
             .textSelection(.enabled)

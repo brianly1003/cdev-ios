@@ -172,23 +172,30 @@ struct UserInputElementView: View {
         userTextRow(text)
     }
 
-    /// Shared view for user text with ">" prompt and search highlighting
+    /// Shared view for user text with ">" or "!" prompt and search highlighting
+    /// Bash commands (starting with "!") show "!" prompt in green
     @ViewBuilder
     private func userTextRow(_ text: String) -> some View {
+        let isBashCommand = text.hasPrefix("!")
+        let promptSymbol = isBashCommand ? "!" : ">"
+        let promptColor = isBashCommand ? ColorSystem.success : ColorSystem.Log.user
+        // Strip leading "!" from text if it's a bash command (we show it as prompt symbol)
+        let displayText = isBashCommand ? String(text.dropFirst()).trimmingCharacters(in: .whitespaces) : text
+
         HStack(alignment: .top, spacing: Spacing.xxs) {
-            Text(">")
+            Text(promptSymbol)
                 .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.Log.user)
+                .foregroundStyle(promptColor)
                 .fontWeight(.bold)
 
             if searchText.isEmpty {
-                Text(text)
+                Text(displayText)
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.Log.user)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                HighlightedText(text, highlighting: searchText)
+                HighlightedText(displayText, highlighting: searchText)
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.Log.user)
                     .textSelection(.enabled)
