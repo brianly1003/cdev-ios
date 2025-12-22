@@ -14,6 +14,8 @@ enum ElementType: String, Codable {
     case thinking = "thinking"
     case interrupted = "interrupted"
     case contextCompaction = "context_compaction"  // Claude Code context window compacted
+    case task = "task"  // Task tool use (Plan, Explore agents)
+    case taskGroup = "task_group"  // Group of related tasks
 }
 
 /// Tool execution status
@@ -85,6 +87,8 @@ enum ElementContent: Codable, Equatable {
     case thinking(ThinkingContent)
     case interrupted(InterruptedContent)
     case contextCompaction(ContextCompactionContent)
+    case task(TaskContent)
+    case taskGroup(TaskGroupContent)
 
     static func decode(from container: KeyedDecodingContainer<ChatElement.CodingKeys>, type: ElementType) throws -> ElementContent {
         let nestedDecoder = try container.superDecoder(forKey: .content)
@@ -108,6 +112,10 @@ enum ElementContent: Codable, Equatable {
             return .interrupted(try InterruptedContent(from: nestedDecoder))
         case .contextCompaction:
             return .contextCompaction(try ContextCompactionContent(from: nestedDecoder))
+        case .task:
+            return .task(try TaskContent(from: nestedDecoder))
+        case .taskGroup:
+            return .taskGroup(try TaskGroupContent(from: nestedDecoder))
         }
     }
 
@@ -123,6 +131,8 @@ enum ElementContent: Codable, Equatable {
         case .thinking(let content): try container.encode(content)
         case .interrupted(let content): try container.encode(content)
         case .contextCompaction(let content): try container.encode(content)
+        case .task(let content): try container.encode(content)
+        case .taskGroup(let content): try container.encode(content)
         }
     }
 }
@@ -499,6 +509,95 @@ struct ContextCompactionContent: Codable, Equatable {
     }
 }
 
+/// Task execution status for agent tasks (Plan, Explore, etc.)
+enum TaskStatus: String, Codable, Equatable {
+    case running
+    case completed
+    case failed
+}
+
+/// Individual task content - represents a single agent task execution
+/// Matches Claude Code CLI Task display format
+struct TaskContent: Codable, Equatable, Identifiable {
+    let id: String              // Tool use ID
+    let description: String     // Task description
+    let agentType: String       // "Plan", "Explore", etc.
+    let model: String?          // "sonnet", "haiku", etc.
+    var status: TaskStatus      // Current execution status
+    var toolUses: Int?          // Number of tool uses (from result)
+    var tokens: Int?            // Token count (from usage)
+    var agentId: String?        // Agent ID for resuming
+    var inputTokens: Int?       // Input tokens
+    var outputTokens: Int?      // Output tokens
+
+    enum CodingKeys: String, CodingKey {
+        case id, description
+        case agentType = "agent_type"
+        case model, status
+        case toolUses = "tool_uses"
+        case tokens
+        case agentId = "agent_id"
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+    }
+
+    init(
+        id: String,
+        description: String,
+        agentType: String,
+        model: String? = nil,
+        status: TaskStatus = .running,
+        toolUses: Int? = nil,
+        tokens: Int? = nil,
+        agentId: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil
+    ) {
+        self.id = id
+        self.description = description
+        self.agentType = agentType
+        self.model = model
+        self.status = status
+        self.toolUses = toolUses
+        self.tokens = tokens
+        self.agentId = agentId
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+    }
+}
+
+/// Task group content - represents a collapsible group of related tasks
+/// Groups consecutive tasks by agent type (e.g., "3 Explore agents finished")
+struct TaskGroupContent: Codable, Equatable, Identifiable {
+    let id: String
+    let agentType: String       // "Plan", "Explore", etc.
+    let tasks: [TaskContent]    // Tasks in this group
+    var isExpanded: Bool        // Expansion state
+
+    var count: Int { tasks.count }
+    var allCompleted: Bool { tasks.allSatisfy { $0.status == .completed } }
+    var anyFailed: Bool { tasks.contains { $0.status == .failed } }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case agentType = "agent_type"
+        case tasks
+        case isExpanded = "is_expanded"
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        agentType: String,
+        tasks: [TaskContent],
+        isExpanded: Bool = false
+    ) {
+        self.id = id
+        self.agentType = agentType
+        self.tasks = tasks
+        self.isExpanded = isExpanded
+    }
+}
+
 // MARK: - Factory Methods
 
 extension ChatElement {
@@ -729,8 +828,29 @@ extension ChatElement {
                         }
                     }
 
+                    // Check if this is a Task tool - special handling for agents
+                    if toolName == "Task" {
+                        let description = params["description"] ?? "Task"
+                        let agentType = params["subagent_type"] ?? "agent"
+                        let modelStr = params["model"]
+
+                        elements.append(ChatElement(
+                            id: blockId,
+                            type: .task,
+                            timestamp: timestamp,
+                            content: .task(TaskContent(
+                                id: block.effectiveId,
+                                description: description,
+                                agentType: agentType,
+                                model: modelStr,
+                                status: .running,
+                                inputTokens: nil,
+                                outputTokens: nil
+                            ))
+                        ))
+                    }
                     // Check if this is an Edit tool - display as diff view
-                    if toolName == "Edit",
+                    else if toolName == "Edit",
                        let filePath = params["file_path"],
                        let oldString = params["old_string"],
                        let newString = params["new_string"] {

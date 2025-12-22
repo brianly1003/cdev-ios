@@ -16,6 +16,15 @@ struct FileViewerView: View {
     @State private var syntaxHighlighting = true
     @State private var activeLineIndex: Int? = nil
 
+    // Beautify state
+    @State private var isFormatted = false
+    @State private var formattedContent: String?
+    @State private var showFormatError = false
+    @State private var formatErrorMessage = ""
+
+    // Fullscreen state
+    @State private var isFullscreen = false
+
     // Search state
     @State private var isSearchActive = false
     @State private var searchQuery = ""
@@ -45,8 +54,8 @@ struct FileViewerView: View {
 
                 if isLoading {
                     loadingView
-                } else if let content = content {
-                    codeEditorView(content: content)
+                } else if let displayContent = displayContent {
+                    codeEditorView(content: displayContent)
                 } else {
                     errorView
                 }
@@ -81,6 +90,9 @@ struct FileViewerView: View {
             }
         }
         .presentationBackground(ColorSystem.Editor.background)
+        .presentationDetents(isFullscreen ? [.fraction(0.99)] : [.medium, .large])
+        .presentationDragIndicator(isFullscreen ? .hidden : .visible)
+        .interactiveDismissDisabled(isFullscreen)
         .onChange(of: searchQuery) { _, newValue in
             // Debounce search input to reduce CPU usage
             debouncedSearch(query: newValue)
@@ -438,6 +450,22 @@ struct FileViewerView: View {
             }
             .disabled(isToolbarDisabled)
 
+            // Fullscreen toggle
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isFullscreen.toggle()
+                }
+                Haptics.selection()
+            } label: {
+                Image(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(isFullscreen ? ColorSystem.primary : isToolbarDisabled ? ColorSystem.textQuaternary : ColorSystem.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(isFullscreen ? ColorSystem.primaryGlow : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .disabled(isToolbarDisabled)
+
             // More options menu
             Menu {
                 Section("Display") {
@@ -661,69 +689,244 @@ struct FileViewerView: View {
     // MARK: - Editor Status Bar
 
     private var editorStatusBar: some View {
-        HStack(spacing: 0) {
-            // Language indicator (file extension)
-            if let ext = file.fileExtension, !ext.isEmpty {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(languageColor(for: ext))
-                        .frame(width: 8, height: 8)
+        VStack(spacing: 0) {
+            // Error banner (if any) - above status bar
+            // WCAG AA compliant: White text on error red provides 5.5:1+ contrast ratio
+            if showFormatError {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.white)
 
-                    Text(ext.uppercased())
-                        .font(Typography.badge)
-                        .foregroundStyle(ColorSystem.textSecondary)
+                    Text(formatErrorMessage)
+                        .font(Typography.terminalSmall)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    // Dismiss button
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showFormatError = false
+                        }
+                        Haptics.light()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
                 }
                 .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, 4)
-                .background(ColorSystem.terminalBgHighlight)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.vertical, 5)
+                .background(ColorSystem.error)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            Spacer()
+            // Main status bar with inline beautify button
+            HStack(spacing: Spacing.sm) {
+                // Language indicator (file extension)
+                if let ext = file.fileExtension, !ext.isEmpty {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(languageColor(for: ext))
+                            .frame(width: 8, height: 8)
 
-            // File info
-            HStack(spacing: Spacing.md) {
-                // Line count
-                if let content = content {
-                    let lineCount = content.components(separatedBy: "\n").count
-                    HStack(spacing: 3) {
-                        Image(systemName: "text.alignleft")
-                            .font(.system(size: 9))
-                        Text("\(lineCount) lines")
+                        Text(ext.uppercased())
+                            .font(Typography.badge)
+                            .foregroundStyle(ColorSystem.textSecondary)
                     }
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textTertiary)
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
 
-                // File size
-                if let size = file.formattedSize {
-                    HStack(spacing: 3) {
-                        Image(systemName: "doc")
-                            .font(.system(size: 9))
-                        Text(size)
-                    }
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textTertiary)
-                }
+                Spacer()
 
-                // Encoding indicator
-                Text("UTF-8")
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textQuaternary)
+                // File info
+                HStack(spacing: Spacing.md) {
+                    // Line count
+                    if let content = content {
+                        let lineCount = content.components(separatedBy: "\n").count
+                        HStack(spacing: 3) {
+                            Image(systemName: "text.alignleft")
+                                .font(.system(size: 9))
+                            Text("\(lineCount) lines")
+                        }
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                    }
+
+                    // File size
+                    if let size = file.formattedSize {
+                        HStack(spacing: 3) {
+                            Image(systemName: "doc")
+                                .font(.system(size: 9))
+                            Text(size)
+                        }
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                    }
+
+                    // Encoding indicator
+                    Text("UTF-8")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+
+                    // Beautify button (inline, only for JSON/Markdown)
+                    if isBeautifiable && !isLoading {
+                        // Separator
+                        Rectangle()
+                            .fill(ColorSystem.Editor.gutterBorder)
+                            .frame(width: 1, height: 12)
+
+                        Button {
+                            toggleBeautify()
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: isFormatted ? "arrow.uturn.backward" : "sparkles")
+                                    .font(.system(size: 9, weight: .semibold))
+
+                                Text(isFormatted ? "Original" : "Beautify")
+                                    .font(Typography.badge)
+                            }
+                            .foregroundStyle(isFormatted ? ColorSystem.textSecondary : ColorSystem.primary)
+                            .padding(.horizontal, Spacing.xs)
+                            .padding(.vertical, 3)
+                            .background(isFormatted ? ColorSystem.terminalBgHighlight : ColorSystem.primaryGlow)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
+            .overlay(
+                Rectangle()
+                    .fill(ColorSystem.Editor.gutterBorder)
+                    .frame(height: 1),
+                alignment: .top
+            )
         }
-        .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.xs)
-        .background(ColorSystem.terminalBgElevated)
-        .overlay(
-            Rectangle()
-                .fill(ColorSystem.Editor.gutterBorder)
-                .frame(height: 1),
-            alignment: .top
-        )
     }
 
     // MARK: - Helpers
+
+    /// Check if file is JSON or Markdown (for beautify button)
+    private var isBeautifiable: Bool {
+        guard let ext = file.fileExtension?.lowercased() else { return false }
+        return ext == "json" || ext == "md" || ext == "markdown"
+    }
+
+    /// Get display content (formatted or original)
+    private var displayContent: String? {
+        if isFormatted, let formatted = formattedContent {
+            return formatted
+        }
+        return content
+    }
+
+    /// Toggle beautification
+    private func toggleBeautify() {
+        guard let ext = file.fileExtension?.lowercased() else { return }
+
+        // If already formatted, restore original
+        if isFormatted {
+            withAnimation(.easeOut(duration: 0.2)) {
+                isFormatted = false
+                showFormatError = false
+            }
+            Haptics.light()
+            return
+        }
+
+        // Format the content
+        guard let content = content else { return }
+
+        Task { @MainActor in
+            do {
+                let formatted: String
+                if ext == "json" {
+                    formatted = try beautifyJSON(content)
+                } else if ext == "md" || ext == "markdown" {
+                    formatted = beautifyMarkdown(content)
+                } else {
+                    return
+                }
+
+                withAnimation(.easeOut(duration: 0.2)) {
+                    formattedContent = formatted
+                    isFormatted = true
+                    showFormatError = false
+                }
+                Haptics.success()
+            } catch {
+                // Show error
+                formatErrorMessage = error.localizedDescription
+                showFormatError = true
+                Haptics.error()
+
+                // Auto-dismiss error after 3 seconds
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        showFormatError = false
+                    }
+                }
+            }
+        }
+    }
+
+    /// Beautify JSON with proper indentation
+    private func beautifyJSON(_ content: String) throws -> String {
+        guard let data = content.data(using: .utf8) else {
+            throw FormatError.invalidContent
+        }
+
+        let jsonObject = try JSONSerialization.jsonObject(with: data)
+        let prettyData = try JSONSerialization.data(withJSONObject: jsonObject, options: [.prettyPrinted, .sortedKeys])
+
+        guard let formatted = String(data: prettyData, encoding: .utf8) else {
+            throw FormatError.invalidContent
+        }
+
+        return formatted
+    }
+
+    /// Beautify Markdown with normalized formatting
+    private func beautifyMarkdown(_ content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        var formatted: [String] = []
+
+        for line in lines {
+            var processedLine = line
+
+            // Normalize headers (ensure space after #)
+            if processedLine.hasPrefix("#") {
+                let hashCount = processedLine.prefix(while: { $0 == "#" }).count
+                let remaining = processedLine.dropFirst(hashCount).trimmingCharacters(in: .whitespaces)
+                processedLine = String(repeating: "#", count: hashCount) + " " + remaining
+            }
+
+            // Normalize list items (ensure space after bullet/number)
+            if processedLine.trimmingCharacters(in: .whitespaces).hasPrefix("-") ||
+               processedLine.trimmingCharacters(in: .whitespaces).hasPrefix("*") ||
+               processedLine.trimmingCharacters(in: .whitespaces).hasPrefix("+") {
+                let trimmed = processedLine.trimmingCharacters(in: .whitespaces)
+                let bullet = String(trimmed.prefix(1))
+                let remaining = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+                processedLine = bullet + " " + remaining
+            }
+
+            formatted.append(processedLine)
+        }
+
+        return formatted.joined(separator: "\n")
+    }
 
     private func languageColor(for ext: String) -> Color {
         switch ext.lowercased() {
@@ -743,6 +946,19 @@ struct FileViewerView: View {
         case "sh", "bash", "zsh": return Color(hex: "#89E051")
         case "sql": return Color(hex: "#E38C00")
         default: return ColorSystem.textTertiary
+        }
+    }
+}
+
+// MARK: - Format Error
+
+enum FormatError: LocalizedError {
+    case invalidContent
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidContent:
+            return "Invalid JSON format"
         }
     }
 }

@@ -104,6 +104,10 @@ final class DashboardViewModel: ObservableObject {
     private var chatElementsUpdateScheduled = false
     private var pendingChatElements: [ChatElement] = []
 
+    // Task tracking for agent tasks (Plan, Explore, etc.)
+    private var activeTasks: [String: TaskContent] = [:]  // taskId -> TaskContent
+    private var taskGroups: [String: [String]] = [:]  // agentType -> [taskIds]
+
     // Prevent duplicate initial loads
     private var isInitialLoadInProgress = false
     private var hasCompletedInitialLoad = false
@@ -250,11 +254,48 @@ final class DashboardViewModel: ObservableObject {
 
     /// Queue chat elements for debounced UI update
     /// Elements are deduplicated and batched before updating the UI
+    /// Tasks are tracked and grouped by agent type
     private func queueChatElements(_ elements: [ChatElement]) {
-        // Filter duplicates before adding to pending queue
+        // Filter duplicates and process tasks
         for element in elements {
             guard !seenElementIds.contains(element.id) else { continue }
             seenElementIds.insert(element.id)
+
+            // Handle task tracking
+            if case .task(var taskContent) = element.content {
+                // Track this task
+                activeTasks[taskContent.id] = taskContent
+
+                // Add to agent type group
+                if taskGroups[taskContent.agentType] == nil {
+                    taskGroups[taskContent.agentType] = []
+                }
+                taskGroups[taskContent.agentType]?.append(taskContent.id)
+
+                AppLogger.log("[Task] Tracking task: \(taskContent.id) (\(taskContent.agentType))")
+            }
+            // Handle tool_result that might update a task
+            else if case .toolResult(let toolResult) = element.content {
+                // Check if this is a result for a Task
+                if let task = activeTasks[toolResult.toolCallId] {
+                    // Extract metadata from result
+                    let (agentId, toolUses) = extractTaskMetadata(from: toolResult.fullContent)
+
+                    // Update task
+                    var updatedTask = task
+                    updatedTask.status = toolResult.isError ? .failed : .completed
+                    updatedTask.agentId = agentId
+                    updatedTask.toolUses = toolUses
+
+                    activeTasks[updatedTask.id] = updatedTask
+
+                    AppLogger.log("[Task] Updated task \(updatedTask.id): status=\(updatedTask.status), toolUses=\(toolUses ?? 0)")
+
+                    // Don't queue the tool_result - it's absorbed into the task
+                    continue
+                }
+            }
+
             pendingChatElements.append(element)
         }
 
@@ -264,6 +305,7 @@ final class DashboardViewModel: ObservableObject {
 
     /// Schedule a debounced chat elements UI update
     /// Batches rapid claude_message events to prevent UI lag
+    /// Groups consecutive tasks by agent type
     private func scheduleChatElementsUpdate() {
         guard !chatElementsUpdateScheduled else { return }
         chatElementsUpdateScheduled = true
@@ -272,10 +314,11 @@ final class DashboardViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms debounce
             guard let self = self else { return }
 
-            // Move pending elements to main array
+            // Group tasks before adding to main array
             if !self.pendingChatElements.isEmpty {
-                let count = self.pendingChatElements.count
-                self.chatElements.append(contentsOf: self.pendingChatElements)
+                let grouped = self.groupConsecutiveTasks(self.pendingChatElements)
+                let count = grouped.count
+                self.chatElements.append(contentsOf: grouped)
                 self.pendingChatElements.removeAll()
                 self.trimChatElementsIfNeeded()
                 AppLogger.log("[Dashboard] Batched \(count) chat elements (debounced update)")
@@ -283,6 +326,99 @@ final class DashboardViewModel: ObservableObject {
 
             self.chatElementsUpdateScheduled = false
         }
+    }
+
+    /// Group consecutive task elements by agent type
+    /// Creates TaskGroupContent for consecutive tasks of the same type
+    private func groupConsecutiveTasks(_ elements: [ChatElement]) -> [ChatElement] {
+        var result: [ChatElement] = []
+        var currentTaskGroup: [TaskContent] = []
+        var currentAgentType: String?
+
+        for element in elements {
+            if case .task(let taskContent) = element.content {
+                // Get latest task state from tracking
+                let latestTask = activeTasks[taskContent.id] ?? taskContent
+
+                // Check if this belongs to current group
+                if let agentType = currentAgentType, agentType == latestTask.agentType {
+                    // Same type - add to group
+                    currentTaskGroup.append(latestTask)
+                } else {
+                    // Different type - flush current group
+                    if !currentTaskGroup.isEmpty, let agentType = currentAgentType {
+                        result.append(createTaskGroupElement(agentType: agentType, tasks: currentTaskGroup))
+                    }
+                    // Start new group
+                    currentTaskGroup = [latestTask]
+                    currentAgentType = latestTask.agentType
+                }
+            } else {
+                // Non-task element - flush current group
+                if !currentTaskGroup.isEmpty, let agentType = currentAgentType {
+                    result.append(createTaskGroupElement(agentType: agentType, tasks: currentTaskGroup))
+                    currentTaskGroup = []
+                    currentAgentType = nil
+                }
+                // Add non-task element
+                result.append(element)
+            }
+        }
+
+        // Flush remaining group
+        if !currentTaskGroup.isEmpty, let agentType = currentAgentType {
+            result.append(createTaskGroupElement(agentType: agentType, tasks: currentTaskGroup))
+        }
+
+        return result
+    }
+
+    /// Create a task group element
+    private func createTaskGroupElement(agentType: String, tasks: [TaskContent]) -> ChatElement {
+        // If only one task, return it as standalone
+        if tasks.count == 1 {
+            return ChatElement(
+                id: tasks[0].id,
+                type: .task,
+                content: .task(tasks[0])
+            )
+        }
+
+        // Multiple tasks - create group
+        let groupId = "taskgroup-\(agentType)-\(tasks.map { $0.id }.joined())"
+        return ChatElement(
+            id: groupId,
+            type: .taskGroup,
+            content: .taskGroup(TaskGroupContent(
+                agentType: agentType,
+                tasks: tasks,
+                isExpanded: false
+            ))
+        )
+    }
+
+    /// Extract task metadata from tool_result content
+    /// Returns (agentId, toolUses)
+    private func extractTaskMetadata(from content: String) -> (String?, Int?) {
+        var agentId: String?
+        var toolUses: Int?
+
+        // Extract agentId using regex: "agentId: xxxxx"
+        if let agentIdMatch = content.range(of: #"agentId:\s*([a-f0-9]+)"#, options: .regularExpression) {
+            let matchedText = String(content[agentIdMatch])
+            agentId = matchedText.components(separatedBy: ":").last?.trimmingCharacters(in: .whitespaces)
+        }
+
+        // Extract tool uses by counting "tool_use" occurrences or finding explicit count
+        // Look for patterns like "10 tool uses" or "17 tool uses"
+        if let toolUsesMatch = content.range(of: #"(\d+)\s+tool\s+use"#, options: .regularExpression) {
+            let matchedText = String(content[toolUsesMatch])
+            if let number = Int(matchedText.components(separatedBy: " ").first ?? "") {
+                toolUses = number
+            }
+        }
+
+        return (agentId, toolUses)
     }
 
     /// Force immediate log update (for user actions)

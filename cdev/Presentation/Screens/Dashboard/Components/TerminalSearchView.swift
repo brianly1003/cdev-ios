@@ -314,6 +314,10 @@ extension ChatElement {
             return c.message
         case .contextCompaction(let c):
             return c.summary
+        case .task(let c):
+            return "\(c.agentType) \(c.description)"
+        case .taskGroup(let c):
+            return "\(c.agentType) \(c.tasks.map { $0.description }.joined(separator: " "))"
         }
     }
 

@@ -629,6 +629,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             session?.invalidateAndCancel()
             session = nil
 
+            // CRITICAL: Clear watched session state on reconnect
+            // This ensures watch can be re-established after server restart
+            _watchedSessionId = nil
+            AppLogger.webSocket("Cleared watch state during reconnection cleanup")
+
             // Exponential backoff with max cap
             // Attempts: 1s, 2s, 4s, 8s, 16s, 30s, 30s, 30s, 30s, 30s = ~127s total
             let delay = min(

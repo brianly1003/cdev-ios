@@ -85,7 +85,24 @@ struct ElementView: View {
             AssistantTextElementView(content: content, searchText: searchText)
 
         case .toolCall(let content):
-            ToolCallElementView(content: content, searchText: searchText)
+            // Legacy support: Display old Task toolCall elements with new Task UI
+            if content.tool == "Task" {
+                let taskContent = TaskContent(
+                    id: content.toolId ?? "unknown",
+                    description: content.params["description"] ?? content.params["prompt"] ?? "Task",
+                    agentType: content.params["subagent_type"] ?? "agent",
+                    model: content.params["model"],
+                    status: .running,
+                    toolUses: nil,
+                    tokens: nil,
+                    agentId: nil,
+                    inputTokens: nil,
+                    outputTokens: nil
+                )
+                TaskElementView(content: taskContent, searchText: searchText)
+            } else {
+                ToolCallElementView(content: content, searchText: searchText)
+            }
 
         case .toolResult(let content):
             ToolResultElementView(content: content, searchText: searchText)
@@ -104,6 +121,12 @@ struct ElementView: View {
 
         case .contextCompaction(let content):
             ContextCompactionElementView(content: content)
+
+        case .task(let content):
+            TaskElementView(content: content, searchText: searchText)
+
+        case .taskGroup(let content):
+            TaskGroupElementView(content: content, searchText: searchText)
         }
     }
 
@@ -1746,5 +1769,350 @@ struct ElementsListView: View {
                 scrollProxy?.scrollTo("bottom", anchor: .bottom)
             }
         }
+    }
+}
+// MARK: - Task Group View
+
+/// Task group display - collapsible group of related tasks
+/// Matches Claude Code CLI format: "3 Explore agents finished (ctrl+o to expand)"
+struct TaskGroupElementView: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var isExpanded: Bool
+    let content: TaskGroupContent
+    var searchText: String = ""
+
+    private var layout: ResponsiveLayout {
+        ResponsiveLayout.current(for: sizeClass)
+    }
+
+    init(content: TaskGroupContent, searchText: String = "") {
+        self.content = content
+        self.searchText = searchText
+        self._isExpanded = State(initialValue: content.isExpanded)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header with count and status
+            headerView
+
+            // Expanded task list
+            if isExpanded {
+                ForEach(content.tasks) { task in
+                    TaskRowView(task: task, searchText: searchText)
+                        .padding(.leading, 16)  // Tree indentation
+                }
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+    }
+
+    private var headerView: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) {
+                isExpanded.toggle()
+            }
+            Haptics.light()
+        } label: {
+            HStack(spacing: 6) {
+                // Expansion chevron
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: layout.iconSmall, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .frame(width: 12)
+
+                // Count and status
+                HStack(spacing: 4) {
+                    // Status dot
+                    Circle()
+                        .fill(headerColor)
+                        .frame(width: 6, height: 6)
+
+                    // Count and type
+                    Text("\(content.count) \(content.agentType) agent\(content.count == 1 ? "" : "s") \(statusText)")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textPrimary)
+
+                    if !isExpanded {
+                        Text("(tap to expand)")
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textQuaternary)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var statusText: String {
+        if content.anyFailed {
+            return "failed"
+        } else if content.allCompleted {
+            return "finished"
+        } else {
+            return "running"
+        }
+    }
+
+    private var headerColor: Color {
+        if content.anyFailed {
+            return ColorSystem.error
+        } else if content.allCompleted {
+            return ColorSystem.success
+        } else {
+            return ColorSystem.primary
+        }
+    }
+}
+
+// MARK: - Task Row View
+
+/// Individual task row in task group
+/// Shows: description · tool uses · tokens, with status indicator
+struct TaskRowView: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    let task: TaskContent
+    var searchText: String = ""
+
+    private var layout: ResponsiveLayout {
+        ResponsiveLayout.current(for: sizeClass)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Main task line: description and metadata
+            HStack(spacing: 4) {
+                // Tree connector
+                Text("├─")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+
+                // Status indicator
+                statusIndicator
+
+                // Description
+                if searchText.isEmpty {
+                    Text(task.description)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HighlightedText(task.description, highlighting: searchText)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                }
+
+                // Metadata
+                metadataView
+            }
+
+            // Status line: "Done" or "Running"
+            if task.status != .running {
+                HStack(spacing: 4) {
+                    Text("│  └")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+
+                    Text(statusText)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(statusColor)
+                }
+                .padding(.leading, 8)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        switch task.status {
+        case .running:
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.7)
+                .frame(width: 12, height: 12)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(ColorSystem.success)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(ColorSystem.error)
+        }
+    }
+
+    @ViewBuilder
+    private var metadataView: some View {
+        HStack(spacing: 4) {
+            // Tool uses
+            if let toolUses = task.toolUses {
+                Group {
+                    Text("·")
+                    Text("\(toolUses) tool use\(toolUses == 1 ? "" : "s")")
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            // Tokens
+            if let outputTokens = task.outputTokens {
+                Group {
+                    Text("·")
+                    Text(formatTokens(outputTokens))
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+            }
+        }
+    }
+
+    private var statusText: String {
+        switch task.status {
+        case .running: return "Running"
+        case .completed: return "Done"
+        case .failed: return "Failed"
+        }
+    }
+
+    private var statusColor: Color {
+        switch task.status {
+        case .running: return ColorSystem.primary
+        case .completed: return ColorSystem.success
+        case .failed: return ColorSystem.error
+        }
+    }
+
+    private func formatTokens(_ tokens: Int) -> String {
+        if tokens >= 1000 {
+            return String(format: "%.1fk tokens", Double(tokens) / 1000)
+        }
+        return "\(tokens) tokens"
+    }
+}
+
+// MARK: - Individual Task Element View
+
+/// Standalone task element (not in a group)
+/// Displays same format as task rows but without grouping
+struct TaskElementView: View {
+    let content: TaskContent
+    var searchText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                // Status indicator
+                statusIndicator
+
+                // Task type badge
+                Text(content.agentType.uppercased())
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundStyle(ColorSystem.primary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(ColorSystem.primary.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                // Description
+                if searchText.isEmpty {
+                    Text(content.description)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HighlightedText(content.description, highlighting: searchText)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                }
+
+                Spacer()
+
+                // Metadata
+                metadataView
+            }
+
+            // Status text
+            if content.status != .running {
+                HStack(spacing: 4) {
+                    Text("└")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+
+                    Text(statusText)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(statusColor)
+                }
+                .padding(.leading, 20)
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        switch content.status {
+        case .running:
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.8)
+                .frame(width: 14, height: 14)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(ColorSystem.success)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(ColorSystem.error)
+        }
+    }
+
+    @ViewBuilder
+    private var metadataView: some View {
+        HStack(spacing: 4) {
+            if let toolUses = content.toolUses {
+                Group {
+                    Text("·")
+                    Text("\(toolUses) tool use\(toolUses == 1 ? "" : "s")")
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            if let tokens = content.outputTokens {
+                Group {
+                    Text("·")
+                    Text(formatTokens(tokens))
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
+            }
+        }
+    }
+
+    private var statusText: String {
+        switch content.status {
+        case .running: return "Running"
+        case .completed: return "Done"
+        case .failed: return "Failed"
+        }
+    }
+
+    private var statusColor: Color {
+        switch content.status {
+        case .running: return ColorSystem.primary
+        case .completed: return ColorSystem.success
+        case .failed: return ColorSystem.error
+        }
+    }
+
+    private func formatTokens(_ tokens: Int) -> String {
+        if tokens >= 1000 {
+            return String(format: "%.1fk tokens", Double(tokens) / 1000)
+        }
+        return "\(tokens) tokens"
     }
 }
