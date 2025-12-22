@@ -123,9 +123,9 @@ struct PairingView: View {
                 Spacer(minLength: Spacing.xl)
             }
             .contentShape(Rectangle())
-            .onTapGesture {
-                dismissKeyboard()
-            }
+            .simultaneousGesture(
+                TapGesture().onEnded { dismissKeyboard() }
+            )
         }
         .scrollDismissesKeyboard(.interactively)
     }
@@ -155,9 +155,9 @@ struct PairingView: View {
             .frame(maxWidth: .infinity)
             .background(ColorSystem.terminalBg)
             .contentShape(Rectangle())
-            .onTapGesture {
-                dismissKeyboard()
-            }
+            .simultaneousGesture(
+                TapGesture().onEnded { dismissKeyboard() }
+            )
 
             // Divider
             Rectangle()
@@ -197,9 +197,9 @@ struct PairingView: View {
             .frame(maxWidth: .infinity)
             .background(ColorSystem.terminalBgElevated)
             .contentShape(Rectangle())
-            .onTapGesture {
-                dismissKeyboard()
-            }
+            .simultaneousGesture(
+                TapGesture().onEnded { dismissKeyboard() }
+            )
         }
     }
 }

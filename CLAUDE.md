@@ -198,6 +198,57 @@ See `docs/RESPONSIVE-LAYOUT.md` for full documentation and examples.
 - iPad: Side-by-side layouts, keyboard shortcut hints (⌘K)
 - Both: Same components, different spacing/sizing via ResponsiveLayout
 
+### Gesture Handling (Multi-Device)
+
+**CRITICAL: Never use `.onTapGesture` on containers with interactive children**
+
+SwiftUI's `.onTapGesture` blocks all taps from reaching child buttons. This causes inconsistent behavior between iPhone and iPad due to different touch handling and layout sizes.
+
+```swift
+// ❌ WRONG - Blocks button taps on containers
+VStack {
+    Text("Header")
+    Button("Action") { doSomething() }  // May not receive taps!
+}
+.onTapGesture {
+    dismissKeyboard()
+}
+
+// ✅ CORRECT - Use simultaneousGesture for keyboard dismissal
+VStack {
+    Text("Header")
+    Button("Action") { doSomething() }  // Works correctly
+}
+.simultaneousGesture(
+    TapGesture().onEnded { dismissKeyboard() }
+)
+
+// ✅ CORRECT - Use .onTapGesture only on leaf views without interactive children
+Text("Tap me")
+    .onTapGesture { selectItem() }
+
+// ✅ CORRECT - Use Button instead of onTapGesture for interactive rows
+Button {
+    selectItem()
+} label: {
+    FileRowView(entry: entry)
+}
+.buttonStyle(.plain)
+```
+
+**When to use each approach:**
+
+| Scenario | Approach |
+|----------|----------|
+| Keyboard dismissal on container | `.simultaneousGesture(TapGesture())` |
+| Making a display-only view tappable | `.onTapGesture` |
+| Row selection in lists | `Button` with `.buttonStyle(.plain)` |
+| Backdrop dismiss (modal overlay) | `.onTapGesture` (no children) |
+| Expand/collapse with buttons inside | `.simultaneousGesture(TapGesture())` |
+
+**The `.dismissKeyboardOnTap()` modifier:**
+Uses `.simultaneousGesture` internally - safe to use on any view.
+
 ### List Performance (100+ Items)
 
 ```swift

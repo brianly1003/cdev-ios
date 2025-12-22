@@ -89,12 +89,14 @@ struct ConnectionBanner: View {
                 .padding(.vertical, Spacing.xs)
                 .background(bannerBackground)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(Animations.stateChange) {
-                        isExpanded.toggle()
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        withAnimation(Animations.stateChange) {
+                            isExpanded.toggle()
+                        }
+                        Haptics.selection()
                     }
-                    Haptics.selection()
-                }
+                )
 
                 // Expanded details
                 if isExpanded {
