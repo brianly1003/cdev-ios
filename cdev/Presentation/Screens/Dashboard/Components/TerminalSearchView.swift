@@ -306,6 +306,8 @@ extension ChatElement {
             return "\(c.toolName) \(c.summary) \(c.fullContent)"
         case .diff(let c):
             return c.filePath
+        case .editDiff(let c):
+            return "\(c.filePath) \(c.lines.map { $0.content }.joined(separator: " "))"
         case .thinking(let c):
             return c.text
         case .interrupted(let c):

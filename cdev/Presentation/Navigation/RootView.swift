@@ -9,14 +9,14 @@ struct RootView: View {
         Group {
             // If has saved workspaces, always show Dashboard (connection status shown inline)
             // This allows users to continue viewing Terminal, Changes, Explorer while reconnecting
-            if appState.hasSavedWorkspaces {
+            if appState.hasWorkspaces {
                 DashboardView(viewModel: appState.makeDashboardViewModel())
             } else {
                 // No workspaces - show Pairing for first-time setup
                 PairingView(viewModel: appState.makePairingViewModel())
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: appState.connectionState.isConnected)
+        .animation(.easeInOut(duration: 0.3), value: appState.hasWorkspaces)
     }
 }
 

@@ -10,6 +10,7 @@ enum ElementType: String, Codable {
     case toolCall = "tool_call"
     case toolResult = "tool_result"
     case diff = "diff"
+    case editDiff = "edit_diff"  // Edit tool with old_string vs new_string diff
     case thinking = "thinking"
     case interrupted = "interrupted"
     case contextCompaction = "context_compaction"  // Claude Code context window compacted
@@ -80,6 +81,7 @@ enum ElementContent: Codable, Equatable {
     case toolCall(ToolCallContent)
     case toolResult(ToolResultContent)
     case diff(DiffContent)
+    case editDiff(EditDiffContent)
     case thinking(ThinkingContent)
     case interrupted(InterruptedContent)
     case contextCompaction(ContextCompactionContent)
@@ -98,6 +100,8 @@ enum ElementContent: Codable, Equatable {
             return .toolResult(try ToolResultContent(from: nestedDecoder))
         case .diff:
             return .diff(try DiffContent(from: nestedDecoder))
+        case .editDiff:
+            return .editDiff(try EditDiffContent(from: nestedDecoder))
         case .thinking:
             return .thinking(try ThinkingContent(from: nestedDecoder))
         case .interrupted:
@@ -115,6 +119,7 @@ enum ElementContent: Codable, Equatable {
         case .toolCall(let content): try container.encode(content)
         case .toolResult(let content): try container.encode(content)
         case .diff(let content): try container.encode(content)
+        case .editDiff(let content): try container.encode(content)
         case .thinking(let content): try container.encode(content)
         case .interrupted(let content): try container.encode(content)
         case .contextCompaction(let content): try container.encode(content)
@@ -267,6 +272,201 @@ struct ElementDiffLine: Codable, Equatable, Identifiable {
     }
 }
 
+/// Edit tool diff content - shows comparison between old_string and new_string
+/// Displays like Claude Code CLI with Update(file) header and line-by-line diff
+struct EditDiffContent: Codable, Equatable {
+    let toolCallId: String
+    let filePath: String
+    let addedLines: Int
+    let removedLines: Int
+    let lines: [EditDiffLine]
+    var status: ToolStatus
+
+    enum CodingKeys: String, CodingKey {
+        case toolCallId = "tool_call_id"
+        case filePath = "file_path"
+        case addedLines = "added_lines"
+        case removedLines = "removed_lines"
+        case lines
+        case status
+    }
+
+    init(
+        toolCallId: String,
+        filePath: String,
+        oldString: String,
+        newString: String,
+        status: ToolStatus = .completed
+    ) {
+        self.toolCallId = toolCallId
+        self.filePath = filePath
+        self.status = status
+
+        // Compute diff between old and new strings
+        let (diffLines, added, removed) = Self.computeDiff(oldString: oldString, newString: newString)
+        self.lines = diffLines
+        self.addedLines = added
+        self.removedLines = removed
+    }
+
+    /// Compute line-by-line diff between old and new strings
+    /// Uses a simple LCS-based diff algorithm
+    private static func computeDiff(oldString: String, newString: String) -> (lines: [EditDiffLine], added: Int, removed: Int) {
+        let oldLines = oldString.components(separatedBy: "\n")
+        let newLines = newString.components(separatedBy: "\n")
+
+        var result: [EditDiffLine] = []
+        var added = 0
+        var removed = 0
+
+        // Simple diff using longest common subsequence approach
+        let lcs = longestCommonSubsequence(oldLines, newLines)
+
+        var oldIdx = 0
+        var newIdx = 0
+        var oldLineNum = 1
+        var newLineNum = 1
+
+        for commonLine in lcs {
+            // Output removed lines (in old but not at current position in new)
+            while oldIdx < oldLines.count && oldLines[oldIdx] != commonLine {
+                result.append(EditDiffLine(
+                    type: .removed,
+                    oldLine: oldLineNum,
+                    newLine: nil,
+                    content: oldLines[oldIdx]
+                ))
+                removed += 1
+                oldIdx += 1
+                oldLineNum += 1
+            }
+
+            // Output added lines (in new but not at current position in old)
+            while newIdx < newLines.count && newLines[newIdx] != commonLine {
+                result.append(EditDiffLine(
+                    type: .added,
+                    oldLine: nil,
+                    newLine: newLineNum,
+                    content: newLines[newIdx]
+                ))
+                added += 1
+                newIdx += 1
+                newLineNum += 1
+            }
+
+            // Output context line (common)
+            result.append(EditDiffLine(
+                type: .context,
+                oldLine: oldLineNum,
+                newLine: newLineNum,
+                content: commonLine
+            ))
+            oldIdx += 1
+            newIdx += 1
+            oldLineNum += 1
+            newLineNum += 1
+        }
+
+        // Output remaining removed lines
+        while oldIdx < oldLines.count {
+            result.append(EditDiffLine(
+                type: .removed,
+                oldLine: oldLineNum,
+                newLine: nil,
+                content: oldLines[oldIdx]
+            ))
+            removed += 1
+            oldIdx += 1
+            oldLineNum += 1
+        }
+
+        // Output remaining added lines
+        while newIdx < newLines.count {
+            result.append(EditDiffLine(
+                type: .added,
+                oldLine: nil,
+                newLine: newLineNum,
+                content: newLines[newIdx]
+            ))
+            added += 1
+            newIdx += 1
+            newLineNum += 1
+        }
+
+        return (result, added, removed)
+    }
+
+    /// Find longest common subsequence of two string arrays
+    private static func longestCommonSubsequence(_ a: [String], _ b: [String]) -> [String] {
+        let m = a.count
+        let n = b.count
+
+        // DP table
+        var dp = [[Int]](repeating: [Int](repeating: 0, count: n + 1), count: m + 1)
+
+        for i in 1...m {
+            for j in 1...n {
+                if a[i - 1] == b[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                } else {
+                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+                }
+            }
+        }
+
+        // Backtrack to find LCS
+        var result: [String] = []
+        var i = m, j = n
+        while i > 0 && j > 0 {
+            if a[i - 1] == b[j - 1] {
+                result.append(a[i - 1])
+                i -= 1
+                j -= 1
+            } else if dp[i - 1][j] > dp[i][j - 1] {
+                i -= 1
+            } else {
+                j -= 1
+            }
+        }
+
+        return result.reversed()
+    }
+}
+
+/// Individual line in an Edit diff
+struct EditDiffLine: Codable, Equatable, Identifiable {
+    /// Unique identifier - uses UUID for ellipsis lines, content-based for regular lines
+    var id: String {
+        if let uniqueId = uniqueId {
+            return uniqueId
+        }
+        return "\(type.rawValue)-\(oldLine ?? 0)-\(newLine ?? 0)-\(content.hashValue)"
+    }
+
+    let type: ElementDiffLineType
+    let oldLine: Int?
+    let newLine: Int?
+    let content: String
+    /// Optional unique ID for ellipsis/gap lines to avoid duplicate IDs
+    var uniqueId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case oldLine = "old_line"
+        case newLine = "new_line"
+        case content
+        case uniqueId = "unique_id"
+    }
+
+    init(type: ElementDiffLineType, oldLine: Int?, newLine: Int?, content: String, uniqueId: String? = nil) {
+        self.type = type
+        self.oldLine = oldLine
+        self.newLine = newLine
+        self.content = content
+        self.uniqueId = uniqueId
+    }
+}
+
 struct ThinkingContent: Codable, Equatable {
     let text: String
     var collapsed: Bool
@@ -415,19 +615,62 @@ extension ChatElement {
             return elements
         }
 
-        // User message - simple text input
+        // Skip internal Claude Code caveat messages (not user-facing)
+        let textContent = effectiveContent.textContent
+        if textContent.hasPrefix("Caveat: The messages below were generated by the user") {
+            return elements
+        }
+
+        // User message - may be simple text or contain tool_result blocks
         if effectiveRole == "user" {
-            let text = effectiveContent.textContent
-            if !text.isEmpty {
-                // Generate deterministic ID based on content when uuid is nil
-                // This enables deduplication of user messages from WebSocket events
-                let messageId = payload.uuid ?? generateContentBasedId(role: "user", text: text, sessionId: payload.sessionId)
-                elements.append(ChatElement(
-                    id: messageId,
-                    type: .userInput,
-                    timestamp: timestamp,
-                    content: .userInput(UserInputContent(text: text))
-                ))
+            let baseId = payload.uuid ?? generateContentBasedId(role: "user", text: textContent, sessionId: payload.sessionId)
+
+            switch effectiveContent {
+            case .text(let text):
+                // Simple text input
+                if !text.isEmpty {
+                    elements.append(ChatElement(
+                        id: baseId,
+                        type: .userInput,
+                        timestamp: timestamp,
+                        content: .userInput(UserInputContent(text: text))
+                    ))
+                }
+
+            case .blocks(let blocks):
+                for (index, block) in blocks.enumerated() {
+                    let blockId = block.effectiveId.isEmpty ? "\(baseId)-\(index)" : block.effectiveId
+
+                    switch block.type {
+                    case "tool_result":
+                        // Tool result in user message (e.g., Bash output)
+                        if let element = createToolResultElement(from: block, blockId: blockId, timestamp: timestamp) {
+                            elements.append(element)
+                        }
+
+                    case "text":
+                        // Text block in user message
+                        if let text = block.text, !text.isEmpty {
+                            elements.append(ChatElement(
+                                id: "\(baseId)-text-\(index)",
+                                type: .userInput,
+                                timestamp: timestamp,
+                                content: .userInput(UserInputContent(text: text))
+                            ))
+                        }
+
+                    default:
+                        // Unknown block type - treat as text if has content
+                        if let text = block.text ?? block.content, !text.isEmpty {
+                            elements.append(ChatElement(
+                                id: "\(baseId)-\(index)",
+                                type: .userInput,
+                                timestamp: timestamp,
+                                content: .userInput(UserInputContent(text: text))
+                            ))
+                        }
+                    }
+                }
             }
             return elements
         }
@@ -486,43 +729,46 @@ extension ChatElement {
                         }
                     }
 
-                    // Create display string
-                    let display = formatToolDisplay(tool: toolName, params: params)
-
-                    elements.append(ChatElement(
-                        id: blockId,
-                        type: .toolCall,
-                        timestamp: timestamp,
-                        content: .toolCall(ToolCallContent(
-                            tool: toolName,
-                            toolId: block.effectiveId,
-                            display: display,
-                            params: params,
-                            status: .completed
+                    // Check if this is an Edit tool - display as diff view
+                    if toolName == "Edit",
+                       let filePath = params["file_path"],
+                       let oldString = params["old_string"],
+                       let newString = params["new_string"] {
+                        // Create EditDiff element for visual diff display
+                        elements.append(ChatElement(
+                            id: blockId,
+                            type: .editDiff,
+                            timestamp: timestamp,
+                            content: .editDiff(EditDiffContent(
+                                toolCallId: block.effectiveId,
+                                filePath: filePath,
+                                oldString: oldString,
+                                newString: newString,
+                                status: .completed
+                            ))
                         ))
-                    ))
+                    } else {
+                        // Create display string for other tools
+                        let display = formatToolDisplay(tool: toolName, params: params)
+
+                        elements.append(ChatElement(
+                            id: blockId,
+                            type: .toolCall,
+                            timestamp: timestamp,
+                            content: .toolCall(ToolCallContent(
+                                tool: toolName,
+                                toolId: block.effectiveId,
+                                display: display,
+                                params: params,
+                                status: .completed
+                            ))
+                        ))
+                    }
 
                 case "tool_result":
-                    let resultContent = block.content ?? block.text ?? ""
-                    let isError = block.isError ?? false
-                    let lines = resultContent.components(separatedBy: "\n")
-                    let summary = lines.prefix(3).joined(separator: "\n")
-
-                    // Use tool_use_id + "-result" suffix to avoid collision with tool_use element
-                    let toolResultId = (block.toolUseId ?? blockId) + "-result"
-
-                    elements.append(ChatElement(
-                        id: toolResultId,
-                        type: .toolResult,
-                        timestamp: timestamp,
-                        content: .toolResult(ToolResultContent(
-                            toolCallId: block.toolUseId ?? "",
-                            toolName: block.effectiveName ?? "tool",
-                            isError: isError,
-                            summary: summary,
-                            fullContent: resultContent
-                        ))
-                    ))
+                    if let element = createToolResultElement(from: block, blockId: blockId, timestamp: timestamp) {
+                        elements.append(element)
+                    }
 
                 default:
                     break
@@ -590,6 +836,31 @@ extension ChatElement {
 
 // MARK: - Helper Functions
 
+/// Create a ChatElement for tool_result from a content block
+/// Used by both user message (Bash output) and assistant message parsing
+private func createToolResultElement(from block: ClaudeMessagePayload.ContentBlock, blockId: String, timestamp: Date) -> ChatElement? {
+    let resultContent = block.content ?? block.text ?? ""
+    let isError = block.isError ?? false
+    let lines = resultContent.components(separatedBy: "\n")
+    let summary = lines.prefix(3).joined(separator: "\n")
+
+    // Use tool_use_id + "-result" suffix to avoid collision with tool_use element
+    let toolResultId = (block.toolUseId ?? blockId) + "-result"
+
+    return ChatElement(
+        id: toolResultId,
+        type: .toolResult,
+        timestamp: timestamp,
+        content: .toolResult(ToolResultContent(
+            toolCallId: block.toolUseId ?? "",
+            toolName: block.effectiveName ?? "",
+            isError: isError,
+            summary: summary,
+            fullContent: resultContent
+        ))
+    )
+}
+
 private func formatToolDisplay(tool: String, params: [String: String]) -> String {
     switch tool {
     case "Bash":
@@ -621,31 +892,161 @@ private func formatToolDisplay(tool: String, params: [String: String]) -> String
     return "\(tool)(\(paramStr.prefix(50)))"
 }
 
-private func extractToolCall(from text: String) -> (tool: String, params: [String: String])? {
-    // Pattern: ● ToolName(params) or ToolName(params)
-    let pattern = #"●?\s*(\w+)\(([^)]*)\)"#
-    guard let regex = try? NSRegularExpression(pattern: pattern),
-          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else {
-        return nil
+/// Create ChatElements from session message (history API)
+/// This properly handles Edit tools to show diff view instead of raw tool_result
+/// Returns (elements, editToolIds) - editToolIds is used to filter corresponding tool_results
+extension ChatElement {
+    static func from(sessionMessage: SessionMessagesResponse.SessionMessage) -> (elements: [ChatElement], editToolIds: Set<String>) {
+        var elements: [ChatElement] = []
+        var editToolIds: Set<String> = []
+
+        // Parse timestamp
+        let timestamp: Date
+        if let timestampStr = sessionMessage.timestamp {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            timestamp = formatter.date(from: timestampStr) ?? Date()
+        } else {
+            timestamp = Date()
+        }
+
+        let baseId = sessionMessage.uuid ?? sessionMessage.id
+
+        guard let content = sessionMessage.message.content else {
+            return (elements, editToolIds)
+        }
+
+        switch content {
+        case .string(let text):
+            if !text.isEmpty {
+                if sessionMessage.type == "user" {
+                    elements.append(ChatElement(
+                        id: "\(baseId)-text-0",
+                        type: .userInput,
+                        timestamp: timestamp,
+                        content: .userInput(UserInputContent(text: text))
+                    ))
+                } else {
+                    elements.append(ChatElement(
+                        id: "\(baseId)-text-0",
+                        type: .assistantText,
+                        timestamp: timestamp,
+                        content: .assistantText(AssistantTextContent(text: text, model: sessionMessage.message.model))
+                    ))
+                }
+            }
+
+        case .blocks(let blocks):
+            for (index, block) in blocks.enumerated() {
+                let blockId = block.id ?? block.toolUseId ?? "\(baseId)-\(index)"
+
+                switch block.type {
+                case "text":
+                    if let text = block.text, !text.isEmpty {
+                        if sessionMessage.type == "user" {
+                            elements.append(ChatElement(
+                                id: "\(baseId)-text-\(index)",
+                                type: .userInput,
+                                timestamp: timestamp,
+                                content: .userInput(UserInputContent(text: text))
+                            ))
+                        } else {
+                            elements.append(ChatElement(
+                                id: "\(baseId)-text-\(index)",
+                                type: .assistantText,
+                                timestamp: timestamp,
+                                content: .assistantText(AssistantTextContent(text: text, model: sessionMessage.message.model))
+                            ))
+                        }
+                    }
+
+                case "thinking":
+                    if let text = block.text, !text.isEmpty {
+                        elements.append(ChatElement(
+                            id: "\(baseId)-thinking-\(index)",
+                            type: .thinking,
+                            timestamp: timestamp,
+                            content: .thinking(ThinkingContent(text: text))
+                        ))
+                    }
+
+                case "tool_use":
+                    let toolName = block.name ?? "tool"
+
+                    // Extract params from input dictionary
+                    var params: [String: String] = [:]
+                    if let input = block.input {
+                        for (key, value) in input {
+                            params[key] = value.stringValue
+                        }
+                    }
+
+                    // Check if this is an Edit tool - display as diff view
+                    if toolName == "Edit",
+                       let filePath = params["file_path"],
+                       let oldString = params["old_string"],
+                       let newString = params["new_string"] {
+                        // Track this Edit tool ID to filter its tool_result later
+                        editToolIds.insert(blockId)
+
+                        elements.append(ChatElement(
+                            id: blockId,
+                            type: .editDiff,
+                            timestamp: timestamp,
+                            content: .editDiff(EditDiffContent(
+                                toolCallId: blockId,
+                                filePath: filePath,
+                                oldString: oldString,
+                                newString: newString,
+                                status: .completed
+                            ))
+                        ))
+                    } else {
+                        // Regular tool call
+                        let display = formatToolDisplay(tool: toolName, params: params)
+                        elements.append(ChatElement(
+                            id: blockId,
+                            type: .toolCall,
+                            timestamp: timestamp,
+                            content: .toolCall(ToolCallContent(
+                                tool: toolName,
+                                toolId: blockId,
+                                display: display,
+                                params: params,
+                                status: .completed
+                            ))
+                        ))
+                    }
+
+                case "tool_result":
+                    // Will be filtered at the call site if it's an Edit tool_result
+                    let resultContent = block.content ?? block.text ?? ""
+                    let isError = block.isError ?? false
+                    let lines = resultContent.components(separatedBy: "\n")
+                    let summary = lines.prefix(3).joined(separator: "\n")
+                    let toolResultId = (block.toolUseId ?? blockId) + "-result"
+
+                    elements.append(ChatElement(
+                        id: toolResultId,
+                        type: .toolResult,
+                        timestamp: timestamp,
+                        content: .toolResult(ToolResultContent(
+                            toolCallId: block.toolUseId ?? "",
+                            toolName: block.name ?? "",
+                            isError: isError,
+                            summary: summary,
+                            fullContent: resultContent
+                        ))
+                    ))
+
+                default:
+                    break
+                }
+            }
+        }
+
+        return (elements, editToolIds)
     }
-
-    let toolRange = Range(match.range(at: 1), in: text)!
-    let tool = String(text[toolRange])
-
-    let paramsRange = Range(match.range(at: 2), in: text)!
-    let paramsStr = String(text[paramsRange])
-
-    // Simple param extraction
-    var params: [String: String] = [:]
-    if tool == "Bash" {
-        params["command"] = paramsStr
-    } else if tool == "Read" || tool == "Write" || tool == "Edit" {
-        params["file_path"] = paramsStr
-    } else {
-        params["args"] = paramsStr
-    }
-
-    return (tool, params)
 }
 
 /// Generate a deterministic ID based on message content

@@ -522,6 +522,9 @@ final class DashboardViewModel: ObservableObject {
             var newElements: [ChatElement] = []
             // Track new IDs locally (we prepend, so can't use addElementIfNew)
             var seenNewIds = Set<String>()
+            // Track Edit tool IDs to filter their tool_results
+            var editToolIds: Set<String> = []
+
             for message in response.messages.reversed() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
@@ -544,10 +547,19 @@ final class DashboardViewModel: ObservableObject {
                     continue
                 }
 
-                let chatMessage = ChatMessage.from(sessionMessage: message)
-                let elements = convertChatMessageToElements(chatMessage)
-                // Filter out duplicates using instance deduplication set
+                // Use new factory that properly handles Edit tools as diff views
+                let (elements, newEditToolIds) = ChatElement.from(sessionMessage: message)
+                editToolIds.formUnion(newEditToolIds)
+
+                // Filter out Edit tool_results and duplicates
                 for element in elements {
+                    // Skip Edit tool results (already shown as diff)
+                    if case .toolResult(let content) = element.content {
+                        if editToolIds.contains(content.toolCallId) {
+                            continue
+                        }
+                    }
+
                     if !seenElementIds.contains(element.id) && !seenNewIds.contains(element.id) {
                         seenNewIds.insert(element.id)
                         newElements.append(element)
@@ -605,6 +617,9 @@ final class DashboardViewModel: ObservableObject {
 
             AppLogger.log("[Dashboard] Loaded \(messagesResponse.count) of \(messagesResponse.total) messages, hasMore=\(messagesResponse.hasMore)")
 
+            // Track Edit tool IDs to filter their tool_results (shown as diff instead)
+            var editToolIds: Set<String> = []
+
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
             // Use instance seenElementIds (already cleared above)
             for message in messagesResponse.messages.reversed() {
@@ -625,11 +640,20 @@ final class DashboardViewModel: ObservableObject {
                     continue
                 }
 
-                // Also create ChatElements from session message (may have multiple blocks)
-                let chatMessage = ChatMessage.from(sessionMessage: message)
-                let elements = convertChatMessageToElements(chatMessage)
-                // Use deduplication method
-                addElementsIfNew(elements)
+                // Use new factory that properly handles Edit tools as diff views
+                let (elements, newEditToolIds) = ChatElement.from(sessionMessage: message)
+                editToolIds.formUnion(newEditToolIds)
+
+                // Filter out tool_results that correspond to Edit tools (already shown as diff)
+                let filteredElements = elements.filter { element in
+                    if case .toolResult(let content) = element.content {
+                        // Filter out Edit tool results
+                        return !editToolIds.contains(content.toolCallId)
+                    }
+                    return true
+                }
+
+                addElementsIfNew(filteredElements)
             }
             await forceLogUpdate()
 
@@ -992,6 +1016,8 @@ final class DashboardViewModel: ObservableObject {
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
             let chronologicalMessages = Array(messagesResponse.messages.reversed())
             var entriesAdded = 0
+            // Track Edit tool IDs to filter their tool_results
+            var editToolIds: Set<String> = []
             // Use instance seenElementIds (already cleared above for new session)
             for (index, message) in chronologicalMessages.enumerated() {
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
@@ -1012,16 +1038,24 @@ final class DashboardViewModel: ObservableObject {
                     continue
                 }
 
-                // Also create ChatElements from session message (may have multiple blocks)
-                let chatMessage = ChatMessage.from(sessionMessage: message)
-                let elements = convertChatMessageToElements(chatMessage)
+                // Use new factory that properly handles Edit tools as diff views
+                let (elements, newEditToolIds) = ChatElement.from(sessionMessage: message)
+                editToolIds.formUnion(newEditToolIds)
+
                 // Log first few messages for debugging duplicate issue
                 if index < 3 {
-                    AppLogger.log("[Dashboard] History msg[\(index)] - uuid: \(message.uuid ?? "nil"), computed id: \(message.id), chatMessage.id: \(chatMessage.id)")
+                    AppLogger.log("[Dashboard] History msg[\(index)] - uuid: \(message.uuid ?? "nil"), computed id: \(message.id)")
                     AppLogger.log("[Dashboard] History msg[\(index)] - element IDs: \(elements.map { $0.id })")
                 }
-                // Use deduplication method (handles Set management internally)
-                addElementsIfNew(elements)
+
+                // Filter out Edit tool_results (already shown as diff) and add remaining
+                let filteredElements = elements.filter { element in
+                    if case .toolResult(let content) = element.content {
+                        return !editToolIds.contains(content.toolCallId)
+                    }
+                    return true
+                }
+                addElementsIfNew(filteredElements)
 
                 // Yield every 10 messages to prevent UI starvation
                 if index > 0 && index % 10 == 0 {
@@ -1118,6 +1152,14 @@ final class DashboardViewModel: ObservableObject {
             // Convert to ChatElements for sophisticated UI
             if case .claudeMessage(let payload) = event.payload {
                 AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil")")
+
+                // Skip user message echoes from real-time events (already shown optimistically)
+                // User messages are only needed when loading session history, not from WebSocket
+                if payload.effectiveRole == "user" {
+                    AppLogger.log("[Dashboard] Skipping user message echo from WebSocket")
+                    return
+                }
+
                 let elements = ChatElement.from(payload: payload)
 
                 // Queue elements for debounced UI update (batches rapid events)
@@ -1188,7 +1230,7 @@ final class DashboardViewModel: ObservableObject {
                     isStreaming = false
                     streamingStartTime = nil
                     AppLogger.log("[Dashboard] Claude stopped - reset hasActiveConversation and streaming")
-                    await refreshGitStatus()
+                    // Note: Don't refresh git status here - file_changed events will handle it
                 }
             }
 
@@ -1287,11 +1329,10 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .gitStatusChanged:
-            // Refresh source control when git status changes
+            // Log git status changed event (for debugging)
+            // Note: Don't refresh here - file_changed events already trigger refresh
             if case .gitStatusChanged(let payload) = event.payload {
                 AppLogger.log("[Dashboard] Git status changed - branch: \(payload.branch ?? "?"), staged: \(payload.stagedCount ?? 0), unstaged: \(payload.unstagedCount ?? 0)")
-                // Trigger source control refresh
-                Task { await sourceControlViewModel.refresh() }
             }
 
         case .gitOperationCompleted:

@@ -143,6 +143,19 @@ enum ColorSystem {
         static let json = ColorSystem.accent
     }
 
+    // MARK: - Bash Command Colors (Claude Code CLI style)
+
+    enum Bash {
+        /// "!" prompt indicator - bright green like terminal prompt
+        static let prompt = Color(hex: "#00FF88")
+        /// Command text - bright white for visibility
+        static let command = Color(hex: "#E6EDF3")
+        /// Output text - slightly dimmed for distinction
+        static let output = Color(hex: "#A8B2BC")
+        /// Error output - red for stderr
+        static let error = ColorSystem.error
+    }
+
     // MARK: - Code Editor Colors (IDE-style theming)
 
     enum Editor {

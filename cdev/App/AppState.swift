@@ -7,6 +7,7 @@ final class AppState: ObservableObject {
     // MARK: - Published State
 
     @Published var connectionState: ConnectionState = .disconnected
+    @Published private(set) var hasWorkspaces: Bool = false
 
     // MARK: - Cached ViewModels (prevents recreation on state changes)
 
@@ -54,6 +55,7 @@ final class AppState: ObservableObject {
     private let diffCache: DiffCache
 
     private var stateTask: Task<Void, Never>?
+    private var workspaceCancellable: AnyCancellable?
 
     // MARK: - Init
 
@@ -82,12 +84,26 @@ final class AppState: ObservableObject {
         self.logCache = logCache
         self.diffCache = diffCache
 
+        // Initialize hasWorkspaces from UserDefaults (sync initial state)
+        if let data = UserDefaults.standard.data(forKey: "cdev.saved_workspaces"),
+           let workspaces = try? JSONDecoder().decode([Workspace].self, from: data) {
+            self.hasWorkspaces = !workspaces.isEmpty
+        }
+
+        // Observe WorkspaceStore changes to update hasWorkspaces
+        workspaceCancellable = WorkspaceStore.shared.$workspaces
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] workspaces in
+                self?.hasWorkspaces = !workspaces.isEmpty
+            }
+
         startListening()
         attemptAutoReconnect()
     }
 
     deinit {
         stateTask?.cancel()
+        workspaceCancellable?.cancel()
     }
 
     // MARK: - ViewModel Factories
@@ -189,12 +205,8 @@ final class AppState: ObservableObject {
     }
 
     /// Check if there are saved workspaces available
-    /// Note: Checks UserDefaults directly to avoid @MainActor singleton timing issues
+    /// Deprecated: Use `hasWorkspaces` property for reactive updates
     var hasSavedWorkspaces: Bool {
-        guard let data = UserDefaults.standard.data(forKey: "cdev.saved_workspaces"),
-              let workspaces = try? JSONDecoder().decode([Workspace].self, from: data) else {
-            return false
-        }
-        return !workspaces.isEmpty
+        hasWorkspaces
     }
 }
