@@ -5,6 +5,8 @@ import SwiftUI
 struct DashboardView: View {
     @StateObject var viewModel: DashboardViewModel
     @StateObject private var workspaceStore = WorkspaceStore.shared
+    @StateObject private var workspaceStateManager = WorkspaceStateManager.shared
+    @StateObject private var quickSwitcherViewModel: QuickSwitcherViewModel
     @State private var showSettings = false
     @State private var showDebugLogs = false
     @State private var showWorkspaceSwitcher = false
@@ -12,6 +14,11 @@ struct DashboardView: View {
     @State private var showReconnectedToast = false
     @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
+
+    init(viewModel: DashboardViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+        _quickSwitcherViewModel = StateObject(wrappedValue: QuickSwitcherViewModel(workspaceStore: WorkspaceStore.shared))
+    }
 
     /// Toolkit items - Easy to extend! Just add more .add() calls
     /// See PredefinedTool enum for available tools, or use .addCustom() for new ones
@@ -268,6 +275,24 @@ struct DashboardView: View {
                 .padding(.top, 60) // Below safe area
                 Spacer()
             }
+
+            // ⌘K Quick Switcher overlay
+            if quickSwitcherViewModel.isVisible {
+                QuickSwitcherView(
+                    viewModel: quickSwitcherViewModel,
+                    workspaceStore: workspaceStore,
+                    currentWorkspace: workspaceStore.activeWorkspace,
+                    workspaceStates: workspaceStateManager.workspaceStates,
+                    onSwitch: { workspace in
+                        Task { await viewModel.switchWorkspace(workspace) }
+                    },
+                    onDismiss: {
+                        quickSwitcherViewModel.hide()
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .zIndex(1000)  // Above everything else
+            }
         }
         .errorAlert($viewModel.error)
         .onAppear {
@@ -314,6 +339,61 @@ struct DashboardView: View {
                 return .handled
             }
             return .ignored
+        }
+        // Quick Switcher keyboard shortcuts (⌘K, ⌘1-9, arrows)
+        .quickSwitcherKeyboardShortcuts(
+            isVisible: quickSwitcherViewModel.isVisible,
+            onToggle: {
+                withAnimation(Animations.stateChange) {
+                    if quickSwitcherViewModel.isVisible {
+                        quickSwitcherViewModel.hide()
+                    } else {
+                        quickSwitcherViewModel.show()
+                    }
+                }
+                Haptics.selection()
+            },
+            onQuickSelect: { index in
+                if let workspace = quickSwitcherViewModel.selectByShortcut(index: index) {
+                    Task { await viewModel.switchWorkspace(workspace) }
+                    quickSwitcherViewModel.hide()
+                    Haptics.success()
+                }
+            },
+            onMoveUp: {
+                quickSwitcherViewModel.moveSelectionUp()
+            },
+            onMoveDown: {
+                quickSwitcherViewModel.moveSelectionDown()
+            },
+            onSelectCurrent: {
+                if let workspace = quickSwitcherViewModel.selectedWorkspace {
+                    Task { await viewModel.switchWorkspace(workspace) }
+                    quickSwitcherViewModel.hide()
+                    Haptics.selection()
+                }
+            },
+            onEscape: {
+                quickSwitcherViewModel.hide()
+                Haptics.light()
+            }
+        )
+        // Update workspace state manager when connection or Claude state changes
+        .onChange(of: viewModel.connectionState) { _, newState in
+            if let activeId = workspaceStore.activeWorkspaceId {
+                workspaceStateManager.updateConnection(
+                    workspaceId: activeId,
+                    isConnected: newState.isConnected
+                )
+            }
+        }
+        .onChange(of: viewModel.claudeState) { _, newState in
+            if let activeId = workspaceStore.activeWorkspaceId {
+                workspaceStateManager.updateClaudeState(
+                    workspaceId: activeId,
+                    claudeState: newState
+                )
+            }
         }
     }
 }
@@ -380,35 +460,15 @@ struct StatusBarView: View {
 
                 Spacer()
 
-                // Tappable repo badge - opens workspace switcher
-                Button {
-                    onWorkspaceTap?()
-                    Haptics.selection()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 9))
-
-                        if let repoName = repoName, !repoName.isEmpty {
-                            Text(repoName)
-                                .font(Typography.statusLabel)
-                                .lineLimit(1)
-                        } else {
-                            Text("No Workspace")
-                                .font(Typography.statusLabel)
-                        }
-
-                        // Chevron to indicate tappable
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 7, weight: .semibold))
+                // Enhanced workspace badge - shows workspace count + ⌘K hint
+                EnhancedWorkspaceBadge(
+                    repoName: repoName,
+                    isConnected: connectionState.isConnected,
+                    onTap: {
+                        onWorkspaceTap?()
+                        Haptics.selection()
                     }
-                    .foregroundStyle(connectionState.isConnected ? ColorSystem.textSecondary : ColorSystem.textTertiary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(ColorSystem.terminalBgHighlight)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
+                )
             }
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)
@@ -811,6 +871,83 @@ struct ActionBarView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardHeight = 0
         }
+    }
+}
+
+// MARK: - Enhanced Workspace Badge
+
+/// Enhanced workspace badge with workspace count and ⌘K hint
+/// Shows total workspaces and makes it obvious the badge is tappable
+private struct EnhancedWorkspaceBadge: View {
+    let repoName: String?
+    let isConnected: Bool
+    let onTap: () -> Void
+
+    @StateObject private var workspaceStore = WorkspaceStore.shared
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private var isCompact: Bool { sizeClass == .compact }
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                // Folder icon with subtle glow when connected
+                Image(systemName: "folder.fill")
+                    .font(.system(size: layout.iconMedium))
+                    .foregroundStyle(isConnected ? ColorSystem.primary : ColorSystem.textTertiary)
+                    .shadow(color: isConnected ? ColorSystem.primaryGlow : .clear, radius: 2)
+
+                // Workspace name
+                if let repoName = repoName, !repoName.isEmpty {
+                    Text(repoName)
+                        .font(Typography.statusLabel)
+                        .lineLimit(1)
+                } else {
+                    Text("No Workspace")
+                        .font(Typography.statusLabel)
+                }
+
+                // Workspace count badge (if more than 1 workspace)
+                if workspaceStore.workspaces.count > 1 {
+                    Text("\(workspaceStore.workspaces.count)")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(ColorSystem.primary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(ColorSystem.primary.opacity(0.15))
+                        .clipShape(Circle())
+                }
+
+                // Chevron + keyboard hint (iPad only)
+                if !isCompact {
+                    HStack(spacing: 2) {
+                        Text("⌘K")
+                            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(ColorSystem.textQuaternary)
+                    }
+                } else {
+                    // Chevron only on iPhone
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7, weight: .semibold))
+                }
+            }
+            .foregroundStyle(isConnected ? ColorSystem.textSecondary : ColorSystem.textTertiary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(ColorSystem.terminalBgHighlight)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(
+                                isConnected ? ColorSystem.primary.opacity(0.2) : .clear,
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

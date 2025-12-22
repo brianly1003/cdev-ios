@@ -18,7 +18,6 @@
 		14FDAC0F15F7E11E0858E76A /* DependencyContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EBB1C11BF8210D09994AB8 /* DependencyContainer.swift */; };
 		1A843DBC72CE7604BA20A31F /* FileEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7401EB48F061AD156DE555C /* FileEntry.swift */; };
 		23ADBE232F9A0F50A2DF3364 /* BreadcrumbBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D94F4DD3731FE1A70AD7497 /* BreadcrumbBar.swift */; };
-		288F3112419DC015659DD54E /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2137B4CC5806C42B92AF589 /* WorkspaceStore.swift */; };
 		28BCBAA84F2FE538CDF2A133 /* CardModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCECB98BA86D946C305ED8A0 /* CardModifier.swift */; };
 		2C7B59DB4E9D102A56A9FC74 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5B08DD1153C235C6628A231 /* SyntaxHighlighter.swift */; };
 		3021967992C5331029CA2AB8 /* cdevApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BED9190DAD30ECF6A37DD5 /* cdevApp.swift */; };
@@ -35,11 +34,6 @@
 		4EA6B33C8F0441852A7146FC /* SearchResultRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77725AD3E154E90C54FF406C /* SearchResultRow.swift */; };
 		4F35262FDFB5FF812D09AE1F /* SessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624A07A99501D68A8E6C516B /* SessionPickerView.swift */; };
 		534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A9FE817775280D126DB8AA /* FloatingToolkit.swift */; };
-		RAINBOW01A2B3C4D5E6F789AB /* RainbowTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */; };
-		JSONRPC05BLD00000000001 /* JSONRPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */; };
-		JSONRPC06BLD00000000002 /* JSONRPCError.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC02ERR00000000002 /* JSONRPCError.swift */; };
-		JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC03CLI00000000003 /* JSONRPCClient.swift */; };
-		JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */; };
 		5F7CD8A29D740BE40F4870E1 /* WebSocketService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F133E2E074F2129012086C /* WebSocketService.swift */; };
 		69B8681B0ADAA035D9D68658 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A8C4D8842CD324E7E0199BF /* DashboardView.swift */; };
 		6D21B1BE994D76A4F6E49E1C /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6BC02BC16D7CC3133DF7BDD /* AppLogger.swift */; };
@@ -71,6 +65,11 @@
 		C05E58CF6376471ECAFE0D46 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C134CDCDC43F5EBEBAD4F46F /* KeychainService.swift */; };
 		C06562567AA8EE70C642BFFF /* ElementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37D9ADF2B12D7F0FA702BCC /* ElementView.swift */; };
 		C2D47E48091AE4A106D45B63 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97A8E5CF0E73CACC6D09B62C /* Colors.swift */; };
+		C364EFFA2EF9DD0C00954454 /* QuickSwitcherViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C364EFF72EF9DD0C00954454 /* QuickSwitcherViewModel.swift */; };
+		C364EFFB2EF9DD0C00954454 /* QuickSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C364EFF62EF9DD0C00954454 /* QuickSwitcherView.swift */; };
+		C364EFFC2EF9DD0C00954454 /* KeyboardShortcutHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C364EFF52EF9DD0C00954454 /* KeyboardShortcutHandler.swift */; };
+		C364F0042EF9DECD00954454 /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C364F0022EF9DECD00954454 /* WorkspaceStore.swift */; };
+		C364F0052EF9DECD00954454 /* WorkspaceStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C364F0012EF9DECD00954454 /* WorkspaceStateManager.swift */; };
 		C3E366081FEC92B0372561C1 /* FileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0556DECE53C5878722626932 /* FileRepository.swift */; };
 		C5EA0F5773CCAA9640072D81 /* VirtualizedCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2318BAE1D5EBDEAE0C00704A /* VirtualizedCodeView.swift */; };
 		CB296021DCE6C2F996819DF6 /* LogListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D96DFC5ABC029B228D12994D /* LogListView.swift */; };
@@ -97,6 +96,11 @@
 		F4E3F52FA7F59B20502A055A /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0506631280A96B48BA613082 /* Workspace.swift */; };
 		F8919D8AB0595F77C230F01F /* SourceControlViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D69995EDA2545AF7EBBE76F7 /* SourceControlViewModel.swift */; };
 		FD706FF421944BBCB1F29F0A /* ExplorerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBD6C7852E50107F14A81DCC /* ExplorerViewModel.swift */; };
+		JSONRPC05BLD00000000001 /* JSONRPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */; };
+		JSONRPC06BLD00000000002 /* JSONRPCError.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC02ERR00000000002 /* JSONRPCError.swift */; };
+		JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC03CLI00000000003 /* JSONRPCClient.swift */; };
+		JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */; };
+		RAINBOW01A2B3C4D5E6F789AB /* RainbowTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -142,11 +146,6 @@
 		32E7910F7A1B632FE4171983 /* Date+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Date+Extensions.swift"; sourceTree = "<group>"; };
 		3775CC571AA812FFD8C4E704 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		39A9FE817775280D126DB8AA /* FloatingToolkit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingToolkit.swift; sourceTree = "<group>"; };
-		RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RainbowTextField.swift; sourceTree = "<group>"; };
-		JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMessage.swift; sourceTree = "<group>"; };
-		JSONRPC02ERR00000000002 /* JSONRPCError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCError.swift; sourceTree = "<group>"; };
-		JSONRPC03CLI00000000003 /* JSONRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCClient.swift; sourceTree = "<group>"; };
-		JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMethods.swift; sourceTree = "<group>"; };
 		3F31CDD6E3F73B041AC22D6A /* RespondToClaudeUseCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RespondToClaudeUseCase.swift; sourceTree = "<group>"; };
 		40E24E3FCF289C210585C2DA /* AgentRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRepository.swift; sourceTree = "<group>"; };
 		45882D15B447F594CF96D3CE /* PairingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingViewModel.swift; sourceTree = "<group>"; };
@@ -191,6 +190,11 @@
 		BA564483907E67448ECB010B /* WorkspaceSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSwitcher.swift; sourceTree = "<group>"; };
 		BCECB98BA86D946C305ED8A0 /* CardModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardModifier.swift; sourceTree = "<group>"; };
 		C134CDCDC43F5EBEBAD4F46F /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		C364EFF52EF9DD0C00954454 /* KeyboardShortcutHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcutHandler.swift; sourceTree = "<group>"; };
+		C364EFF62EF9DD0C00954454 /* QuickSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSwitcherView.swift; sourceTree = "<group>"; };
+		C364EFF72EF9DD0C00954454 /* QuickSwitcherViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSwitcherViewModel.swift; sourceTree = "<group>"; };
+		C364F0012EF9DECD00954454 /* WorkspaceStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStateManager.swift; sourceTree = "<group>"; };
+		C364F0022EF9DECD00954454 /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
 		C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewerView.swift; sourceTree = "<group>"; };
 		CD8868ADD6804B4C22DFDE52 /* FileCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCache.swift; sourceTree = "<group>"; };
 		D2BED9190DAD30ECF6A37DD5 /* cdevApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = cdevApp.swift; sourceTree = "<group>"; };
@@ -206,11 +210,15 @@
 		EBD6C7852E50107F14A81DCC /* ExplorerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplorerViewModel.swift; sourceTree = "<group>"; };
 		ED486636BB766D5C2A7AD5FA /* cdev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = cdev.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F00E93F2519593AD2F079A9B /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
-		F2137B4CC5806C42B92AF589 /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
 		F3879C3885AB44CA1A914DC7 /* GitModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitModels.swift; sourceTree = "<group>"; };
 		F503F5473D0F33D10C26CBC4 /* ChatElement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatElement.swift; sourceTree = "<group>"; };
 		F6725ECF2DD0E1A613C4A722 /* Gradients.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gradients.swift; sourceTree = "<group>"; };
 		F7401EB48F061AD156DE555C /* FileEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileEntry.swift; sourceTree = "<group>"; };
+		JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMessage.swift; sourceTree = "<group>"; };
+		JSONRPC02ERR00000000002 /* JSONRPCError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCError.swift; sourceTree = "<group>"; };
+		JSONRPC03CLI00000000003 /* JSONRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCClient.swift; sourceTree = "<group>"; };
+		JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMethods.swift; sourceTree = "<group>"; };
+		RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RainbowTextField.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -516,6 +524,33 @@
 			);
 			sourceTree = "<group>";
 		};
+		C364EFF82EF9DD0C00954454 /* QuickSwitcher */ = {
+			isa = PBXGroup;
+			children = (
+				C364EFF52EF9DD0C00954454 /* KeyboardShortcutHandler.swift */,
+				C364EFF62EF9DD0C00954454 /* QuickSwitcherView.swift */,
+				C364EFF72EF9DD0C00954454 /* QuickSwitcherViewModel.swift */,
+			);
+			path = QuickSwitcher;
+			sourceTree = "<group>";
+		};
+		C364EFF92EF9DD0C00954454 /* WorkspaceManagement */ = {
+			isa = PBXGroup;
+			children = (
+				C364EFF82EF9DD0C00954454 /* QuickSwitcher */,
+			);
+			path = WorkspaceManagement;
+			sourceTree = "<group>";
+		};
+		C364F0032EF9DECD00954454 /* Workspace */ = {
+			isa = PBXGroup;
+			children = (
+				C364F0012EF9DECD00954454 /* WorkspaceStateManager.swift */,
+				C364F0022EF9DECD00954454 /* WorkspaceStore.swift */,
+			);
+			path = Workspace;
+			sourceTree = "<group>";
+		};
 		C41817F8FB1BF2EFA7C421FF /* UseCases */ = {
 			isa = PBXGroup;
 			children = (
@@ -591,7 +626,7 @@
 		E06A902F111EB0CC12BB5092 /* Services */ = {
 			isa = PBXGroup;
 			children = (
-				F2137B4CC5806C42B92AF589 /* WorkspaceStore.swift */,
+				C364F0032EF9DECD00954454 /* Workspace */,
 				273ED048A89241326434BE27 /* Cache */,
 				93EFD054618BBC346FBF32B2 /* HTTP */,
 				JSONRPC04GRP00000000004 /* JSONRPC */,
@@ -600,17 +635,6 @@
 				F5AB644FE702CA8BA81BFEB7 /* WebSocket */,
 			);
 			path = Services;
-			sourceTree = "<group>";
-		};
-		JSONRPC04GRP00000000004 /* JSONRPC */ = {
-			isa = PBXGroup;
-			children = (
-				JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */,
-				JSONRPC02ERR00000000002 /* JSONRPCError.swift */,
-				JSONRPC03CLI00000000003 /* JSONRPCClient.swift */,
-				JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */,
-			);
-			path = JSONRPC;
 			sourceTree = "<group>";
 		};
 		E158C01178557ABD8198F2A3 /* DiffViewer */ = {
@@ -624,6 +648,7 @@
 		E1B1E8C12DF6630392FD3842 /* Presentation */ = {
 			isa = PBXGroup;
 			children = (
+				C364EFF92EF9DD0C00954454 /* WorkspaceManagement */,
 				32C0E0FCFB6DAD53586DE044 /* Common */,
 				DCC5AD012419FA57A54D5E8C /* Navigation */,
 				D523E8E49D2B40EFA9C4ECFB /* Screens */,
@@ -704,6 +729,17 @@
 				BA564483907E67448ECB010B /* WorkspaceSwitcher.swift */,
 			);
 			path = Components;
+			sourceTree = "<group>";
+		};
+		JSONRPC04GRP00000000004 /* JSONRPC */ = {
+			isa = PBXGroup;
+			children = (
+				JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */,
+				JSONRPC02ERR00000000002 /* JSONRPCError.swift */,
+				JSONRPC03CLI00000000003 /* JSONRPCClient.swift */,
+				JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */,
+			);
+			path = JSONRPC;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -865,6 +901,9 @@
 				6DB1DB22EEDA6625C75199D0 /* FileViewerView.swift in Sources */,
 				B9A8CBA66BC0B19FB2FE9E5C /* FloatingKeyboardDismissButton.swift in Sources */,
 				534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */,
+				C364EFFA2EF9DD0C00954454 /* QuickSwitcherViewModel.swift in Sources */,
+				C364EFFB2EF9DD0C00954454 /* QuickSwitcherView.swift in Sources */,
+				C364EFFC2EF9DD0C00954454 /* KeyboardShortcutHandler.swift in Sources */,
 				RAINBOW01A2B3C4D5E6F789AB /* RainbowTextField.swift in Sources */,
 				83B21CEABB25D8074CE5364B /* GitModels.swift in Sources */,
 				AD85B790A3930CA9F0A8844C /* Gradients.swift in Sources */,
@@ -905,8 +944,9 @@
 				JSONRPC06BLD00000000002 /* JSONRPCError.swift in Sources */,
 				JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */,
 				JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */,
+				C364F0042EF9DECD00954454 /* WorkspaceStore.swift in Sources */,
+				C364F0052EF9DECD00954454 /* WorkspaceStateManager.swift in Sources */,
 				F4E3F52FA7F59B20502A055A /* Workspace.swift in Sources */,
-				288F3112419DC015659DD54E /* WorkspaceStore.swift in Sources */,
 				469BC4C939D1431230E830B3 /* WorkspaceSwitcher.swift in Sources */,
 				3021967992C5331029CA2AB8 /* cdevApp.swift in Sources */,
 			);
