@@ -1185,10 +1185,20 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil")")
 
                 // Skip user message echoes from real-time events (already shown optimistically)
-                // User messages are only needed when loading session history, not from WebSocket
+                // EXCEPT for bash mode OUTPUT (stdout/stderr) which needs to be displayed
+                // Note: <bash-input> is NOT included here to avoid duplicates
                 if payload.effectiveRole == "user" {
-                    AppLogger.log("[Dashboard] Skipping user message echo from WebSocket")
-                    return
+                    // Check if this contains bash output tags (server-generated)
+                    let textContent = payload.effectiveContent?.textContent ?? ""
+                    let hasBashOutput = textContent.contains("<bash-stdout>") ||
+                                       textContent.contains("<bash-stderr>")
+
+                    if !hasBashOutput {
+                        AppLogger.log("[Dashboard] Skipping user message echo from WebSocket")
+                        return
+                    } else {
+                        AppLogger.log("[Dashboard] Showing bash mode output with tags")
+                    }
                 }
 
                 let elements = ChatElement.from(payload: payload)
