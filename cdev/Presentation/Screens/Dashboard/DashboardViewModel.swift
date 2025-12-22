@@ -108,6 +108,9 @@ final class DashboardViewModel: ObservableObject {
     private var isInitialLoadInProgress = false
     private var hasCompletedInitialLoad = false
 
+    // Prevent duplicate reconnection loads
+    private var isReconnectionInProgress = false
+
     // Session management
     // - userSelectedSessionId: Session from history, user selection, or claude_session_info event
     // - hasActiveConversation: Whether we've sent a message and Claude processed it
@@ -213,6 +216,7 @@ final class DashboardViewModel: ObservableObject {
     deinit {
         eventTask?.cancel()
         stateTask?.cancel()
+        searchDebounceTask?.cancel()
     }
 
     // MARK: - Debounced Updates
@@ -914,18 +918,32 @@ final class DashboardViewModel: ObservableObject {
     // MARK: - Private
 
     /// Load history from most recent session
-    private func loadRecentSessionHistory() async {
+    /// - Parameter isReconnection: If true, forces reload even if data exists (to catch up on new messages)
+    private func loadRecentSessionHistory(isReconnection: Bool = false) async {
         // Prevent duplicate loads
         guard !isInitialLoadInProgress else {
             AppLogger.log("[Dashboard] loadRecentSessionHistory skipped - already in progress")
             return
         }
+
+        // Prevent duplicate reconnection loads
+        if isReconnection {
+            guard !isReconnectionInProgress else {
+                AppLogger.log("[Dashboard] Reconnection load skipped - already in progress")
+                return
+            }
+            isReconnectionInProgress = true
+        }
+
         isInitialLoadInProgress = true
-        AppLogger.log("[Dashboard] Starting loadRecentSessionHistory")
+        AppLogger.log("[Dashboard] Starting loadRecentSessionHistory (reconnection: \(isReconnection))")
 
         defer {
             isInitialLoadInProgress = false
             hasCompletedInitialLoad = true
+            if isReconnection {
+                isReconnectionInProgress = false
+            }
         }
 
         do {
@@ -953,6 +971,8 @@ final class DashboardViewModel: ObservableObject {
 
             // Only clear if loading a different session (prevents flashing on reconnect)
             let isNewSession = userSelectedSessionId != sessionId
+            let beforeCount = chatElements.count
+
             if isNewSession {
                 await logCache.clear()
                 chatElements = []
@@ -962,12 +982,16 @@ final class DashboardViewModel: ObservableObject {
                 messagesHasMore = false
                 messagesTotalCount = 0
                 AppLogger.log("[Dashboard] Cleared data for new session")
-            } else if !chatElements.isEmpty {
-                // Same session and already have data - skip reloading to prevent duplicates
-                AppLogger.log("[Dashboard] Same session with \(chatElements.count) elements - skipping reload")
+            } else if !chatElements.isEmpty && !isReconnection {
+                // Same session + have data + NOT reconnecting → skip to prevent duplicates
+                AppLogger.log("[Dashboard] Same session with \(beforeCount) elements - skipping reload")
                 // Still start watching if not already
                 await startWatchingCurrentSession()
                 return
+            } else if !chatElements.isEmpty && isReconnection {
+                // Same session + have data + IS reconnecting → fetch latest to catch up on new messages
+                AppLogger.log("[Dashboard] Reconnection - fetching latest messages (current: \(beforeCount) elements)")
+                // Don't clear - deduplication will filter existing, add new
             } else {
                 AppLogger.log("[Dashboard] Same session but empty - loading data")
             }
@@ -1062,7 +1086,14 @@ final class DashboardViewModel: ObservableObject {
                     await Task.yield()
                 }
             }
-            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(chatElements.count) elements from \(messagesResponse.count) messages (deduplicated)")
+            let afterCount = chatElements.count
+            let newMessagesCount = afterCount - beforeCount
+
+            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(afterCount) elements from \(messagesResponse.count) messages (deduplicated)")
+
+            if isReconnection && newMessagesCount > 0 {
+                AppLogger.log("[Dashboard] Reconnection synced \(newMessagesCount) new messages (before: \(beforeCount), after: \(afterCount))")
+            }
 
             // Update logs array
             await forceLogUpdate()
@@ -1101,7 +1132,7 @@ final class DashboardViewModel: ObservableObject {
                     // This prevents hang when user tries to interact during load
                     try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
                     AppLogger.log("[Dashboard] Reconnected - starting loadRecentSessionHistory")
-                    await self.loadRecentSessionHistory()
+                    await self.loadRecentSessionHistory(isReconnection: true)
                     // refreshStatus() calls refreshGitStatus() internally when hasCompletedInitialLoad is true
                     AppLogger.log("[Dashboard] Reconnected - starting refreshStatus (includes git status)")
                     await self.refreshStatus()
