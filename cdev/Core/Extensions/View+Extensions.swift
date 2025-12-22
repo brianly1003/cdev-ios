@@ -213,14 +213,16 @@ extension View {
 /// Modifier for device-appropriate sheet presentation
 /// - iPhone: Medium and large detents (swipeable)
 /// - iPad: Large only (full height for more content)
+/// Note: Uses UIDevice.current.userInterfaceIdiom instead of @Environment(\.horizontalSizeClass)
+/// because sheets have their own environment context that may not reflect the actual device type.
 struct ResponsiveSheetModifier: ViewModifier {
-    @Environment(\.horizontalSizeClass) private var sizeClass
-
-    private var isCompact: Bool { sizeClass == .compact }
+    private var isPhone: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+    }
 
     func body(content: Content) -> some View {
         content
-            .presentationDetents(isCompact ? [.medium, .large] : [.large])
+            .presentationDetents(isPhone ? [.medium, .large] : [.large])
             .presentationDragIndicator(.visible)
     }
 }

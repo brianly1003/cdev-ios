@@ -65,6 +65,7 @@ struct ExplorerView: View {
                         isShowingFileViewer = false
                     }
                 )
+                .responsiveSheet()
             }
         }
         .onChange(of: viewModel.selectedFile) { _, newFile in
