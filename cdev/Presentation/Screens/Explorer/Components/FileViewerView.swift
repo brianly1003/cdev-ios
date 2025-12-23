@@ -450,21 +450,23 @@ struct FileViewerView: View {
             }
             .disabled(isToolbarDisabled)
 
-            // Fullscreen toggle
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isFullscreen.toggle()
+            // Fullscreen toggle (iPad only)
+            if horizontalSizeClass == .regular {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isFullscreen.toggle()
+                    }
+                    Haptics.selection()
+                } label: {
+                    Image(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(isFullscreen ? ColorSystem.primary : isToolbarDisabled ? ColorSystem.textQuaternary : ColorSystem.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(isFullscreen ? ColorSystem.primaryGlow : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                Haptics.selection()
-            } label: {
-                Image(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(isFullscreen ? ColorSystem.primary : isToolbarDisabled ? ColorSystem.textQuaternary : ColorSystem.textSecondary)
-                    .frame(width: 28, height: 28)
-                    .background(isFullscreen ? ColorSystem.primaryGlow : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                .disabled(isToolbarDisabled)
             }
-            .disabled(isToolbarDisabled)
 
             // More options menu
             Menu {

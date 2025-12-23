@@ -36,15 +36,30 @@ struct ElementView: View {
         }
     }
 
+    /// Check if this element type should hide timestamp (tool results are inline with tool calls)
+    private var shouldHideTimestamp: Bool {
+        switch element.content {
+        case .toolResult:
+            return true  // Tool results show inline with tool calls, no separate timestamp
+        default:
+            return false
+        }
+    }
+
     private var elementRow: some View {
         HStack(alignment: .top, spacing: Spacing.xs) {
             // Timestamp (optional) - aligned with content's first line
-            if showTimestamp {
+            // Hide timestamp for tool results (they're inline with tool calls)
+            if showTimestamp && !shouldHideTimestamp {
                 Text(formattedTime)
                     .font(Typography.terminalTimestamp)
                     .foregroundStyle(ColorSystem.textQuaternary)
                     .frame(width: 56, alignment: .trailing)
                     .padding(.top, 5)  // Align with status dot padding in element views
+            } else if showTimestamp && shouldHideTimestamp {
+                // Empty spacer to maintain alignment with other rows
+                Spacer()
+                    .frame(width: 56)
             }
 
             // Element content - let content determine height, ensure minimum visibility
@@ -100,6 +115,10 @@ struct ElementView: View {
                     outputTokens: nil
                 )
                 TaskElementView(content: taskContent, searchText: searchText)
+            }
+            // Enhanced Write tool display with content preview
+            else if content.tool == "Write", content.fullContent != nil {
+                WriteToolElementView(content: content, searchText: searchText)
             } else {
                 ToolCallElementView(content: content, searchText: searchText)
             }
@@ -259,9 +278,15 @@ struct UserInputElementView: View {
                 case "bash-input":
                     segments.append(.bashInput(content))
                 case "bash-stdout":
-                    segments.append(.bashStdout(content))
+                    // Skip empty stdout to avoid empty ⎿ lines
+                    if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        segments.append(.bashStdout(content))
+                    }
                 case "bash-stderr":
-                    segments.append(.bashStderr(content))
+                    // Skip empty stderr to avoid empty ⎿ lines
+                    if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        segments.append(.bashStderr(content))
+                    }
                 case "local-command-stdout":
                     // Strip ANSI codes from local command output
                     let cleanContent = content.replacingOccurrences(of: #"\u001b\[[0-9;]*m"#, with: "", options: .regularExpression)
@@ -2114,5 +2139,215 @@ struct TaskElementView: View {
             return String(format: "%.1fk tokens", Double(tokens) / 1000)
         }
         return "\(tokens) tokens"
+    }
+}
+// MARK: - Write Tool Enhanced View
+
+/// Enhanced Write tool display with content preview
+/// Shows: ● Write(file_path) with collapsible content preview
+struct WriteToolElementView: View {
+    let content: ToolCallContent
+    var searchText: String = ""
+    @State private var isExpanded = false
+
+    private let previewLineCount = 5
+
+    /// Get file extension for icon and syntax
+    private var fileExtension: String {
+        if let path = content.params["file_path"] {
+            return (path as NSString).pathExtension.lowercased()
+        }
+        return ""
+    }
+
+    /// File type icon
+    private var fileIcon: String {
+        switch fileExtension {
+        case "swift": return "swift"
+        case "md", "markdown": return "doc.text"
+        case "json": return "curlybraces"
+        case "py": return "sparkles"
+        case "js", "ts": return "curlybraces"
+        case "html": return "globe"
+        case "css": return "paintbrush"
+        default: return "doc"
+        }
+    }
+
+    /// File type color
+    private var fileColor: Color {
+        switch fileExtension {
+        case "swift": return Color(hex: "#F05138")
+        case "md", "markdown": return Color(hex: "#083FA1")
+        case "json": return Color(hex: "#A5D6FF")
+        case "py": return Color(hex: "#3776AB")
+        case "js", "ts": return Color(hex: "#F7DF1E")
+        default: return ColorSystem.textTertiary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Header: ● Write(file_path)
+            headerView
+
+            // Content preview (collapsible)
+            if let writeContent = content.fullContent, !writeContent.isEmpty {
+                if isExpanded {
+                    contentPreview(writeContent)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    contentSummary(writeContent)
+                }
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+        .frame(minHeight: 20)
+    }
+
+    private var headerView: some View {
+        Button {
+            if content.fullContent != nil {
+                withAnimation(Animations.stateChange) {
+                    isExpanded.toggle()
+                }
+                Haptics.selection()
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Spacing.xxs) {
+                // Status indicator
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 6, height: 6)
+                    .padding(.top, 5)
+
+                // Expand/collapse chevron (matches Update tool layout)
+                if content.fullContent != nil {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                        .padding(.top, 5)
+                }
+
+                // File icon
+                Image(systemName: fileIcon)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(fileColor)
+                    .padding(.top, 4)
+
+                // Tool display: Write(file_path)
+                Group {
+                    if searchText.isEmpty {
+                        Text(toolDisplay)
+                    } else {
+                        HighlightedText(toolDisplay, highlighting: searchText)
+                    }
+                }
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.Tool.name)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+
+                // Running spinner
+                if content.status == .running {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .tint(ColorSystem.primary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var toolDisplay: String {
+        if let path = content.params["file_path"] {
+            return "Write(\(path))"
+        }
+        return "Write"
+    }
+
+    private var statusColor: Color {
+        switch content.status {
+        case .running: return ColorSystem.info
+        case .completed: return ColorSystem.primary
+        case .error: return ColorSystem.error
+        case .interrupted: return ColorSystem.warning
+        }
+    }
+
+    @ViewBuilder
+    private func contentSummary(_ fullContent: String) -> some View {
+        let lines = fullContent.components(separatedBy: "\n")
+        let previewText = lines.prefix(previewLineCount).joined(separator: "\n")
+        let hasMore = lines.count > previewLineCount
+
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: Spacing.xxs) {
+                Text("⎿")
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+
+                Text(previewText)
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textSecondary)
+                    .lineLimit(previewLineCount)
+
+                Spacer(minLength: 0)
+            }
+
+            if hasMore {
+                HStack(spacing: Spacing.xxs) {
+                    Text("…")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+
+                    Text("+\(lines.count - previewLineCount) lines (tap to expand)")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                }
+                .padding(.leading, Spacing.sm)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func contentPreview(_ fullContent: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Full content in scrollable code block
+            ScrollView(.horizontal, showsIndicators: false) {
+                Group {
+                    if searchText.isEmpty {
+                        Text(fullContent)
+                    } else {
+                        HighlightedText(fullContent, highlighting: searchText)
+                    }
+                }
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: true, vertical: true)
+                .padding(Spacing.sm)
+            }
+            .frame(maxHeight: 300)  // Limit height for very long files
+            .background(ColorSystem.terminalBgHighlight)
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+
+            // Collapse button
+            Button {
+                withAnimation(Animations.stateChange) {
+                    isExpanded = false
+                }
+                Haptics.selection()
+            } label: {
+                Text("collapse")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+            .padding(.top, Spacing.xxs)
+            .padding(.leading, Spacing.sm)
+        }
+        .padding(.leading, Spacing.sm)
     }
 }

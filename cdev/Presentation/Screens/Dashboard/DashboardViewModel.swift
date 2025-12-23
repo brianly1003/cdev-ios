@@ -131,6 +131,12 @@ final class DashboardViewModel: ObservableObject {
     // O(1) lookup to prevent duplicate elements from multiple sources
     private var seenElementIds: Set<String> = []
 
+    // Track prompts sent by THIS client to deduplicate only our own echoes
+    // Hashes are kept for a few seconds to handle duplicate server echoes
+    // After timeout, they're cleaned up to allow repeated commands
+    private var sentPromptHashes: [String: Date] = [:]
+    private let sentPromptTimeout: TimeInterval = 5  // Keep for 5 seconds to handle server duplicates
+
     // Memory management: max elements to keep in memory
     // Older elements will be removed when this limit is exceeded
     private let maxChatElements = 500
@@ -448,6 +454,12 @@ final class DashboardViewModel: ObservableObject {
 
         let userMessage = promptText
         promptText = "" // Clear immediately for fast UX
+
+        // Track this prompt to deduplicate our own echo later
+        let promptHash = hashPrompt(userMessage)
+        sentPromptHashes[promptHash] = Date()
+        cleanupExpiredPromptHashes()
+        AppLogger.log("[Dashboard] Tracking sent prompt - hash: \(promptHash), text: '\(userMessage)'")
 
         // Check for built-in commands (start with /)
         if userMessage.hasPrefix("/") {
@@ -1321,19 +1333,50 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil")")
 
                 // Skip user message echoes from real-time events (already shown optimistically)
-                // EXCEPT for bash mode OUTPUT (stdout/stderr) which needs to be displayed
-                // Note: <bash-input> is NOT included here to avoid duplicates
+                // BUT ONLY skip messages sent by THIS CLIENT, not from other clients (e.g., Claude Code CLI)
+                // ALWAYS show bash mode OUTPUT (stdout/stderr) which is server-generated
                 if payload.effectiveRole == "user" {
-                    // Check if this contains bash output tags (server-generated)
                     let textContent = payload.effectiveContent?.textContent ?? ""
-                    let hasBashOutput = textContent.contains("<bash-stdout>") ||
-                                       textContent.contains("<bash-stderr>")
 
-                    if !hasBashOutput {
-                        AppLogger.log("[Dashboard] Skipping user message echo from WebSocket")
-                        return
-                    } else {
+                    // Check for bash tags
+                    let hasBashInput = textContent.contains("<bash-input>")  // Bash command
+                    let hasBashOutput = textContent.contains("<bash-stdout>") ||
+                                       textContent.contains("<bash-stderr>")  // Bash output
+
+                    // Handle bash INPUT: Extract command and check if it's ours
+                    if hasBashInput {
+                        // Extract command from <bash-input>command</bash-input>
+                        let extractedCommand = extractBashCommand(from: textContent)
+                        let hash = hashPrompt(extractedCommand)
+                        let isOurs = sentPromptHashes[hash] != nil
+
+                        AppLogger.log("[Dashboard] Bash command echo - extracted: '\(extractedCommand)', hash: \(hash), isOurs: \(isOurs), tracked hashes: \(sentPromptHashes.keys)")
+
+                        // Skip only if this was OUR OWN bash command
+                        // Keep hash for 5 seconds to handle duplicate server echoes
+                        if isOurs {
+                            AppLogger.log("[Dashboard] ✅ Skipping our own bash command echo (hash: \(hash), kept for dedup)")
+                            return
+                        } else {
+                            // Show bash commands from other clients (e.g., laptop CLI)
+                            AppLogger.log("[Dashboard] 📱 Showing bash command from another client")
+                        }
+                    }
+                    // Show bash OUTPUT always (server-generated stdout/stderr)
+                    else if hasBashOutput {
                         AppLogger.log("[Dashboard] Showing bash mode output with tags")
+                    }
+                    // Regular text prompts - skip only if from this client
+                    // Keep hash for 5 seconds to handle duplicate server echoes
+                    else if isOurOwnPrompt(textContent) {
+                        let hash = hashPrompt(textContent)
+                        AppLogger.log("[Dashboard] Skipping our own prompt echo (hash: \(hash), text: '\(textContent)')")
+                        return
+                    }
+                    // Show messages from other clients (e.g., Claude Code CLI on laptop)
+                    else {
+                        let hash = hashPrompt(textContent)
+                        AppLogger.log("[Dashboard] Showing user message from another client - hash: \(hash), text: '\(textContent)'")
                     }
                 }
 
@@ -1989,6 +2032,63 @@ final class DashboardViewModel: ObservableObject {
     /// Create a PairingViewModel for the pairing sheet
     func makePairingViewModel() -> PairingViewModel? {
         appState?.makePairingViewModel()
+    }
+
+    // MARK: - Prompt Deduplication Helpers
+
+    /// Normalize prompt text for comparison
+    /// Strips bash prefix (!), trims whitespace, lowercases
+    private func normalizePromptForComparison(_ text: String) -> String {
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Strip leading ! for bash commands (user types "!ls", server echoes "ls" or "!ls")
+        if normalized.hasPrefix("!") {
+            normalized = String(normalized.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+
+        return normalized.lowercased()
+    }
+
+    /// Hash a prompt for deduplication tracking
+    private func hashPrompt(_ prompt: String) -> String {
+        let normalized = normalizePromptForComparison(prompt)
+        return String(normalized.hashValue)
+    }
+
+    /// Check if a user message was sent by THIS client
+    /// Returns true if this message matches a recently sent prompt
+    /// Handles bash commands (with/without ! prefix)
+    /// Note: Hash is kept for 5 seconds to handle duplicate server echoes
+    private func isOurOwnPrompt(_ text: String) -> Bool {
+        let hash = hashPrompt(text)
+        return sentPromptHashes[hash] != nil
+    }
+
+    /// Remove expired prompt hashes (older than 5 seconds)
+    /// Handles duplicate server echoes while allowing repeated commands after timeout
+    private func cleanupExpiredPromptHashes() {
+        let now = Date()
+        sentPromptHashes = sentPromptHashes.filter { _, timestamp in
+            now.timeIntervalSince(timestamp) < sentPromptTimeout
+        }
+    }
+
+    /// Extract bash command from <bash-input>command</bash-input> tags
+    /// Returns the command without tags, or original text if no tags found
+    private func extractBashCommand(from text: String) -> String {
+        // Pattern: <bash-input>COMMAND</bash-input>
+        let pattern = #"<bash-input>(.*?)</bash-input>"#
+
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
+              let match = regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)),
+              let commandRange = Range(match.range(at: 1), in: text) else {
+            return text  // No tags found, return original
+        }
+
+        // Trim whitespace to match optimistic display format
+        // Optimistic: "! ls" -> "ls" (trimmed)
+        // Server: "<bash-input> ls</bash-input>" -> "ls" (trimmed)
+        return String(text[commandRange]).trimmingCharacters(in: .whitespaces)
     }
 }
 

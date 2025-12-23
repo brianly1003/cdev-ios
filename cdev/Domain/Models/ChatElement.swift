@@ -160,6 +160,8 @@ struct ToolCallContent: Codable, Equatable {
     let params: [String: String]
     var status: ToolStatus
     var durationMs: Int?
+    /// Full content for Write tool (not truncated)
+    var fullContent: String?
 
     enum CodingKeys: String, CodingKey {
         case tool
@@ -168,15 +170,17 @@ struct ToolCallContent: Codable, Equatable {
         case params
         case status
         case durationMs = "duration_ms"
+        case fullContent = "full_content"
     }
 
-    init(tool: String, toolId: String? = nil, display: String, params: [String: String] = [:], status: ToolStatus = .running, durationMs: Int? = nil) {
+    init(tool: String, toolId: String? = nil, display: String, params: [String: String] = [:], status: ToolStatus = .running, durationMs: Int? = nil, fullContent: String? = nil) {
         self.tool = tool
         self.toolId = toolId
         self.display = display
         self.params = params
         self.status = status
         self.durationMs = durationMs
+        self.fullContent = fullContent
     }
 }
 
@@ -871,6 +875,9 @@ extension ChatElement {
                         // Create display string for other tools
                         let display = formatToolDisplay(tool: toolName, params: params)
 
+                        // For Write tool, capture full content
+                        let fullContent = (toolName == "Write") ? params["content"] : nil
+
                         elements.append(ChatElement(
                             id: blockId,
                             type: .toolCall,
@@ -880,7 +887,8 @@ extension ChatElement {
                                 toolId: block.effectiveId,
                                 display: display,
                                 params: params,
-                                status: .completed
+                                status: .completed,
+                                fullContent: fullContent
                             ))
                         ))
                     }
@@ -1124,6 +1132,10 @@ extension ChatElement {
                     } else {
                         // Regular tool call
                         let display = formatToolDisplay(tool: toolName, params: params)
+
+                        // For Write tool, capture full content
+                        let fullContent = (toolName == "Write") ? params["content"] : nil
+
                         elements.append(ChatElement(
                             id: blockId,
                             type: .toolCall,
@@ -1133,7 +1145,8 @@ extension ChatElement {
                                 toolId: blockId,
                                 display: display,
                                 params: params,
-                                status: .completed
+                                status: .completed,
+                                fullContent: fullContent
                             ))
                         ))
                     }
