@@ -151,14 +151,24 @@ struct DashboardView: View {
                     // Action bar - only show on logs tab
                     // Uses manual keyboard handling, so ignore SwiftUI's automatic keyboard avoidance
                     if viewModel.selectedTab == .logs {
-                        ActionBarView(
-                            claudeState: viewModel.claudeState,
-                            promptText: $viewModel.promptText,
-                            isLoading: viewModel.isLoading,
-                            isFocused: $isInputFocused,
-                            onSend: { Task { await viewModel.sendPrompt() } },
-                            onStop: { Task { await viewModel.stopClaude() } }
-                        )
+                        ZStack(alignment: .topTrailing) {
+                            ActionBarView(
+                                claudeState: viewModel.claudeState,
+                                promptText: $viewModel.promptText,
+                                isBashMode: $viewModel.isBashMode,
+                                isLoading: viewModel.isLoading,
+                                isFocused: $isInputFocused,
+                                onSend: { Task { await viewModel.sendPrompt() } },
+                                onStop: { Task { await viewModel.stopClaude() } },
+                                onToggleBashMode: { viewModel.toggleBashMode() }
+                            )
+
+                            // Keyboard dismiss button - positioned at top-right of ActionBarView
+                            // This ensures it moves with the text field as it grows
+                            FloatingKeyboardDismissButton()
+                                .padding(.top, -52)  // Position above the ActionBarView
+                                .padding(.trailing, Spacing.md)
+                        }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
@@ -260,11 +270,7 @@ struct DashboardView: View {
                 viewModel.requestScroll(direction: direction)
             }
 
-            // Floating keyboard dismiss button (positioned above chat input on Terminal tab only)
-            FloatingKeyboardDismissButton()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                .padding(.bottom, viewModel.selectedTab == .logs ? 80 : Spacing.md) // Above ActionBarView on Terminal
-                .padding(.trailing, Spacing.md)
+            // Floating keyboard dismiss button is now inside ActionBarView for proper positioning
 
             // Reconnection toast (shown when connection is restored)
             VStack {
@@ -734,13 +740,48 @@ struct CommandSuggestionsView: View {
 struct ActionBarView: View {
     let claudeState: ClaudeState
     @Binding var promptText: String
+    @Binding var isBashMode: Bool
     let isLoading: Bool
     var isFocused: FocusState<Bool>.Binding
     let onSend: () -> Void
     let onStop: () -> Void
+    let onToggleBashMode: () -> Void
 
     // Keyboard height tracking for proper positioning
     @State private var keyboardHeight: CGFloat = 0
+
+    // Responsive layout for iPhone/iPad
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    // MARK: - Responsive Sizing (Using ResponsiveLayout constants)
+
+    /// Spacing between elements in the main HStack
+    private var elementSpacing: CGFloat { layout.tightSpacing }
+
+    /// Horizontal padding for the action bar container
+    private var containerPadding: CGFloat { layout.smallPadding }
+
+    /// Bash toggle button size
+    private var bashButtonSize: CGFloat { layout.indicatorSize }
+
+    /// Bash toggle icon size
+    private var bashIconSize: CGFloat { layout.iconAction }
+
+    /// Input field internal spacing
+    private var inputSpacing: CGFloat { layout.tightSpacing }
+
+    /// Input field horizontal padding
+    private var inputHorizontalPadding: CGFloat { layout.smallPadding }
+
+    /// Input field vertical padding
+    private var inputVerticalPadding: CGFloat { layout.smallPadding }
+
+    /// Clear button size
+    private var clearButtonSize: CGFloat { layout.isCompact ? 24 : 28 }
+
+    /// Send button icon size
+    private var sendIconSize: CGFloat { layout.iconXLarge }
 
     /// Filtered commands based on current input
     private var suggestedCommands: [BuiltInCommand] {
@@ -757,9 +798,12 @@ struct ActionBarView: View {
         promptText.isBlank || isLoading || claudeState == .running
     }
 
-    /// Placeholder text based on Claude state
+    /// Placeholder text based on Claude state and bash mode
     private var placeholderText: String {
-        claudeState == .running ? "Claude is running..." : "Ask Claude..."
+        if claudeState == .running {
+            return "Claude is running..."
+        }
+        return isBashMode ? "Run bash command..." : "Ask Claude..."
     }
 
     var body: some View {
@@ -770,13 +814,35 @@ struct ActionBarView: View {
                 CommandSuggestionsView(commands: suggestedCommands) { command in
                     promptText = command
                 }
-                .padding(.leading, Spacing.sm)
+                .padding(.leading, containerPadding)
                 .padding(.trailing, 70)  // Space for floating toolkit
                 .padding(.bottom, Spacing.xs)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            HStack(spacing: Spacing.xs) {
+            HStack(spacing: elementSpacing) {
+                // Bash mode toggle button - compact on iPhone
+                Button {
+                    onToggleBashMode()
+                } label: {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: bashIconSize, weight: .semibold))
+                        .foregroundStyle(isBashMode ? ColorSystem.success : ColorSystem.textTertiary)
+                        .frame(width: bashButtonSize, height: bashButtonSize)
+                        .background(isBashMode ? ColorSystem.success.opacity(0.15) : ColorSystem.terminalBgHighlight)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(
+                                    isBashMode ? ColorSystem.success.opacity(0.3) : .clear,
+                                    lineWidth: 1.5
+                                )
+                        )
+                        .shadow(color: isBashMode ? ColorSystem.success.opacity(0.3) : .clear, radius: 4)
+                }
+                .buttonStyle(.plain)
+                .transition(Animations.fadeScale)
+
                 // Stop button with loading animation when active
                 if claudeState == .running || claudeState == .waiting {
                     StopButtonWithAnimation(onStop: onStop)
@@ -784,13 +850,14 @@ struct ActionBarView: View {
                 }
 
                 // Prompt input with Pulse Terminal styling + rainbow "ultrathink" detection
-                HStack(spacing: Spacing.xs) {
+                HStack(spacing: inputSpacing) {
                     RainbowTextField(
                         placeholder: placeholderText,
                         text: $promptText,
                         font: Typography.inputField,
                         axis: .vertical,
                         lineLimit: 1...3,
+                        maxHeight: 120,  // ~6 lines max, then scroll
                         isDisabled: claudeState == .running,
                         onSubmit: {
                             if !isSendDisabled {
@@ -799,19 +866,36 @@ struct ActionBarView: View {
                         }
                     )
                     .focused(isFocused)
-                    .padding(.vertical, Spacing.sm)
-                    .padding(.leading, Spacing.sm)
+                    .autocorrectionDisabled(isBashMode)  // Disable autocorrection in bash mode
+                    .padding(.vertical, inputVerticalPadding)
+                    .padding(.leading, inputHorizontalPadding)
+                    .padding(.trailing, 2)
 
-                    // Send button with glow
+                    // Clear button - compact, only when text is not empty
+                    if !promptText.isEmpty {
+                        Button {
+                            promptText = ""
+                            Haptics.light()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: clearButtonSize * 0.7))
+                                .foregroundStyle(ColorSystem.textTertiary)
+                                .frame(width: clearButtonSize, height: clearButtonSize)
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
+                    // Send button with glow - compact sizing
                     Button(action: onSend) {
                         Group {
                             if isLoading {
                                 ProgressView()
-                                    .scaleEffect(0.7)
+                                    .scaleEffect(0.6)
                                     .tint(ColorSystem.primary)
                             } else {
                                 Image(systemName: Icons.send)
-                                    .font(.system(size: 24))
+                                    .font(.system(size: sendIconSize))
                             }
                         }
                         .foregroundStyle(isSendDisabled ? ColorSystem.textQuaternary : ColorSystem.primary)
@@ -821,21 +905,23 @@ struct ActionBarView: View {
                         )
                     }
                     .disabled(isSendDisabled)
-                    .padding(.trailing, Spacing.sm)
-                    .padding(.vertical, Spacing.xs)
+                    .padding(.trailing, inputHorizontalPadding)
+                    .padding(.vertical, layout.tightSpacing)
                 }
                 .background(ColorSystem.terminalBgHighlight)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .clipShape(RoundedRectangle(cornerRadius: layout.indicatorSize / 2))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
+                    RoundedRectangle(cornerRadius: layout.indicatorSize / 2)
                         .stroke(
-                            isFocused.wrappedValue ? ColorSystem.primary.opacity(0.5) : .clear,
-                            lineWidth: 1
+                            isBashMode
+                                ? ColorSystem.success.opacity(isFocused.wrappedValue ? 0.6 : 0.3)
+                                : (isFocused.wrappedValue ? ColorSystem.primary.opacity(0.5) : .clear),
+                            lineWidth: isBashMode ? layout.borderWidthThick : layout.borderWidth
                         )
                 )
             }
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, containerPadding)
+            .padding(.vertical, layout.smallPadding)
             .background(ColorSystem.terminalBgElevated)
         }
         // Only add keyboard padding when THIS input is focused (not search bar)

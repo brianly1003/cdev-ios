@@ -30,6 +30,12 @@ struct ResponsiveLayout {
     /// Small horizontal padding (xs on iPhone, sm on iPad)
     var smallPadding: CGFloat { isCompact ? Spacing.xs : Spacing.sm }
 
+    /// Tight spacing for very compact layouts (4pt on iPhone, 8pt on iPad)
+    var tightSpacing: CGFloat { isCompact ? 4 : 8 }
+
+    /// Ultra-tight spacing for minimal layouts (2pt on iPhone, 4pt on iPad)
+    var ultraTightSpacing: CGFloat { isCompact ? 2 : 4 }
+
     /// Content spacing between elements
     var contentSpacing: CGFloat { isCompact ? Spacing.xs : Spacing.sm }
 
@@ -43,6 +49,9 @@ struct ResponsiveLayout {
 
     /// Medium icon (12pt on iPhone, 14pt on iPad)
     var iconMedium: CGFloat { isCompact ? 12 : 14 }
+
+    /// Action icon for buttons (14pt on iPhone, 16pt on iPad)
+    var iconAction: CGFloat { isCompact ? 14 : 16 }
 
     /// Large icon (16pt on iPhone, 18pt on iPad)
     var iconLarge: CGFloat { isCompact ? 16 : 18 }

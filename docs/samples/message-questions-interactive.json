@@ -1,0 +1,73 @@
+{
+  "jsonrpc": "2.0",
+  "method": "event/claude_message",
+  "params": {
+    "content": [
+      {
+        "tool_id": "toolu_01KcnjWfNM18eP5oP1LeFCTj",
+        "tool_input": {
+          "questions": [
+            {
+              "header": "Entry Point",
+              "multiSelect": false,
+              "options": [
+                {
+                  "description": "Add 'Manage Workspaces' option in Settings screen (Recommended)",
+                  "label": "Settings menu item"
+                },
+                {
+                  "description": "Add icon in the floating toolbar for quick access",
+                  "label": "Floating toolbar button"
+                },
+                {
+                  "description": "Tap current workspace name in banner to open manager",
+                  "label": "Connection banner tap"
+                },
+                {
+                  "description": "Multiple entry points for flexibility",
+                  "label": "All of the above"
+                }
+              ],
+              "question": "How should users access the Workspace Manager screen?"
+            },
+            {
+              "header": "Multi-Manager",
+              "multiSelect": false,
+              "options": [
+                {
+                  "description": "Connect to one laptop at a time, simpler UX (Recommended)",
+                  "label": "Single manager only"
+                },
+                {
+                  "description": "Remember multiple laptops, switch between them",
+                  "label": "Multiple managers"
+                }
+              ],
+              "question": "Should we support connecting to multiple workspace managers?"
+            },
+            {
+              "header": "Scope",
+              "multiSelect": false,
+              "options": [
+                {
+                  "description": "List workspaces, start/stop, connect to active workspace (Recommended)",
+                  "label": "MVP - List & Connect"
+                },
+                {
+                  "description": "Also include repository discovery and adding new workspaces from mobile",
+                  "label": "Full - Include Discovery"
+                }
+              ],
+              "question": "What's the priority for the initial implementation?"
+            }
+          ]
+        },
+        "tool_name": "AskUserQuestion",
+        "type": "tool_use"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "8a1f1def-88f2-40f5-b9af-d4fa63bf0515",
+    "type": "assistant"
+  }
+}

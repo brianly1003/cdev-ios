@@ -1,57 +1,416 @@
 import SwiftUI
+import UIKit
+
+/// Preference key for tracking view sizes
+struct SizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
 
 /// A TextField that highlights "ultrathink" keyword with rainbow colors
-/// Supports multiple occurrences of the keyword
-/// The keyword is only highlighted when it's a complete word (not followed by more letters)
+/// Uses UITextView under the hood for proper scrolling with AttributedString support
+/// Shows animated shimmer when not editing AND content fits (no scroll needed)
 ///
-/// Performance optimizations:
-/// - O(n) single-pass algorithm for keyword detection
-/// - Computed once per render cycle (SwiftUI caches computed properties within same render)
-/// - Early exit when text is shorter than keyword
-/// - Uses AttributedString (native SwiftUI, GPU-accelerated)
-/// - Always uses ZStack to prevent focus loss (no view hierarchy changes)
+/// Responsive: Adapts padding and sizing for iPhone (compact) vs iPad (regular)
 struct RainbowTextField: View {
     let placeholder: String
     @Binding var text: String
     let font: Font
     var axis: Axis = .vertical
     var lineLimit: ClosedRange<Int> = 1...3
+    var maxHeight: CGFloat = 100
     var isDisabled: Bool = false
     var onSubmit: (() -> Void)?
 
-    var body: some View {
-        // Always use ZStack to prevent focus loss when transitioning
-        ZStack(alignment: .leading) {
-            // TextField for input handling
-            TextField(placeholder, text: $text, axis: axis)
-                .font(font)
-                .foregroundStyle(rainbowData.hasKeyword ? .clear : ColorSystem.textPrimary)
-                .lineLimit(lineLimit)
-                .submitLabel(.send)
-                .disabled(isDisabled)
-                .onSubmit { onSubmit?() }
+    @State private var isEditing = false
+    @State private var requestFocus = false
+    @State private var contentHeight: CGFloat = 0
+    @State private var cachedRainbowData: RainbowData?
+    @State private var lastProcessedText: String = ""
 
-            // Attributed text overlay with shimmer on keywords only
-            if rainbowData.hasKeyword {
+    // Responsive layout for iPad/iPhone
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    /// Cached rainbow data - only recomputes when text changes
+    private var rainbowData: RainbowData {
+        // Use cached value if text hasn't changed
+        if let cached = cachedRainbowData, lastProcessedText == text {
+            return cached
+        }
+        return RainbowData.compute(text: text)
+    }
+
+    // Only show shimmer when content fits without scrolling
+    private var shouldShowShimmer: Bool {
+        !isEditing && rainbowData.hasKeyword && contentHeight <= maxHeight
+    }
+
+    // Responsive padding values
+    private var horizontalPadding: CGFloat { layout.isCompact ? 5 : 7 }
+    private var verticalPadding: CGFloat { layout.isCompact ? 4 : 6 }
+    private var fontSize: CGFloat { layout.isCompact ? 13 : 14 }
+
+    var body: some View {
+        let data = rainbowData  // Compute once per render
+        let showShimmer = !isEditing && data.hasKeyword && contentHeight <= maxHeight
+
+        ZStack(alignment: .topLeading) {
+            // UITextView for input - always present
+            RainbowTextView(
+                text: $text,
+                placeholder: placeholder,
+                maxHeight: maxHeight,
+                isDisabled: isDisabled,
+                onSubmit: onSubmit,
+                isEditing: $isEditing,
+                requestFocus: $requestFocus,
+                contentHeight: $contentHeight,
+                fontSize: fontSize,
+                horizontalPadding: horizontalPadding,
+                verticalPadding: verticalPadding
+            )
+            // Hide text only when showing shimmer overlay
+            .opacity(showShimmer ? 0.01 : 1)
+
+            // Shimmer overlay - only when not editing, has keyword, AND content fits
+            if showShimmer {
                 RainbowShimmerText(
-                    attributedText: rainbowData.attributedText,
-                    baseText: rainbowData.baseText,
-                    keywordCharIndices: rainbowData.keywordCharIndices,
+                    attributedText: data.attributedText,
+                    baseText: data.baseText,
+                    keywordCharIndices: data.keywordCharIndices,
                     font: font,
-                    lineLimit: lineLimit,
-                    startPosition: rainbowData.firstKeywordPosition,
-                    totalCharacters: rainbowData.totalCharacters,
-                    firstKeywordIndex: rainbowData.firstKeywordIndex
+                    lineLimit: 1...100,
+                    startPosition: data.firstKeywordPosition,
+                    totalCharacters: data.totalCharacters,
+                    firstKeywordIndex: data.firstKeywordIndex
                 )
-                .allowsHitTesting(false)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Explicitly request focus when tapping shimmer overlay
+                    requestFocus = true
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Tap anywhere to focus (when not already editing)
+            if !isEditing {
+                requestFocus = true
+            }
+        }
+        .onChange(of: text) { _, newText in
+            // Update cache when text changes
+            cachedRainbowData = RainbowData.compute(text: newText)
+            lastProcessedText = newText
+        }
+    }
+}
+
+// MARK: - UITextView Wrapper
+
+/// Custom UITextView that reports its intrinsic content size for SwiftUI layout
+private class DynamicHeightTextView: UITextView {
+    var maxHeight: CGFloat = 100
+    var minHeight: CGFloat = 28  // Single line height - matches button size
+
+    override var intrinsicContentSize: CGSize {
+        let size = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
+        let height = min(size.height, maxHeight)
+        let finalHeight = max(minHeight, height)
+        AppLogger.log("[DynamicHeightTextView] intrinsicContentSize: sizeThatFits=\(size.height), maxHeight=\(maxHeight), finalHeight=\(finalHeight)")
+        return CGSize(width: UIView.noIntrinsicMetric, height: finalHeight)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        invalidateIntrinsicContentSize()
+    }
+}
+
+/// UIViewRepresentable wrapper for UITextView with rainbow text support
+private struct RainbowTextView: UIViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let maxHeight: CGFloat
+    let isDisabled: Bool
+    let onSubmit: (() -> Void)?
+    var isFocused: FocusState<Bool>.Binding?
+    @Binding var isEditing: Bool
+    @Binding var requestFocus: Bool
+    @Binding var contentHeight: CGFloat
+
+    // Responsive sizing
+    var fontSize: CGFloat = 13
+    var horizontalPadding: CGFloat = 5
+    var verticalPadding: CGFloat = 4
+
+    func makeUIView(context: Context) -> DynamicHeightTextView {
+        let textView = DynamicHeightTextView()
+        textView.maxHeight = maxHeight
+        textView.delegate = context.coordinator
+        textView.isScrollEnabled = false  // Start with scroll disabled, enable when needed
+        textView.showsVerticalScrollIndicator = true
+        textView.backgroundColor = .clear
+        textView.textContainerInset = UIEdgeInsets(
+            top: verticalPadding,
+            left: horizontalPadding - 3,  // Slight inset adjustment
+            bottom: verticalPadding,
+            right: horizontalPadding - 3
+        )
+        textView.textContainer.lineFragmentPadding = 0
+        textView.font = UIFont.systemFont(ofSize: fontSize)
+        textView.isEditable = !isDisabled
+        textView.keyboardDismissMode = .interactive
+
+        // Store fontSize in coordinator for later use
+        context.coordinator.fontSize = fontSize
+
+        // Set content hugging and compression resistance for dynamic height
+        textView.setContentHuggingPriority(.required, for: .vertical)
+        textView.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        return textView
+    }
+
+    func updateUIView(_ textView: DynamicHeightTextView, context: Context) {
+        textView.maxHeight = maxHeight
+        textView.isEditable = !isDisabled
+
+        // Check if text actually changed (from external source, not from typing)
+        let currentText = textView.text ?? ""
+        if currentText != text {
+            // Text changed externally - update the text view
+            updateAttributedText(textView, context: context)
+        }
+        // Note: We don't update attributes on every keystroke to avoid keyboard dismissal
+        // Rainbow colors will be applied when text changes externally or on initial load
+
+        // Update placeholder visibility
+        context.coordinator.updatePlaceholder(textView, isEmpty: text.isEmpty)
+
+        // Calculate height and enable/disable scrolling (only if bounds are valid)
+        if textView.bounds.width > 0 {
+            let size = textView.sizeThatFits(CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude))
+            let shouldScroll = size.height > maxHeight
+            if textView.isScrollEnabled != shouldScroll {
+                textView.isScrollEnabled = shouldScroll
+            }
+            // Report content height for shimmer decision
+            if contentHeight != size.height {
+                AppLogger.log("[RainbowTextView] Content height changed: \(size.height), maxHeight=\(maxHeight), textView.frame.height=\(textView.frame.height)")
+                DispatchQueue.main.async {
+                    self.contentHeight = size.height
+                }
+            }
+        }
+
+        // Handle focus request from tap gesture
+        if requestFocus && !textView.isFirstResponder {
+            DispatchQueue.main.async {
+                textView.becomeFirstResponder()
+            }
+            // Reset the flag
+            DispatchQueue.main.async {
+                self.requestFocus = false
+            }
+        }
+
+        // Handle focus state binding - only when explicitly requested to focus
+        if let isFocused = isFocused, isFocused.wrappedValue, !textView.isFirstResponder {
+            DispatchQueue.main.async {
+                textView.becomeFirstResponder()
             }
         }
     }
 
-    /// Single computed property that calculates everything in one pass
-    /// This is computed once per render cycle by SwiftUI
-    private var rainbowData: RainbowData {
-        RainbowData.compute(text: text)
+    private func updateAttributedText(_ textView: UITextView, context: Context) {
+        let data = RainbowData.compute(text: text)
+        let currentFontSize = context.coordinator.fontSize
+
+        // Set flag to prevent textViewDidChange from firing during programmatic update
+        context.coordinator.isUpdatingText = true
+        defer { context.coordinator.isUpdatingText = false }
+
+        // Save first responder state - setting attributedText can dismiss keyboard
+        let wasFirstResponder = textView.isFirstResponder
+
+        if data.hasKeyword {
+            // Build NSAttributedString with rainbow colors
+            let nsAttrString = NSMutableAttributedString(string: text)
+
+            // Apply base text color and font (responsive)
+            let textColor = UIColor(ColorSystem.textPrimary)
+            let textFont = UIFont.systemFont(ofSize: currentFontSize)
+            nsAttrString.addAttribute(.foregroundColor, value: textColor, range: NSRange(location: 0, length: text.count))
+            nsAttrString.addAttribute(.font, value: textFont, range: NSRange(location: 0, length: text.count))
+
+            // Apply rainbow colors to keyword characters
+            for (index, char) in text.enumerated() {
+                if data.keywordCharIndices.contains(index) {
+                    let color = RainbowTextView.rainbowColor(for: index, in: data)
+                    nsAttrString.addAttribute(.foregroundColor, value: color, range: NSRange(location: index, length: 1))
+                }
+
+                // Check for bash mode "!" at start
+                if char == "!" && index == 0 {
+                    let bashColor = UIColor(ColorSystem.success)
+                    nsAttrString.addAttribute(.foregroundColor, value: bashColor, range: NSRange(location: index, length: 1))
+                }
+            }
+
+            textView.attributedText = nsAttrString
+        } else {
+            // No keyword - use plain text with normal color
+            textView.text = text
+            textView.textColor = UIColor(ColorSystem.textPrimary)
+            textView.font = UIFont.systemFont(ofSize: currentFontSize)
+        }
+
+        // Restore first responder if it was lost
+        if wasFirstResponder && !textView.isFirstResponder {
+            DispatchQueue.main.async {
+                textView.becomeFirstResponder()
+            }
+        }
+    }
+
+    static func rainbowColor(for charIndex: Int, in data: RainbowData) -> UIColor {
+        let keywordLength = 10 // "ultrathink"
+
+        // Rainbow colors matching Claude Code CLI
+        let rainbowColors: [UIColor] = [
+            UIColor(red: 224/255, green: 132/255, blue: 124/255, alpha: 1), // u - Coral
+            UIColor(red: 231/255, green: 144/255, blue: 98/255, alpha: 1),  // l - Peach
+            UIColor(red: 241/255, green: 197/255, blue: 111/255, alpha: 1), // t - Gold
+            UIColor(red: 157/255, green: 198/255, blue: 137/255, alpha: 1), // r - Sage
+            UIColor(red: 138/255, green: 169/255, blue: 216/255, alpha: 1), // a - Sky
+            UIColor(red: 166/255, green: 151/255, blue: 200/255, alpha: 1), // t - Lavender
+            UIColor(red: 197/255, green: 146/255, blue: 186/255, alpha: 1), // h - Mauve
+            UIColor(red: 224/255, green: 132/255, blue: 124/255, alpha: 1), // i - Coral
+            UIColor(red: 231/255, green: 144/255, blue: 98/255, alpha: 1),  // n - Peach
+            UIColor(red: 241/255, green: 197/255, blue: 111/255, alpha: 1), // k - Gold
+        ]
+
+        // Find position within keyword (0-9)
+        let sortedIndices = data.keywordCharIndices.sorted()
+        var keywordPosition = 0
+        for (i, idx) in sortedIndices.enumerated() {
+            if idx == charIndex {
+                keywordPosition = i % keywordLength
+                break
+            }
+        }
+
+        return rainbowColors[keywordPosition]
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, UITextViewDelegate {
+        var parent: RainbowTextView
+        var needsAttributeUpdate = false
+        var isUpdatingText = false  // Prevent feedback loop
+        var fontSize: CGFloat = 13  // Responsive font size
+        private weak var placeholderLabel: UILabel?  // Weak to avoid retain cycle
+
+        init(_ parent: RainbowTextView) {
+            self.parent = parent
+        }
+
+        deinit {
+            // Clean up placeholder label if still exists
+            placeholderLabel?.removeFromSuperview()
+        }
+
+        func updatePlaceholder(_ textView: UITextView, isEmpty: Bool) {
+            if placeholderLabel == nil {
+                let label = UILabel()
+                label.text = parent.placeholder
+                label.font = UIFont.systemFont(ofSize: fontSize)
+                label.textColor = UIColor(ColorSystem.textTertiary)
+                label.translatesAutoresizingMaskIntoConstraints = false
+                textView.addSubview(label)
+                NSLayoutConstraint.activate([
+                    label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: parent.horizontalPadding),
+                    label.centerYAnchor.constraint(equalTo: textView.centerYAnchor)
+                ])
+                placeholderLabel = label
+            }
+            // Update placeholder text in case it changed (e.g., bash mode toggle)
+            placeholderLabel?.text = parent.placeholder
+            placeholderLabel?.isHidden = !isEmpty
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            // Skip if we're programmatically updating text
+            guard !isUpdatingText else { return }
+
+            let newText = textView.text ?? ""
+            parent.text = newText
+            placeholderLabel?.isHidden = !newText.isEmpty
+
+            // Apply rainbow colors while typing (if keyword present)
+            let data = RainbowData.compute(text: newText)
+            if data.hasKeyword {
+                isUpdatingText = true
+                let selectedRange = textView.selectedRange
+
+                // Build attributed string with rainbow colors (responsive font)
+                let nsAttrString = NSMutableAttributedString(string: newText)
+                let textColor = UIColor(ColorSystem.textPrimary)
+                let textFont = UIFont.systemFont(ofSize: fontSize)
+                nsAttrString.addAttribute(.foregroundColor, value: textColor, range: NSRange(location: 0, length: newText.count))
+                nsAttrString.addAttribute(.font, value: textFont, range: NSRange(location: 0, length: newText.count))
+
+                // Apply rainbow colors to keyword characters
+                for (index, char) in newText.enumerated() {
+                    if data.keywordCharIndices.contains(index) {
+                        let color = RainbowTextView.rainbowColor(for: index, in: data)
+                        nsAttrString.addAttribute(.foregroundColor, value: color, range: NSRange(location: index, length: 1))
+                    }
+                    // Bash mode "!" at start
+                    if char == "!" && index == 0 {
+                        nsAttrString.addAttribute(.foregroundColor, value: UIColor(ColorSystem.success), range: NSRange(location: index, length: 1))
+                    }
+                }
+
+                textView.attributedText = nsAttrString
+
+                // Restore cursor position
+                if selectedRange.location <= newText.count {
+                    textView.selectedRange = selectedRange
+                }
+                isUpdatingText = false
+            }
+
+            // Force layout update for height change
+            if let dynamicTextView = textView as? DynamicHeightTextView {
+                dynamicTextView.invalidateIntrinsicContentSize()
+            }
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.isFocused?.wrappedValue = true
+            parent.isEditing = true
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            parent.isFocused?.wrappedValue = false
+            parent.isEditing = false
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            // Always allow text changes including newlines
+            // Submit is handled by the Send button, not Enter key
+            return true
+        }
     }
 }
 
@@ -69,7 +428,7 @@ private struct RainbowShimmerText: View {
     let baseText: String
     let keywordCharIndices: Set<Int>  // O(1) lookup
     let font: Font
-    let lineLimit: ClosedRange<Int>
+    let lineLimit: ClosedRange<Int>  // Match TextField line limit
     let startPosition: CGFloat
     let totalCharacters: Int
     let firstKeywordIndex: Int
@@ -85,13 +444,13 @@ private struct RainbowShimmerText: View {
 
             Text(attributedText)
                 .font(font)
-                .lineLimit(lineLimit.upperBound)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineSpacing(4)  // Match TextField line spacing
+                .lineLimit(lineLimit.upperBound)  // Allow all lines to display
                 .overlay {
                     Text(animatedMask)
                         .font(font)
-                        .lineLimit(lineLimit.upperBound)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(4)  // Match TextField line spacing
+                        .lineLimit(lineLimit.upperBound)  // Match base text
                         .blendMode(.plusLighter)
                 }
         }
@@ -326,6 +685,7 @@ extension RainbowTextField {
             font: font,
             axis: axis,
             lineLimit: lineLimit,
+            maxHeight: maxHeight,
             isDisabled: isDisabled,
             isFocused: binding,
             onSubmit: onSubmit
@@ -334,42 +694,101 @@ extension RainbowTextField {
 }
 
 /// Internal view that supports focus state
+/// Responsive: Adapts padding and sizing for iPhone (compact) vs iPad (regular)
 private struct RainbowTextFieldFocused: View {
     let placeholder: String
     @Binding var text: String
     let font: Font
     var axis: Axis
     var lineLimit: ClosedRange<Int>
+    var maxHeight: CGFloat
     var isDisabled: Bool
     var isFocused: FocusState<Bool>.Binding
     var onSubmit: (() -> Void)?
 
+    @State private var isEditing = false
+    @State private var requestFocus = false
+    @State private var contentHeight: CGFloat = 0
+    @State private var cachedRainbowData: RainbowData?
+    @State private var lastProcessedText: String = ""
+
+    // Responsive layout for iPad/iPhone
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    /// Cached rainbow data - only recomputes when text changes
+    private var rainbowData: RainbowData {
+        if let cached = cachedRainbowData, lastProcessedText == text {
+            return cached
+        }
+        return RainbowData.compute(text: text)
+    }
+
+    // Only show shimmer when content fits without scrolling
+    private var shouldShowShimmer: Bool {
+        !isEditing && rainbowData.hasKeyword && contentHeight <= maxHeight
+    }
+
+    // Responsive padding values
+    private var horizontalPadding: CGFloat { layout.isCompact ? 5 : 7 }
+    private var verticalPadding: CGFloat { layout.isCompact ? 4 : 6 }
+    private var fontSize: CGFloat { layout.isCompact ? 13 : 14 }
+
     var body: some View {
-        let data = RainbowData.compute(text: text)
+        let data = rainbowData  // Compute once per render
+        let showShimmer = !isEditing && data.hasKeyword && contentHeight <= maxHeight
 
-        ZStack(alignment: .leading) {
-            TextField(placeholder, text: $text, axis: axis)
-                .font(font)
-                .foregroundStyle(data.hasKeyword ? .clear : ColorSystem.textPrimary)
-                .lineLimit(lineLimit)
-                .submitLabel(.send)
-                .disabled(isDisabled)
-                .focused(isFocused)
-                .onSubmit { onSubmit?() }
+        ZStack(alignment: .topLeading) {
+            // UITextView for input - always present
+            RainbowTextView(
+                text: $text,
+                placeholder: placeholder,
+                maxHeight: maxHeight,
+                isDisabled: isDisabled,
+                onSubmit: onSubmit,
+                isFocused: isFocused,
+                isEditing: $isEditing,
+                requestFocus: $requestFocus,
+                contentHeight: $contentHeight,
+                fontSize: fontSize,
+                horizontalPadding: horizontalPadding,
+                verticalPadding: verticalPadding
+            )
+            // Hide text only when showing shimmer overlay
+            .opacity(showShimmer ? 0.01 : 1)
 
-            if data.hasKeyword {
+            // Shimmer overlay - only when not editing, has keyword, AND content fits
+            if showShimmer {
                 RainbowShimmerText(
                     attributedText: data.attributedText,
                     baseText: data.baseText,
                     keywordCharIndices: data.keywordCharIndices,
                     font: font,
-                    lineLimit: lineLimit,
+                    lineLimit: 1...100,
                     startPosition: data.firstKeywordPosition,
                     totalCharacters: data.totalCharacters,
                     firstKeywordIndex: data.firstKeywordIndex
                 )
-                .allowsHitTesting(false)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Explicitly request focus when tapping shimmer overlay
+                    requestFocus = true
+                }
             }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Tap anywhere to focus (when not already editing)
+            if !isEditing {
+                requestFocus = true
+            }
+        }
+        .onChange(of: text) { _, newText in
+            // Update cache when text changes
+            cachedRainbowData = RainbowData.compute(text: newText)
+            lastProcessedText = newText
         }
     }
 }

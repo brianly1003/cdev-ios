@@ -40,6 +40,7 @@ final class DashboardViewModel: ObservableObject {
 
     // UI State
     @Published var promptText: String = ""
+    @Published var isBashMode: Bool = false  // Persistent bash mode toggle
     @Published var isLoading: Bool = false
     @Published var error: AppError?
     @Published var showPromptSheet: Bool = false
@@ -181,6 +182,9 @@ final class DashboardViewModel: ObservableObject {
             // Initialize agentStatus with stored sessionId so refreshStatus preserves it
             self.agentStatus = AgentStatus(sessionId: storedId)
         }
+
+        // Load persisted bash mode state
+        self.isBashMode = UserDefaults.standard.bool(forKey: "dashboardBashMode")
 
         // Initialize with current connection state
         self.connectionState = webSocketService.connectionState
@@ -452,20 +456,38 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        let userMessage = promptText
+        var userMessage = promptText
         promptText = "" // Clear immediately for fast UX
+
+        // Check for built-in commands FIRST (before bash mode prefix)
+        // Slash commands like /resume, /clear, /new should work regardless of bash mode
+        if userMessage.hasPrefix("/") {
+            await handleCommand(userMessage)
+            return
+        }
+
+        // Bash mode handling: Auto-detect or apply mode
+        // 1. If user types ! in normal mode → auto-enable bash mode
+        // 2. If in bash mode → add ! prefix (unless already present)
+        if userMessage.hasPrefix("!") && !isBashMode {
+            // Auto-enable bash mode when user types ! in normal mode
+            isBashMode = true
+            UserDefaults.standard.set(true, forKey: "dashboardBashMode")
+            Haptics.light()
+            // Remove ! prefix since we'll track it's a bash command
+            userMessage = String(userMessage.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+
+        // Apply bash mode prefix if enabled
+        if isBashMode && !userMessage.hasPrefix("!") {
+            userMessage = "!" + userMessage
+        }
 
         // Track this prompt to deduplicate our own echo later
         let promptHash = hashPrompt(userMessage)
         sentPromptHashes[promptHash] = Date()
         cleanupExpiredPromptHashes()
         AppLogger.log("[Dashboard] Tracking sent prompt - hash: \(promptHash), text: '\(userMessage)'")
-
-        // Check for built-in commands (start with /)
-        if userMessage.hasPrefix("/") {
-            await handleCommand(userMessage)
-            return
-        }
 
         isLoading = true
         Haptics.light()
@@ -579,6 +601,14 @@ final class DashboardViewModel: ObservableObject {
         }
 
         isLoading = false
+    }
+
+    /// Toggle bash mode on/off with haptic feedback and persistence
+    func toggleBashMode() {
+        isBashMode.toggle()
+        UserDefaults.standard.set(isBashMode, forKey: "dashboardBashMode")
+        Haptics.selection()
+        AppLogger.log("[Dashboard] Bash mode toggled: \(isBashMode ? "ON" : "OFF")")
     }
 
     // MARK: - Built-in Commands
