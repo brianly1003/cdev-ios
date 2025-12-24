@@ -135,9 +135,9 @@ struct ManualWorkspaceAddView: View {
                 .foregroundStyle(ColorSystem.textSecondary)
 
             // Input field
-            HStack(spacing: Spacing.xs) {
+            HStack(spacing: layout.contentSpacing) {
                 Image(systemName: "folder")
-                    .font(.system(size: layout.iconSmall))
+                    .font(.system(size: layout.iconMedium))
                     .foregroundStyle(ColorSystem.textTertiary)
 
                 TextField("", text: $path, prompt: Text("/Users/you/projects/repo").foregroundStyle(ColorSystem.textQuaternary))
@@ -154,15 +154,17 @@ struct ManualWorkspaceAddView: View {
                         }
                     }
 
-                // Clear button
+                // Clear button - use iconAction for better tap target
                 if !path.isEmpty {
                     Button {
                         path = ""
                         Haptics.light()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: layout.iconSmall))
+                            .font(.system(size: layout.iconAction))
                             .foregroundStyle(ColorSystem.textTertiary)
+                            .frame(width: layout.buttonHeightSmall, height: layout.buttonHeightSmall)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
