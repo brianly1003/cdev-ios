@@ -1,6 +1,47 @@
 import SwiftUI
 import Combine
 
+// MARK: - Server Connection Status
+
+/// Status of connection to the workspace manager server
+enum ServerConnectionStatus: Equatable {
+    case connected
+    case connecting(attempt: Int, maxAttempts: Int)
+    case disconnected
+    case unreachable(lastError: String?)
+
+    var isConnected: Bool {
+        if case .connected = self { return true }
+        return false
+    }
+
+    var isConnecting: Bool {
+        if case .connecting = self { return true }
+        return false
+    }
+
+    var statusText: String {
+        switch self {
+        case .connected:
+            return "Connected"
+        case .connecting(let attempt, let max):
+            return "Connecting... (\(attempt)/\(max))"
+        case .disconnected:
+            return "Disconnected"
+        case .unreachable:
+            return "Server Unreachable"
+        }
+    }
+
+    var statusColor: Color {
+        switch self {
+        case .connected: return ColorSystem.success
+        case .connecting: return ColorSystem.warning
+        case .disconnected, .unreachable: return ColorSystem.error
+        }
+    }
+}
+
 // MARK: - Workspace Operation Type
 
 /// Type of operation being performed on a workspace
@@ -42,9 +83,17 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Track workspaces that failed to connect (observed from service)
     @Published private(set) var unreachableWorkspaceIds: Set<String> = []
 
-    /// Error state
+    /// Error state (now used for inline display, not popup)
     @Published var error: WorkspaceManagerError?
     @Published var showError: Bool = false
+
+    /// Server connection status (non-blocking)
+    @Published private(set) var serverStatus: ServerConnectionStatus = .disconnected
+
+    /// Retry configuration
+    let maxRetryAttempts = 10
+    private var currentRetryAttempt = 0
+    private var retryTask: Task<Void, Never>?
 
     /// Currently active workspace (connected to agent)
     @Published var currentWorkspaceId: String?
@@ -91,7 +140,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Check if connected to server (WebSocket is active)
     var isConnected: Bool {
-        webSocketService.isConnected
+        serverStatus.isConnected
     }
 
     /// Loading state for connecting
@@ -116,13 +165,18 @@ final class WorkspaceManagerViewModel: ObservableObject {
         // This ensures "Current" badge shows correctly when reopening the view
         self.currentWorkspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
 
-        // Mark connection check as complete if:
-        // - Already connected (no need to reconnect)
-        // - No saved manager (will show setup sheet)
-        if webSocketService.isConnected || !managerStore.hasManager {
+        // Initialize serverStatus based on current WebSocket state
+        if webSocketService.isConnected {
+            self.serverStatus = .connected
             self.hasCheckedConnection = true
+        } else if !managerStore.hasManager {
+            self.serverStatus = .disconnected
+            self.hasCheckedConnection = true
+        } else {
+            // Has saved manager but not connected - will try to connect
+            self.serverStatus = .disconnected
+            self.hasCheckedConnection = false
         }
-        // Otherwise hasCheckedConnection stays false until connectToSavedManager completes
 
         setupBindings()
     }
@@ -163,28 +217,103 @@ final class WorkspaceManagerViewModel: ObservableObject {
         guard let host = managerStore.lastHost else {
             isConnecting = false
             hasCheckedConnection = true
+            serverStatus = .disconnected
             showSetupSheet = true
             return
         }
 
-        await connect(to: host)
+        await connectWithRetry(to: host)
     }
 
-    /// Connect to server at specified host
-    /// Establishes WebSocket connection and refreshes workspaces
-    func connect(to host: String) async {
+    /// Connect to server with automatic retry
+    /// Shows progress in serverStatus
+    func connectWithRetry(to host: String) async {
+        // Cancel any existing retry task
+        retryTask?.cancel()
+        currentRetryAttempt = 0
+
         isConnecting = true
-        defer {
-            isConnecting = false
-            hasCheckedConnection = true
+        hasCheckedConnection = true  // Mark as checked immediately so UI doesn't show initial loading
+
+        // Save the host early so UI can show it
+        managerStore.saveHost(host)
+        managerService.setCurrentHost(host)
+
+        // Build connection info
+        let connectionInfo = buildConnectionInfo(for: host)
+
+        // Retry loop
+        while currentRetryAttempt < maxRetryAttempts {
+            currentRetryAttempt += 1
+            serverStatus = .connecting(attempt: currentRetryAttempt, maxAttempts: maxRetryAttempts)
+            AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt)/\(maxRetryAttempts) to \(host)")
+
+            do {
+                try await webSocketService.connect(to: connectionInfo)
+                // Success!
+                serverStatus = .connected
+                isConnecting = false
+                currentRetryAttempt = 0
+                await refreshWorkspaces()
+                Haptics.success()
+                AppLogger.log("[WorkspaceManager] Connected successfully to \(host)")
+                return
+            } catch {
+                AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt) failed: \(error.localizedDescription)")
+
+                // Check if cancelled
+                if Task.isCancelled {
+                    serverStatus = .disconnected
+                    isConnecting = false
+                    return
+                }
+
+                // If not last attempt, wait before retry
+                if currentRetryAttempt < maxRetryAttempts {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2 seconds between retries
+                } else {
+                    // All retries exhausted
+                    serverStatus = .unreachable(lastError: error.localizedDescription)
+                    self.error = .rpcError(code: -1, message: "Could not connect after \(maxRetryAttempts) attempts")
+                    Haptics.error()
+                }
+            }
         }
 
-        // Determine if host is local (IP or .local)
+        isConnecting = false
+    }
+
+    /// Single connection attempt (for manual retry)
+    func connect(to host: String) async {
+        await connectWithRetry(to: host)
+    }
+
+    /// Retry connection to current saved host
+    func retryConnection() async {
+        guard let host = managerStore.lastHost else {
+            showSetupSheet = true
+            return
+        }
+        await connectWithRetry(to: host)
+    }
+
+    /// Cancel ongoing connection attempts
+    func cancelConnection() {
+        retryTask?.cancel()
+        retryTask = nil
+        currentRetryAttempt = 0
+        isConnecting = false
+        if !webSocketService.isConnected {
+            serverStatus = .disconnected
+        }
+    }
+
+    /// Build connection info for a host
+    private func buildConnectionInfo(for host: String) -> ConnectionInfo {
         let isLocal = isLocalHost(host)
         let wsScheme = isLocal ? "ws" : "wss"
         let httpScheme = isLocal ? "http" : "https"
 
-        // Build URLs for single-port server (8766)
         let wsURL: URL
         let httpURL: URL
 
@@ -192,33 +321,16 @@ final class WorkspaceManagerViewModel: ObservableObject {
             wsURL = URL(string: "\(wsScheme)://\(host):\(ServerConnection.serverPort)/ws")!
             httpURL = URL(string: "\(httpScheme)://\(host):\(ServerConnection.serverPort)")!
         } else {
-            // Dev tunnels: host already includes port in subdomain
             wsURL = URL(string: "\(wsScheme)://\(host)/ws")!
             httpURL = URL(string: "\(httpScheme)://\(host)")!
         }
 
-        // Save the host
-        managerStore.saveHost(host)
-        managerService.setCurrentHost(host)
-
-        // Connect WebSocket
-        let connectionInfo = ConnectionInfo(
+        return ConnectionInfo(
             webSocketURL: wsURL,
             httpURL: httpURL,
             sessionId: "",
             repoName: "Workspaces"
         )
-
-        do {
-            try await webSocketService.connect(to: connectionInfo)
-            // Refresh workspaces after connection
-            await refreshWorkspaces()
-            Haptics.success()
-        } catch {
-            self.error = .rpcError(code: -1, message: "Connection failed: \(error.localizedDescription)")
-            self.showError = true
-            Haptics.error()
-        }
     }
 
     /// Check if host is a local network address

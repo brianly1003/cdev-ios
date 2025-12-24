@@ -218,11 +218,10 @@ struct DashboardView: View {
                     AdminToolsView()
                         .responsiveSheet()
                 }
-                .sheet(isPresented: $showSettings) {
+                .fullScreenCover(isPresented: $showSettings) {
                     SettingsView(onDisconnect: {
                         Task { await viewModel.disconnect() }
                     })
-                    .responsiveSheet()
                 }
                 .sheet(isPresented: $viewModel.showSessionPicker) {
                     SessionPickerView(

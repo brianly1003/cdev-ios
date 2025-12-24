@@ -5,6 +5,7 @@ import SwiftUI
 struct cdevApp: App {
     @StateObject private var appState = DependencyContainer.shared.makeAppState()
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showSplash = true
 
     init() {
         // Configure WorkspaceManagerService with WebSocket connection
@@ -16,11 +17,28 @@ struct cdevApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(appState: appState)
-                .preferredColorScheme(colorScheme)
-                .onChange(of: scenePhase) { _, newPhase in
-                    handleScenePhaseChange(newPhase)
+            ZStack {
+                RootView(appState: appState)
+                    .preferredColorScheme(colorScheme)
+                    .onChange(of: scenePhase) { _, newPhase in
+                        handleScenePhaseChange(newPhase)
+                    }
+
+                // Splash screen overlay
+                if showSplash {
+                    SplashScreen()
+                        .transition(.opacity)
+                        .zIndex(1)
                 }
+            }
+            .onAppear {
+                // Delay before dismissing splash
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    withAnimation(.easeOut(duration: 0.4)) {
+                        showSplash = false
+                    }
+                }
+            }
         }
     }
 
@@ -50,6 +68,47 @@ struct cdevApp: App {
             webSocketService.handleAppWillResignActive()
         @unknown default:
             break
+        }
+    }
+}
+
+// MARK: - Splash Screen
+
+/// Branded splash screen with app logo
+struct SplashScreen: View {
+    @State private var logoScale: CGFloat = 0.8
+    @State private var logoOpacity: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Background - matches launch screen
+            Color(red: 0.082, green: 0.086, blue: 0.106)
+                .ignoresSafeArea()
+
+            VStack(spacing: Spacing.md) {
+                // App Logo with animation
+                Image("AppLogo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 120, height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 26))
+                    .shadow(color: Color.black.opacity(0.4), radius: 20, x: 0, y: 10)
+                    .scaleEffect(logoScale)
+                    .opacity(logoOpacity)
+
+                // App name
+                Text("Cdev")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .opacity(logoOpacity)
+            }
+        }
+        .onAppear {
+            // Animate logo appearance
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
+                logoScale = 1.0
+                logoOpacity = 1.0
+            }
         }
     }
 }

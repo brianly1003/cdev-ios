@@ -19,9 +19,6 @@ struct WorkspaceManagerView: View {
     /// Show debug logs sheet (for FloatingToolkit)
     @State private var showDebugLogs: Bool = false
 
-    /// Track if connection has failed (prevents auto-reconnect loops)
-    @State private var hasConnectionFailed: Bool = false
-
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     /// Toolkit items for FloatingToolkitButton (only shows Debug when root view)
@@ -34,21 +31,31 @@ struct WorkspaceManagerView: View {
     var body: some View {
         ZStack {
             NavigationStack {
-                ZStack {
-                    // Background
-                    ColorSystem.terminalBg
-                        .ignoresSafeArea()
+                VStack(spacing: 0) {
+                    // Server connection status banner (non-blocking)
+                    ServerConnectionBanner(
+                        status: viewModel.serverStatus,
+                        host: viewModel.savedHost,
+                        onRetry: {
+                            Task { await viewModel.retryConnection() }
+                        },
+                        onCancel: {
+                            viewModel.cancelConnection()
+                        },
+                        onChangeServer: {
+                            viewModel.showSetupSheet = true
+                        }
+                    )
 
-                    if viewModel.isConnected {
-                        connectedContent
-                    } else if !viewModel.hasCheckedConnection {
-                        // Show connecting state while checking saved connection
-                        connectingContent
+                    // Main content - always show workspace list structure
+                    if viewModel.hasSavedManager {
+                        workspaceListContent
                     } else {
-                        disconnectedContent
+                        noServerConfiguredContent
                     }
                 }
-            .navigationTitle("Workspaces")
+                .background(ColorSystem.terminalBg.ignoresSafeArea())
+                .navigationTitle("Workspaces")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if showDismissButton {
@@ -60,22 +67,31 @@ struct WorkspaceManagerView: View {
                     }
                 }
 
-                if viewModel.isConnected {
+                // Always show menu when we have a saved manager
+                if viewModel.hasSavedManager {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            Button {
-                                viewModel.showDiscoverySheet = true
-                            } label: {
-                                Label("Discover Repos", systemImage: "magnifyingglass")
+                            if viewModel.isConnected {
+                                Button {
+                                    viewModel.showDiscoverySheet = true
+                                } label: {
+                                    Label("Discover Repos", systemImage: "magnifyingglass")
+                                }
+
+                                Button {
+                                    Task { await viewModel.refreshWorkspaces() }
+                                } label: {
+                                    Label("Refresh", systemImage: "arrow.clockwise")
+                                }
+
+                                Divider()
                             }
 
                             Button {
-                                Task { await viewModel.refreshWorkspaces() }
+                                viewModel.showSetupSheet = true
                             } label: {
-                                Label("Refresh", systemImage: "arrow.clockwise")
+                                Label("Change Server", systemImage: "server.rack")
                             }
-
-                            Divider()
 
                             Button(role: .destructive) {
                                 viewModel.resetManager()
@@ -92,8 +108,6 @@ struct WorkspaceManagerView: View {
             }
             .sheet(isPresented: $viewModel.showSetupSheet) {
                 ManagerSetupView { host in
-                    // Reset failure flag when user manually tries to connect
-                    hasConnectionFailed = false
                     Task {
                         await viewModel.connect(to: host)
                     }
@@ -115,33 +129,6 @@ struct WorkspaceManagerView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
-            .alert("Error", isPresented: $viewModel.showError) {
-                Button("Retry") {
-                    viewModel.showError = false
-                    // Reset failure flag and try again
-                    hasConnectionFailed = false
-                    Task {
-                        await viewModel.connectToSavedManager()
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    viewModel.showError = false
-                }
-            } message: {
-                Text(viewModel.error?.localizedDescription ?? "Unknown error")
-            }
-            .onChange(of: viewModel.showError) { _, newValue in
-                // Mark connection as failed when error is shown
-                if newValue {
-                    hasConnectionFailed = true
-                }
-            }
-            .onChange(of: viewModel.isConnected) { _, newValue in
-                // Reset failure flag when successfully connected
-                if newValue {
-                    hasConnectionFailed = false
-                }
-            }
             .task {
                 // Auto-connect or refresh on appear
                 // Skip if already connecting (prevents loops on view re-appearance)
@@ -153,16 +140,12 @@ struct WorkspaceManagerView: View {
                 if viewModel.isConnected {
                     // Already connected - just refresh workspace list
                     await viewModel.refreshWorkspaces()
-                } else if viewModel.hasSavedManager && !hasConnectionFailed {
-                    // Not connected but have saved manager - try to reconnect (once)
+                } else if viewModel.hasSavedManager {
+                    // Not connected but have saved manager - try to reconnect with retry
                     await viewModel.connectToSavedManager()
-                } else if !viewModel.hasSavedManager {
+                } else {
                     // No saved manager - show setup
                     viewModel.showSetupSheet = true
-                } else if hasConnectionFailed {
-                    // Had a saved manager but connection failed - mark check as complete
-                    // This shows "Not Connected" instead of endless "Connecting..."
-                    viewModel.markConnectionChecked()
                 }
             }
             .sheet(isPresented: $showDebugLogs) {
@@ -174,92 +157,6 @@ struct WorkspaceManagerView: View {
             // Floating toolkit button with Debug Logs only
             FloatingToolkitButton(items: toolkitItems) { _ in }
         } // End outer ZStack
-    }
-
-    // MARK: - Connected Content
-
-    private var connectedContent: some View {
-        VStack(spacing: 0) {
-            // Search bar
-            searchBar
-                .padding(.horizontal, layout.standardPadding)
-                .padding(.vertical, layout.smallPadding)
-
-            // Status summary
-            statusSummary
-                .padding(.horizontal, layout.standardPadding)
-                .padding(.bottom, layout.smallPadding)
-
-            Divider()
-                .background(ColorSystem.terminalBgHighlight)
-
-            // Workspace list
-            if viewModel.isLoading && viewModel.workspaces.isEmpty {
-                loadingView
-            } else if viewModel.filteredWorkspaces.isEmpty {
-                emptyStateView
-            } else {
-                workspaceList
-            }
-        }
-        .dismissKeyboardOnTap()
-    }
-
-    // MARK: - Connecting Content (initial check)
-
-    private var connectingContent: some View {
-        VStack(spacing: Spacing.lg) {
-            ProgressView()
-                .scaleEffect(1.5)
-
-            Text("Connecting...")
-                .font(Typography.body)
-                .foregroundStyle(ColorSystem.textSecondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Disconnected Content
-
-    private var disconnectedContent: some View {
-        VStack(spacing: Spacing.lg) {
-            if viewModel.isConnecting {
-                ProgressView()
-                    .scaleEffect(1.5)
-
-                Text("Connecting...")
-                    .font(Typography.body)
-                    .foregroundStyle(ColorSystem.textSecondary)
-            } else {
-                Image(systemName: "network.slash")
-                    .font(.system(size: 48))
-                    .foregroundStyle(ColorSystem.textTertiary)
-
-                Text("Not Connected")
-                    .font(Typography.title3)
-                    .foregroundStyle(ColorSystem.textPrimary)
-
-                Text("Connect to a workspace manager to view and manage your workspaces.")
-                    .font(Typography.body)
-                    .foregroundStyle(ColorSystem.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, Spacing.xl)
-
-                Button {
-                    viewModel.showSetupSheet = true
-                } label: {
-                    Label("Connect", systemImage: "wifi")
-                        .font(Typography.buttonLabel)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, Spacing.lg)
-                        .padding(.vertical, Spacing.sm)
-                        .background(ColorSystem.primary)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Search Bar
@@ -469,10 +366,227 @@ struct WorkspaceManagerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    // MARK: - Workspace List Content
+
+    /// Content showing the workspace list (works in both connected and disconnected states)
+    private var workspaceListContent: some View {
+        VStack(spacing: 0) {
+            // Search bar
+            searchBar
+                .padding(.horizontal, layout.standardPadding)
+                .padding(.vertical, layout.smallPadding)
+
+            // Status summary (only when connected)
+            if viewModel.isConnected {
+                statusSummary
+                    .padding(.horizontal, layout.standardPadding)
+                    .padding(.bottom, layout.smallPadding)
+            }
+
+            Divider()
+                .background(ColorSystem.terminalBgHighlight)
+
+            // Workspace list
+            if viewModel.isLoading && viewModel.workspaces.isEmpty {
+                loadingView
+            } else if viewModel.filteredWorkspaces.isEmpty {
+                emptyStateView
+            } else {
+                workspaceList
+            }
+        }
+        .dismissKeyboardOnTap()
+    }
+
+    // MARK: - No Server Configured Content
+
+    /// Content shown when no server has been configured yet
+    private var noServerConfiguredContent: some View {
+        VStack(spacing: Spacing.lg) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 48))
+                .foregroundStyle(ColorSystem.textTertiary)
+
+            Text("No Server Configured")
+                .font(Typography.title3)
+                .foregroundStyle(ColorSystem.textPrimary)
+
+            Text("Connect to a workspace manager to view and manage your remote workspaces.")
+                .font(Typography.body)
+                .foregroundStyle(ColorSystem.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Spacing.xl)
+
+            Button {
+                viewModel.showSetupSheet = true
+            } label: {
+                Label("Connect to Server", systemImage: "wifi")
+                    .font(Typography.buttonLabel)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, Spacing.lg)
+                    .padding(.vertical, Spacing.sm)
+                    .background(ColorSystem.primary)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Server Connection Banner
+
+/// Non-blocking banner showing server connection status with actions
+struct ServerConnectionBanner: View {
+    let status: ServerConnectionStatus
+    let host: String?
+    var onRetry: (() -> Void)?
+    var onCancel: (() -> Void)?
+    var onChangeServer: (() -> Void)?
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        // Only show banner when not connected
+        if !status.isConnected {
+            HStack(spacing: Spacing.sm) {
+                // Status indicator
+                HStack(spacing: Spacing.xxs) {
+                    statusIcon
+                        .font(.system(size: layout.iconSmall))
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(status.statusText)
+                            .font(Typography.caption1)
+                            .fontWeight(.medium)
+                            .foregroundStyle(status.statusColor)
+
+                        if let host = host {
+                            Text(host)
+                                .font(Typography.terminalSmall)
+                                .foregroundStyle(ColorSystem.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                Spacer()
+
+                // Action buttons
+                HStack(spacing: Spacing.xs) {
+                    switch status {
+                    case .connecting:
+                        // Cancel button during connection attempts
+                        Button {
+                            onCancel?()
+                        } label: {
+                            Text("Cancel")
+                                .font(Typography.caption1)
+                                .fontWeight(.medium)
+                                .foregroundStyle(ColorSystem.textSecondary)
+                                .padding(.horizontal, Spacing.sm)
+                                .padding(.vertical, Spacing.xxs)
+                                .background(ColorSystem.terminalBgElevated)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                    case .disconnected, .unreachable:
+                        // Retry button
+                        Button {
+                            onRetry?()
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                                .font(Typography.caption1)
+                                .fontWeight(.medium)
+                                .foregroundStyle(ColorSystem.primary)
+                                .padding(.horizontal, Spacing.sm)
+                                .padding(.vertical, Spacing.xxs)
+                                .background(ColorSystem.primary.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        // Change server button
+                        Button {
+                            onChangeServer?()
+                        } label: {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: layout.iconSmall))
+                                .foregroundStyle(ColorSystem.textSecondary)
+                                .padding(Spacing.xxs)
+                                .background(ColorSystem.terminalBgElevated)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+
+                    case .connected:
+                        EmptyView()
+                    }
+                }
+            }
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, Spacing.xs)
+            .background(bannerBackground)
+        }
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch status {
+        case .connected:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(ColorSystem.success)
+        case .connecting:
+            ProgressView()
+                .scaleEffect(0.7)
+        case .disconnected:
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(ColorSystem.textTertiary)
+        case .unreachable:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(ColorSystem.error)
+        }
+    }
+
+    private var bannerBackground: some View {
+        switch status {
+        case .connected:
+            return ColorSystem.success.opacity(0.08)
+        case .connecting:
+            return ColorSystem.warning.opacity(0.08)
+        case .disconnected:
+            return ColorSystem.terminalBgElevated
+        case .unreachable:
+            return ColorSystem.error.opacity(0.08)
+        }
+    }
 }
 
 // MARK: - Preview
 
 #Preview {
     WorkspaceManagerView()
+}
+
+#Preview("Connection Banner - Connecting") {
+    VStack(spacing: 16) {
+        ServerConnectionBanner(
+            status: .connecting(attempt: 3, maxAttempts: 10),
+            host: "192.168.1.100"
+        )
+
+        ServerConnectionBanner(
+            status: .disconnected,
+            host: "192.168.1.100"
+        )
+
+        ServerConnectionBanner(
+            status: .unreachable(lastError: "Connection refused"),
+            host: "192.168.1.100"
+        )
+    }
+    .background(ColorSystem.terminalBg)
 }

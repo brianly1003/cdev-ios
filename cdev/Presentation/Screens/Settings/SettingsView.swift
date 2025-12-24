@@ -29,6 +29,9 @@ struct SettingsView: View {
 
                 ScrollView {
                     VStack(spacing: Spacing.sm) {
+                        // Branded Header
+                        BrandedHeader()
+
                         // Appearance Section (Themes coming soon)
                         SettingsSection(title: "Appearance", icon: "paintpalette") {
                             SettingsToggleRow(
@@ -134,19 +137,6 @@ struct SettingsView: View {
                             )
                         }
 
-                        // Footer
-                        VStack(spacing: 2) {
-                            Text("cdev")
-                                .font(Typography.bodyBold)
-                                .foregroundStyle(ColorSystem.textSecondary)
-
-                            Text("by Brian Ly")
-                                .font(Typography.caption1)
-                                .foregroundStyle(ColorSystem.textTertiary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, Spacing.sm)
-                        .padding(.bottom, Spacing.lg)
                     }
                     .padding(.horizontal, Spacing.xs)
                     .padding(.top, Spacing.xs)
@@ -416,6 +406,51 @@ private struct SettingsLinkRow: View {
             .padding(.vertical, Spacing.xs)
             .background(ColorSystem.terminalBgElevated)
         }
+    }
+}
+
+// MARK: - Branded Header
+
+private struct BrandedHeader: View {
+    var body: some View {
+        VStack(spacing: Spacing.sm) {
+            // App Icon
+            Image("AppLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
+
+            // App Name & Tagline
+            VStack(spacing: 2) {
+                Text("Cdev")
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text("Mobile companion for Claude Code")
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            // Credits - compact inline
+            HStack(spacing: Spacing.xxs) {
+                Text("Made with")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.21)) // Brand orange
+
+                Text("by Brian Ly")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Spacing.md)
+        .padding(.bottom, Spacing.xs)
     }
 }
 
