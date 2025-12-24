@@ -1469,7 +1469,18 @@ final class DashboardViewModel: ObservableObject {
             // NEW: Structured message with content blocks
             // Convert to ChatElements for sophisticated UI
             if case .claudeMessage(let payload) = event.payload {
-                AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil")")
+                // IMPORTANT: Validate session ID to prevent messages from other sessions
+                // Skip this event if it belongs to a different session than the one we're viewing
+                if let eventSessionId = payload.sessionId,
+                   !eventSessionId.isEmpty,
+                   let selectedSessionId = userSelectedSessionId,
+                   !selectedSessionId.isEmpty,
+                   eventSessionId != selectedSessionId {
+                    AppLogger.log("[Dashboard] claude_message skipped - session mismatch (event: \(eventSessionId), selected: \(selectedSessionId))")
+                    return
+                }
+
+                AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil"), sessionId: \(payload.sessionId ?? "nil")")
 
                 // Skip user message echoes from real-time events (already shown optimistically)
                 // BUT ONLY skip messages sent by THIS CLIENT, not from other clients (e.g., Claude Code CLI)
