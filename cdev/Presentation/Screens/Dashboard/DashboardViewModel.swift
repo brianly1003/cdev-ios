@@ -827,6 +827,16 @@ final class DashboardViewModel: ObservableObject {
         hasActiveConversation = false  // Reset - will be set true on first prompt
         AppLogger.log("[Dashboard] User resumed session: \(sessionId)")
 
+        // Notify server of active session selection (for multi-device sync)
+        if let workspaceId = currentWorkspaceId {
+            do {
+                _ = try await _agentRepository.activateSession(workspaceId: workspaceId, sessionId: sessionId)
+            } catch {
+                AppLogger.log("[Dashboard] Failed to activate session: \(error)", type: .warning)
+                // Non-fatal - continue with resume flow
+            }
+        }
+
         // IMPORTANT: Start watching the new session BEFORE fetching messages
         // The workspace/session/messages API requires the session to be watched first
         await startWatchingCurrentSession()

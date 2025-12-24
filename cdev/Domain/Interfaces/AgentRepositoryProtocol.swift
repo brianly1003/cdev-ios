@@ -107,6 +107,13 @@ protocol AgentRepositoryProtocol {
     ///   - sessionId: Session being viewed
     /// - Returns: Focus result with information about other viewers
     func setSessionFocus(workspaceId: String, sessionId: String) async throws -> SessionFocusResult
+
+    /// Activate a session for a workspace (set as active/selected session)
+    /// - Parameters:
+    ///   - workspaceId: Workspace containing the session
+    ///   - sessionId: Session to activate
+    /// - Returns: Activation result with success status
+    func activateSession(workspaceId: String, sessionId: String) async throws -> SessionActivateResult
 }
 
 /// Response for deleting a single session

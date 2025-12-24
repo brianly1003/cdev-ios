@@ -610,6 +610,18 @@ final class AgentRepository: AgentRepositoryProtocol {
         return result
     }
 
+    /// Activate a session for a workspace (set as the active/selected session)
+    /// Called when user resumes a session from the session picker
+    func activateSession(workspaceId: String, sessionId: String) async throws -> SessionActivateResult {
+        let params = SessionActivateParams(workspaceId: workspaceId, sessionId: sessionId)
+        let result: SessionActivateResult = try await rpcClient.request(
+            method: JSONRPCMethod.workspaceSessionActivate,
+            params: params
+        )
+        AppLogger.log("[AgentRepository] Session activated: workspace=\(workspaceId), session=\(sessionId), success=\(result.success ?? false)")
+        return result
+    }
+
     // MARK: - Internal
 
     func updateStatus(from payload: StatusResponsePayload) {

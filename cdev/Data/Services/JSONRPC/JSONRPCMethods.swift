@@ -82,6 +82,7 @@ enum JSONRPCMethod {
     static let workspaceSessionMessages = "workspace/session/messages"
     static let workspaceSessionWatch = "workspace/session/watch"
     static let workspaceSessionUnwatch = "workspace/session/unwatch"
+    static let workspaceSessionActivate = "workspace/session/activate"
 
     // Client operations (multi-device awareness)
     static let clientSessionFocus = "client/session/focus"
@@ -1222,5 +1223,34 @@ struct SessionFocusResult: Codable, Sendable {
     /// Whether there are other viewers besides the caller
     var hasOtherViewers: Bool {
         (viewerCount ?? 0) > 1
+    }
+}
+
+// MARK: - Session Activate (Workspace Session Selection)
+
+/// Session activate request parameters
+/// Used to set the active session for a workspace when user resumes a session
+struct SessionActivateParams: Codable, Sendable {
+    let workspaceId: String
+    let sessionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
+    }
+}
+
+/// Session activate response result
+struct SessionActivateResult: Codable, Sendable {
+    let success: Bool?
+    let workspaceId: String?
+    let sessionId: String?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
+        case message
     }
 }
