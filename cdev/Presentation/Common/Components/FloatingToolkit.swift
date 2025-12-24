@@ -544,7 +544,7 @@ struct FloatingToolkitButton: View {
     @AppStorage("toolkit_position_x") private var savedX: Double = -1
     @AppStorage("toolkit_position_y") private var savedY: Double = -1
 
-    private let buttonSize: CGFloat = 48
+    private let buttonSize: CGFloat = 54
     private let menuItemSize: CGFloat = 44
     private let expandedRadius: CGFloat = 75
 
@@ -1305,15 +1305,20 @@ private struct MainButtonView: View {
     var isForceTouchActive: Bool = false
     let size: CGFloat
 
+    private var showGradientBackground: Bool {
+        isExpanded || isForceTouchActive
+    }
+
     var body: some View {
         ZStack {
-            // Outer glow (intensified during force touch)
+            // Outer glow (only when expanded/force touch)
             Circle()
                 .fill(ColorSystem.brand.opacity(isForceTouchActive ? 0.4 : 0.2))
                 .frame(width: size + (isForceTouchActive ? 16 : 8), height: size + (isForceTouchActive ? 16 : 8))
                 .blur(radius: isForceTouchActive ? 8 : 4)
+                .opacity(showGradientBackground ? 1 : 0)
 
-            // Main circle
+            // Gradient circle background (only when expanded/force touch)
             Circle()
                 .fill(
                     LinearGradient(
@@ -1324,16 +1329,34 @@ private struct MainButtonView: View {
                 )
                 .frame(width: size, height: size)
                 .shadow(color: ColorSystem.brandGlow, radius: isDragging || isForceTouchActive ? 12 : 6)
+                .opacity(showGradientBackground ? 1 : 0)
 
-            // Icon (changes during force touch)
-            Image(systemName: isForceTouchActive ? "arrow.up.arrow.down" : (isExpanded ? "xmark" : "wrench.and.screwdriver.fill"))
+            // App Logo glow (only when collapsed)
+            Circle()
+                .fill(ColorSystem.brand.opacity(0.25))
+                .frame(width: size + 6, height: size + 6)
+                .blur(radius: 6)
+                .opacity(showGradientBackground ? 0 : 1)
+
+            // App Logo (only when collapsed)
+            Image("AppLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+                .shadow(color: ColorSystem.brand.opacity(0.3), radius: isDragging ? 12 : 8)
+                .opacity(showGradientBackground ? 0 : 1)
+
+            // Icon (only when expanded/force touch)
+            Image(systemName: isForceTouchActive ? "arrow.up.arrow.down" : "xmark")
                 .font(.system(size: size * 0.4, weight: .bold))
                 .foregroundStyle(.white)
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .opacity(showGradientBackground ? 1 : 0)
         }
         .scaleEffect(isForceTouchActive ? 1.1 : (isDragging ? 1.15 : 1.0))
         .animation(.spring(response: 0.2), value: isDragging)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isForceTouchActive)
+        .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isExpanded)
         .contentShape(Circle()) // Ensure the entire circle is tappable
     }
 }

@@ -90,9 +90,7 @@ struct SplashScreen: View {
                 Image("AppLogo")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(width: 120, height: 120)
-                    .clipShape(RoundedRectangle(cornerRadius: 26))
-                    .shadow(color: Color.black.opacity(0.4), radius: 20, x: 0, y: 10)
+                    .frame(width: 80, height: 80)
                     .scaleEffect(logoScale)
                     .opacity(logoOpacity)
 

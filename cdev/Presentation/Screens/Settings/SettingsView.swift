@@ -133,7 +133,7 @@ struct SettingsView: View {
                             SettingsLinkRow(
                                 icon: "ladybug",
                                 title: "Report Issue",
-                                url: URL(string: "https://github.com/brianly1003/cdev-ios/issues")!
+                                url: URL(string: "https://github.com/brianly1003/cdev/issues")!
                             )
                         }
 
@@ -418,9 +418,7 @@ private struct BrandedHeader: View {
             Image("AppLogo")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
+                .frame(width: 80, height: 80)
 
             // App Name & Tagline
             VStack(spacing: 2) {

@@ -10,9 +10,6 @@ struct RootView: View {
     /// Track if user has selected a workspace from the manager
     @State private var hasSelectedWorkspace: Bool = false
 
-    /// Track connection failures to show error and return to workspace manager
-    @State private var showConnectionError: Bool = false
-    @State private var connectionErrorMessage: String = ""
 
     var body: some View {
         Group {
@@ -48,11 +45,10 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.3), value: appState.connectionState.isConnected)
         .onChange(of: appState.connectionState) { oldState, newState in
             // Handle connection failures - return to workspace manager
+            // Note: No popup alert - the WorkspaceManagerView banner shows status
             if case .failed(let reason) = newState {
                 AppLogger.log("[RootView] Connection failed: \(reason), returning to workspace manager")
                 hasSelectedWorkspace = false
-                connectionErrorMessage = reason
-                showConnectionError = true
                 // Clear active workspace on failure
                 WorkspaceStore.shared.clearActive()
             }
@@ -61,13 +57,6 @@ struct RootView: View {
                 AppLogger.log("[RootView] Disconnected, returning to workspace manager")
                 hasSelectedWorkspace = false
             }
-        }
-        .alert("Connection Failed", isPresented: $showConnectionError) {
-            Button("OK") {
-                showConnectionError = false
-            }
-        } message: {
-            Text(connectionErrorMessage.isEmpty ? "Could not connect to workspace" : connectionErrorMessage)
         }
         .onAppear {
             // Migration: Clear old saved workspaces from previous architecture

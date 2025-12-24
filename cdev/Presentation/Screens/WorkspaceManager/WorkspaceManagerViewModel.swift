@@ -93,7 +93,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Retry configuration
     let maxRetryAttempts = 10
     private var currentRetryAttempt = 0
-    private var retryTask: Task<Void, Never>?
+    private var connectionCancelled = false
 
     /// Currently active workspace (connected to agent)
     @Published var currentWorkspaceId: String?
@@ -228,8 +228,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Connect to server with automatic retry
     /// Shows progress in serverStatus
     func connectWithRetry(to host: String) async {
-        // Cancel any existing retry task
-        retryTask?.cancel()
+        // Reset cancellation flag
+        connectionCancelled = false
         currentRetryAttempt = 0
 
         isConnecting = true
@@ -243,7 +243,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
         let connectionInfo = buildConnectionInfo(for: host)
 
         // Retry loop
-        while currentRetryAttempt < maxRetryAttempts {
+        while currentRetryAttempt < maxRetryAttempts && !connectionCancelled {
             currentRetryAttempt += 1
             serverStatus = .connecting(attempt: currentRetryAttempt, maxAttempts: maxRetryAttempts)
             AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt)/\(maxRetryAttempts) to \(host)")
@@ -262,7 +262,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt) failed: \(error.localizedDescription)")
 
                 // Check if cancelled
-                if Task.isCancelled {
+                if connectionCancelled {
+                    AppLogger.log("[WorkspaceManager] Connection cancelled by user")
                     serverStatus = .disconnected
                     isConnecting = false
                     return
@@ -270,7 +271,11 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
                 // If not last attempt, wait before retry
                 if currentRetryAttempt < maxRetryAttempts {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2 seconds between retries
+                    // Sleep in small increments to check for cancellation
+                    for _ in 0..<20 {  // 20 x 100ms = 2 seconds
+                        if connectionCancelled { break }
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
                 } else {
                     // All retries exhausted
                     serverStatus = .unreachable(lastError: error.localizedDescription)
@@ -280,6 +285,10 @@ final class WorkspaceManagerViewModel: ObservableObject {
             }
         }
 
+        // Final check if cancelled during loop
+        if connectionCancelled {
+            serverStatus = .disconnected
+        }
         isConnecting = false
     }
 
@@ -299,13 +308,13 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Cancel ongoing connection attempts
     func cancelConnection() {
-        retryTask?.cancel()
-        retryTask = nil
+        connectionCancelled = true
         currentRetryAttempt = 0
         isConnecting = false
         if !webSocketService.isConnected {
             serverStatus = .disconnected
         }
+        AppLogger.log("[WorkspaceManager] Connection cancelled by user")
     }
 
     /// Build connection info for a host
