@@ -445,96 +445,72 @@ private struct DebugLogRowView: View {
         return .clear
     }
 
-    /// Accent bar color for direction
-    private var accentColor: Color {
-        if let direction = wsDirection {
-            switch direction {
-            case .outgoing:
-                return ColorSystem.primary  // Blue for outgoing
-            case .incoming:
-                return ColorSystem.success  // Green for incoming
-            case .status:
-                return ColorSystem.warning
-            }
-        }
-        return .clear
-    }
-
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 0) {
-                // Left accent bar for WebSocket direction
-                if wsDirection != nil {
-                    Rectangle()
-                        .fill(accentColor)
-                        .frame(width: 3)
-                }
+            HStack(spacing: Spacing.xs) {
+                // Category indicator with direction
+                WSCategoryIndicator(
+                    category: entry.category,
+                    level: entry.level,
+                    direction: wsDirection
+                )
 
-                HStack(spacing: Spacing.xs) {
-                    // Category indicator with direction
-                    WSCategoryIndicator(
-                        category: entry.category,
-                        level: entry.level,
-                        direction: wsDirection
-                    )
+                // Content
+                VStack(alignment: .leading, spacing: 2) {
+                    // Title row
+                    HStack(spacing: Spacing.xxs) {
+                        Text(entry.title)
+                            .font(Typography.terminal)
+                            .foregroundStyle(entry.level.color)
+                            .lineLimit(1)
 
-                    // Content
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Title row
-                        HStack(spacing: Spacing.xxs) {
-                            Text(entry.title)
-                                .font(Typography.terminal)
-                                .foregroundStyle(entry.level.color)
-                                .lineLimit(1)
+                        Spacer()
 
-                            Spacer()
-
-                            // Status badge for HTTP
-                            if case .http(let details) = entry.details {
-                                if let status = details.responseStatus {
-                                    StatusBadge(status: status)
-                                }
-                            }
-
-                            // Loading indicator (before timestamp)
-                            if isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .frame(width: 14, height: 14)
-                            }
-
-                            // Timestamp
-                            Text(entry.timeString)
-                                .font(Typography.terminalTimestamp)
-                                .foregroundStyle(ColorSystem.textQuaternary)
-                        }
-
-                        // Subtitle with session ID indicator
-                        if let subtitle = entry.subtitle {
-                            HStack(spacing: Spacing.xxs) {
-                                // Show session icon if this is a session ID
-                                if case .websocket(let details) = entry.details,
-                                   details.sessionId != nil {
-                                    Image(systemName: "person.circle")
-                                        .font(.system(size: 9))
-                                        .foregroundStyle(ColorSystem.textTertiary)
-                                }
-                                Text(subtitle)
-                                    .font(Typography.terminalSmall)
-                                    .foregroundStyle(ColorSystem.textTertiary)
-                                    .lineLimit(1)
+                        // Status badge for HTTP
+                        if case .http(let details) = entry.details {
+                            if let status = details.responseStatus {
+                                StatusBadge(status: status)
                             }
                         }
+
+                        // Loading indicator (before timestamp)
+                        if isLoading {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 14, height: 14)
+                        }
+
+                        // Timestamp
+                        Text(entry.timeString)
+                            .font(Typography.terminalTimestamp)
+                            .foregroundStyle(ColorSystem.textQuaternary)
                     }
 
-                    // Chevron
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ColorSystem.textQuaternary)
+                    // Subtitle with session ID indicator
+                    if let subtitle = entry.subtitle {
+                        HStack(spacing: Spacing.xxs) {
+                            // Show session icon if this is a session ID
+                            if case .websocket(let details) = entry.details,
+                               details.sessionId != nil {
+                                Image(systemName: "person.circle")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                            }
+                            Text(subtitle)
+                                .font(Typography.terminalSmall)
+                                .foregroundStyle(ColorSystem.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
-                .padding(.horizontal, Spacing.sm)
-                .padding(.vertical, Spacing.xs)
+
+                // Chevron
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textQuaternary)
             }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
             .background(rowBackground)
             .contentShape(Rectangle())
         }
