@@ -192,15 +192,21 @@ final class WorkspaceManagerService: ObservableObject {
     }
 
     /// Add a new workspace (register a repository)
+    /// - Parameters:
+    ///   - path: Absolute path to the git repository
+    ///   - name: Display name (if nil, derived from path's last component)
     func addWorkspace(path: String, name: String? = nil) async throws -> RemoteWorkspace {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
 
+        // Derive name from path if not provided (last path component)
+        let workspaceName = name ?? URL(fileURLWithPath: path).lastPathComponent
+
         let client = ws.getJSONRPCClient()
         let response: RemoteWorkspace = try await client.request(
             method: "workspace/add",
-            params: AddWorkspaceParams(path: path, name: name)
+            params: AddWorkspaceParams(path: path, name: workspaceName)
         )
 
         // Add to local workspaces list
@@ -661,7 +667,7 @@ private struct WorkspaceIdParams: Encodable {
 
 private struct AddWorkspaceParams: Encodable {
     let path: String
-    let name: String?
+    let name: String  // Required by API - derived from path if not provided
 }
 
 private struct DiscoverParams: Encodable {
