@@ -4,19 +4,89 @@ import SwiftUI
 /// Non-blocking design: Dashboard is shown during connecting/reconnecting so users can continue working
 struct RootView: View {
     @StateObject var appState: AppState
+    @ObservedObject private var managerStore = ManagerStore.shared
+    @ObservedObject private var workspaceStore = WorkspaceStore.shared
+
+    /// Track if user has selected a workspace from the manager
+    @State private var hasSelectedWorkspace: Bool = false
+
+    /// Track connection failures to show error and return to workspace manager
+    @State private var showConnectionError: Bool = false
+    @State private var connectionErrorMessage: String = ""
 
     var body: some View {
         Group {
-            // If has saved workspaces, always show Dashboard (connection status shown inline)
-            // This allows users to continue viewing Terminal, Changes, Explorer while reconnecting
-            if appState.hasWorkspaces {
+            // New architecture: Show WorkspaceManager first to let user choose
+            // Only show Dashboard after user selects a workspace AND connected
+            let showDashboard = hasSelectedWorkspace && workspaceStore.activeWorkspace != nil && appState.connectionState.isConnected
+            let _ = AppLogger.log("[RootView] Check: hasSelectedWorkspace=\(hasSelectedWorkspace), activeWorkspace=\(workspaceStore.activeWorkspace?.name ?? "nil"), isConnected=\(appState.connectionState.isConnected), showDashboard=\(showDashboard)")
+
+            if showDashboard {
                 DashboardView(viewModel: appState.makeDashboardViewModel())
             } else {
-                // No workspaces - show Pairing for first-time setup
-                PairingView(viewModel: appState.makePairingViewModel())
+                // Show Workspace Manager for multi-workspace management
+                // User must select a workspace before seeing Dashboard
+                WorkspaceManagerView(
+                    onConnectToWorkspace: { workspace, host in
+                        // When user connects to a remote workspace:
+                        // - Creates local workspace and connects to it
+                        // Returns true on success, false on failure
+                        AppLogger.log("[RootView] onConnectToWorkspace called for: \(workspace.name) on \(host)")
+                        let success = await appState.connectToRemoteWorkspace(workspace, host: host)
+                        AppLogger.log("[RootView] connectToRemoteWorkspace returned: \(success)")
+                        if success {
+                            AppLogger.log("[RootView] Setting hasSelectedWorkspace = true")
+                            hasSelectedWorkspace = true
+                        }
+                        return success
+                    },
+                    showDismissButton: false  // No dismiss button when used as root view
+                )
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: appState.hasWorkspaces)
+        .animation(.easeInOut(duration: 0.3), value: hasSelectedWorkspace)
+        .animation(.easeInOut(duration: 0.3), value: appState.connectionState.isConnected)
+        .onChange(of: appState.connectionState) { oldState, newState in
+            // Handle connection failures - return to workspace manager
+            if case .failed(let reason) = newState {
+                AppLogger.log("[RootView] Connection failed: \(reason), returning to workspace manager")
+                hasSelectedWorkspace = false
+                connectionErrorMessage = reason
+                showConnectionError = true
+                // Clear active workspace on failure
+                WorkspaceStore.shared.clearActive()
+            }
+            // Also handle disconnection while viewing dashboard
+            if case .disconnected = newState, oldState.isConnected {
+                AppLogger.log("[RootView] Disconnected, returning to workspace manager")
+                hasSelectedWorkspace = false
+            }
+        }
+        .alert("Connection Failed", isPresented: $showConnectionError) {
+            Button("OK") {
+                showConnectionError = false
+            }
+        } message: {
+            Text(connectionErrorMessage.isEmpty ? "Could not connect to workspace" : connectionErrorMessage)
+        }
+        .onAppear {
+            // Migration: Clear old saved workspaces from previous architecture
+            // They were created via QR pairing and don't work with the new system
+            migrateToNewArchitecture()
+        }
+    }
+
+    /// One-time migration to clear old workspace data
+    private func migrateToNewArchitecture() {
+        let migrationKey = "cdev.migrated_to_single_port_v1"
+
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            AppLogger.log("[RootView] Migrating to single-port architecture, clearing old workspaces")
+            // Clear old WorkspaceStore data
+            WorkspaceStore.shared.clearAll()
+            // Mark migration complete
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 }
 

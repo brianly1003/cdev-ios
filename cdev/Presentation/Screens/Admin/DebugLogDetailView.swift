@@ -11,7 +11,7 @@ struct DebugLogDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 // Header section
-                HeaderSection(entry: entry)
+                HeaderSection(entry: entry, onCopy: copyToClipboard)
 
                 // Content based on log type
                 switch entry.details {
@@ -62,6 +62,15 @@ struct DebugLogDetailView: View {
 
 private struct HeaderSection: View {
     let entry: DebugLogEntry
+    var onCopy: ((String) -> Void)?
+
+    /// Check if subtitle is a session ID (UUID format)
+    private var isSessionId: Bool {
+        guard let subtitle = entry.subtitle else { return false }
+        // UUID pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        let uuidPattern = #"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"#
+        return subtitle.range(of: uuidPattern, options: .regularExpression) != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -109,12 +118,26 @@ private struct HeaderSection: View {
                 .foregroundStyle(ColorSystem.textPrimary)
                 .textSelection(.enabled)
 
-            // Subtitle
+            // Subtitle with copy button if it's a session ID
             if let subtitle = entry.subtitle {
-                Text(subtitle)
-                    .font(Typography.terminal)
-                    .foregroundStyle(ColorSystem.textSecondary)
-                    .textSelection(.enabled)
+                HStack(spacing: Spacing.xs) {
+                    Text(subtitle)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                        .textSelection(.enabled)
+
+                    // Copy button for session IDs
+                    if isSessionId, let onCopy = onCopy {
+                        Button {
+                            onCopy(subtitle)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10))
+                                .foregroundStyle(ColorSystem.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
         .padding(Spacing.sm)

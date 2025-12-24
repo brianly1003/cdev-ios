@@ -5,6 +5,7 @@ import SwiftUI
 struct SessionPickerView: View {
     let sessions: [SessionsResponse.SessionInfo]
     let currentSessionId: String?
+    let workspaceId: String?
     let hasMore: Bool
     let isLoadingMore: Bool
     let agentRepository: AgentRepositoryProtocol
@@ -69,6 +70,7 @@ struct SessionPickerView: View {
                                 SessionHistoryView(
                                     session: session,
                                     agentRepository: agentRepository,
+                                    workspaceId: workspaceId,
                                     onResume: {
                                         onSelect(session.sessionId)
                                     }

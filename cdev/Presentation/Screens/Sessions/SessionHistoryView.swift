@@ -4,6 +4,7 @@ import SwiftUI
 /// Displays conversation messages in a terminal-like format with tool use blocks
 struct SessionHistoryView: View {
     let session: SessionsResponse.SessionInfo
+    let workspaceId: String?
     let onResume: (() -> Void)?
     @StateObject private var viewModel: SessionHistoryViewModel
     @Environment(\.dismiss) private var dismiss
@@ -11,12 +12,15 @@ struct SessionHistoryView: View {
     init(
         session: SessionsResponse.SessionInfo,
         agentRepository: AgentRepositoryProtocol,
+        workspaceId: String? = nil,
         onResume: (() -> Void)? = nil
     ) {
         self.session = session
+        self.workspaceId = workspaceId
         self.onResume = onResume
         _viewModel = StateObject(wrappedValue: SessionHistoryViewModel(
             sessionId: session.sessionId,
+            workspaceId: workspaceId,
             agentRepository: agentRepository
         ))
     }
@@ -538,6 +542,7 @@ final class SessionHistoryViewModel: ObservableObject {
     @Published var error: AppError?
 
     private let sessionId: String
+    private let workspaceId: String?
     private let agentRepository: AgentRepositoryProtocol
 
     /// Converted ChatMessages for unified rendering
@@ -545,8 +550,9 @@ final class SessionHistoryViewModel: ObservableObject {
         messages.map { ChatMessage.from(sessionMessage: $0) }
     }
 
-    init(sessionId: String, agentRepository: AgentRepositoryProtocol) {
+    init(sessionId: String, workspaceId: String?, agentRepository: AgentRepositoryProtocol) {
         self.sessionId = sessionId
+        self.workspaceId = workspaceId
         self.agentRepository = agentRepository
     }
 
@@ -556,15 +562,17 @@ final class SessionHistoryViewModel: ObservableObject {
 
         do {
             // Load messages for session history view
+            // Uses workspace/session/messages when workspaceId is available
             let response = try await agentRepository.getSessionMessages(
                 sessionId: sessionId,
+                workspaceId: workspaceId,
                 limit: 20,
                 offset: 0,
                 order: "desc"
             )
             // Reverse to show oldest at top, newest at bottom (chronological order)
             messages = response.messages.reversed()
-            AppLogger.log("[SessionHistory] Loaded \(response.count) of \(response.total) messages for session \(sessionId)")
+            AppLogger.log("[SessionHistory] Loaded \(response.count) of \(response.total) messages for session \(sessionId)\(workspaceId != nil ? " (workspace: \(workspaceId!))" : "")")
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
             AppLogger.error(error, context: "Load session messages")

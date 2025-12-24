@@ -499,8 +499,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             // Check connection with a ping
             currentSocket.sendPing { [weak self] error in
                 // Verify socket is still the current one
+                // If socket changed, just return silently - the new connection will handle things
                 guard self?.webSocket === currentSocket else {
-                    box.resume(throwing: AppError.connectionFailed(underlying: nil))
+                    AppLogger.webSocket("Ping callback from old socket - ignoring (new connection in progress)")
+                    // Don't throw error - just complete without error
+                    // The new connection will set up its own state
+                    box.resume()
                     return
                 }
 
@@ -571,8 +575,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         shouldAutoReconnect = false
         stopTimers()
 
-        // Clear watched session state
+        // Clear watched session state (both session and workspace IDs)
         _watchedSessionId = nil
+        _watchedWorkspaceId = nil
 
         // Clear pending request tracking to prevent memory buildup
         pendingRequestMethodsLock.lock()
@@ -632,6 +637,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             // CRITICAL: Clear watched session state on reconnect
             // This ensures watch can be re-established after server restart
             _watchedSessionId = nil
+            _watchedWorkspaceId = nil
             AppLogger.webSocket("Cleared watch state during reconnection cleanup")
 
             // Exponential backoff with max cap
@@ -1281,10 +1287,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
     // MARK: - Session Watching
 
+    /// Currently watched workspace ID (for workspace-aware unwatch)
+    @Atomic private var _watchedWorkspaceId: String?
+
     /// Watch a session for real-time updates
-    /// - Parameter sessionId: The session ID to watch
+    /// - Parameters:
+    ///   - sessionId: The session ID to watch
+    ///   - workspaceId: Optional workspace ID for workspace-aware API (uses workspace/session/watch)
     /// - Throws: Connection or encoding errors
-    func watchSession(_ sessionId: String) async throws {
+    func watchSession(_ sessionId: String, workspaceId: String? = nil) async throws {
         // Already watching this session? Skip
         guard _watchedSessionId != sessionId else {
             AppLogger.webSocket("Already watching session: \(sessionId)")
@@ -1302,15 +1313,25 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             throw AppError.webSocketDisconnected
         }
 
-        AppLogger.webSocket("Starting watch for session: \(sessionId)")
-
-        // Use JSON-RPC (required)
         let client = getJSONRPCClient()
-        let params = SessionWatchParams(sessionId: sessionId)
-        let _: SessionWatchResult = try await client.request(
-            method: JSONRPCMethod.sessionWatch,
-            params: params
-        )
+
+        // Use workspace-aware API if workspaceId is provided
+        if let workspaceId = workspaceId {
+            AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId)")
+            let params = WorkspaceSessionWatchParams(workspaceId: workspaceId, sessionId: sessionId)
+            let _: WorkspaceSessionWatchResult = try await client.request(
+                method: JSONRPCMethod.workspaceSessionWatch,
+                params: params
+            )
+            _watchedWorkspaceId = workspaceId
+        } else {
+            AppLogger.webSocket("Starting watch for session: \(sessionId)")
+            let params = SessionWatchParams(sessionId: sessionId)
+            let _: SessionWatchResult = try await client.request(
+                method: JSONRPCMethod.sessionWatch,
+                params: params
+            )
+        }
         _watchedSessionId = sessionId
     }
 
@@ -1324,7 +1345,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Clear watched session ID immediately to prevent race conditions
         let previousSessionId = _watchedSessionId
+        let previousWorkspaceId = _watchedWorkspaceId
         _watchedSessionId = nil
+        _watchedWorkspaceId = nil
 
         // Only send unwatch if connected
         guard isConnected else {
@@ -1332,15 +1355,24 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             return
         }
 
-        AppLogger.webSocket("Stopping watch for session: \(previousSessionId ?? "unknown")")
-
-        // Use JSON-RPC (required)
         let client = getJSONRPCClient()
-        let params = SessionWatchParams(sessionId: previousSessionId ?? "")
-        let _: SessionUnwatchResult = try await client.request(
-            method: JSONRPCMethod.sessionUnwatch,
-            params: params
-        )
+
+        // Use workspace-aware API if we were using workspace watch
+        if previousWorkspaceId != nil {
+            AppLogger.webSocket("Stopping workspace watch for session: \(previousSessionId ?? "unknown")")
+            // workspace/session/unwatch takes no params
+            let _: WorkspaceSessionUnwatchResult = try await client.request(
+                method: JSONRPCMethod.workspaceSessionUnwatch,
+                params: EmptyParams()
+            )
+        } else {
+            AppLogger.webSocket("Stopping watch for session: \(previousSessionId ?? "unknown")")
+            let params = SessionWatchParams(sessionId: previousSessionId ?? "")
+            let _: SessionUnwatchResult = try await client.request(
+                method: JSONRPCMethod.sessionUnwatch,
+                params: params
+            )
+        }
     }
 }
 

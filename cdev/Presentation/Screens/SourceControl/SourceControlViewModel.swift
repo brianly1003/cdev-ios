@@ -14,6 +14,8 @@ final class SourceControlViewModel: ObservableObject {
     // MARK: - Dependencies
 
     private let agentRepository: AgentRepositoryProtocol
+    private let workspaceManager = WorkspaceManagerService.shared
+    private let workspaceStore = WorkspaceStore.shared
 
     // MARK: - Debounce
 
@@ -24,6 +26,18 @@ final class SourceControlViewModel: ObservableObject {
     /// Flag to track if refresh is in progress
     private var isRefreshing: Bool = false
 
+    // MARK: - Workspace Support
+
+    /// Get the current workspace ID if available
+    private var currentWorkspaceId: String? {
+        workspaceStore.activeWorkspace?.remoteWorkspaceId
+    }
+
+    /// Whether to use workspace-aware APIs
+    private var useWorkspaceAPIs: Bool {
+        currentWorkspaceId != nil && workspaceManager.isConnected
+    }
+
     // MARK: - Init
 
     init(agentRepository: AgentRepositoryProtocol? = nil) {
@@ -33,6 +47,7 @@ final class SourceControlViewModel: ObservableObject {
     // MARK: - Refresh
 
     /// Refresh git status from server using enhanced API
+    /// Uses workspace-aware API when a workspace is selected
     /// Debounced to prevent rapid successive calls
     func refresh() async {
         // Skip if refresh in progress
@@ -56,23 +71,40 @@ final class SourceControlViewModel: ObservableObject {
         state.lastError = nil
 
         do {
-            // Fetch enhanced git status with staged/unstaged/untracked arrays
-            let response = try await agentRepository.getGitStatusExtended()
+            // Use workspace-aware API if available
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                AppLogger.log("[SourceControl] Using workspace git/status: \(workspaceId), isConnected: \(workspaceManager.isConnected)")
+                let response = try await workspaceManager.getGitStatus(workspaceId: workspaceId)
+                AppLogger.log("[SourceControl] Got git status response for workspace: \(workspaceId)")
 
-            // Convert response to repository state
-            var newState = response.toRepositoryState()
+                // Convert response to repository state
+                var newState = response.toRepositoryState()
+                newState.commitMessage = state.commitMessage
+                newState.isLoading = true
+                state = newState
+            } else {
+                // Fallback to legacy API
+                let response = try await agentRepository.getGitStatusExtended()
 
-            // Preserve loading state and commit message during state replacement
-            // This prevents the UI from flashing between empty/content views
-            newState.commitMessage = state.commitMessage
-            newState.isLoading = true  // Keep loading until fully done
-            state = newState
+                // Convert response to repository state
+                var newState = response.toRepositoryState()
 
+                // Preserve loading state and commit message during state replacement
+                // This prevents the UI from flashing between empty/content views
+                newState.commitMessage = state.commitMessage
+                newState.isLoading = true  // Keep loading until fully done
+                state = newState
+            }
+        } catch is CancellationError {
+            // Task was cancelled (e.g., view dismissed, new refresh started) - ignore silently
+            AppLogger.log("[SourceControl] Git status refresh cancelled")
         } catch {
             // Fallback to basic git status if enhanced not available
             do {
                 let gitStatus = try await agentRepository.getGitStatus()
                 updateStateFromBasicStatus(gitStatus)
+            } catch is CancellationError {
+                AppLogger.log("[SourceControl] Git status fallback cancelled")
             } catch {
                 state.lastError = error.localizedDescription
                 AppLogger.error(error, context: "Refresh git status")
@@ -139,13 +171,24 @@ final class SourceControlViewModel: ObservableObject {
         state.isLoading = true
 
         do {
-            let response = try await agentRepository.gitStage(paths: paths)
-            if response.success {
-                await refresh()
-                Haptics.success()
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitStage(workspaceId: workspaceId, paths: paths)
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to stage files"
+                    Haptics.error()
+                }
             } else {
-                state.lastError = response.error ?? "Failed to stage files"
-                Haptics.error()
+                let response = try await agentRepository.gitStage(paths: paths)
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to stage files"
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription
@@ -166,13 +209,24 @@ final class SourceControlViewModel: ObservableObject {
         state.isLoading = true
 
         do {
-            let response = try await agentRepository.gitUnstage(paths: paths)
-            if response.success {
-                await refresh()
-                Haptics.success()
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitUnstage(workspaceId: workspaceId, paths: paths)
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to unstage files"
+                    Haptics.error()
+                }
             } else {
-                state.lastError = response.error ?? "Failed to unstage files"
-                Haptics.error()
+                let response = try await agentRepository.gitUnstage(paths: paths)
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to unstage files"
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription
@@ -193,13 +247,24 @@ final class SourceControlViewModel: ObservableObject {
         state.isLoading = true
 
         do {
-            let response = try await agentRepository.gitDiscard(paths: paths)
-            if response.success {
-                await refresh()
-                Haptics.success()
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitDiscard(workspaceId: workspaceId, paths: paths)
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to discard changes"
+                    Haptics.error()
+                }
             } else {
-                state.lastError = response.error ?? "Failed to discard changes"
-                Haptics.error()
+                let response = try await agentRepository.gitDiscard(paths: paths)
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to discard changes"
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription
@@ -218,14 +283,26 @@ final class SourceControlViewModel: ObservableObject {
         isCommitting = true
 
         do {
-            let response = try await agentRepository.gitCommit(message: state.commitMessage, push: false)
-            if response.success {
-                state.commitMessage = ""
-                await refresh()
-                Haptics.success()
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitCommit(workspaceId: workspaceId, message: state.commitMessage, push: false)
+                if response.success {
+                    state.commitMessage = ""
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to commit"
+                    Haptics.error()
+                }
             } else {
-                state.lastError = response.error ?? "Failed to commit"
-                Haptics.error()
+                let response = try await agentRepository.gitCommit(message: state.commitMessage, push: false)
+                if response.success {
+                    state.commitMessage = ""
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to commit"
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription
@@ -242,14 +319,26 @@ final class SourceControlViewModel: ObservableObject {
         isCommitting = true
 
         do {
-            let response = try await agentRepository.gitCommit(message: state.commitMessage, push: true)
-            if response.success {
-                state.commitMessage = ""
-                await refresh()
-                Haptics.success()
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitCommit(workspaceId: workspaceId, message: state.commitMessage, push: true)
+                if response.success {
+                    state.commitMessage = ""
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to commit and push"
+                    Haptics.error()
+                }
             } else {
-                state.lastError = response.error ?? "Failed to commit and push"
-                Haptics.error()
+                let response = try await agentRepository.gitCommit(message: state.commitMessage, push: true)
+                if response.success {
+                    state.commitMessage = ""
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Failed to commit and push"
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription
@@ -266,13 +355,24 @@ final class SourceControlViewModel: ObservableObject {
         state.isLoading = true
 
         do {
-            let response = try await agentRepository.gitPush()
-            if response.success {
-                await refresh()
-                Haptics.success()
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitPush(workspaceId: workspaceId)
+                if response.isSuccess {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.message ?? "Push failed"
+                    Haptics.error()
+                }
             } else {
-                state.lastError = response.error ?? "Push failed"
-                Haptics.error()
+                let response = try await agentRepository.gitPush()
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    state.lastError = response.error ?? "Push failed"
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription
@@ -287,18 +387,33 @@ final class SourceControlViewModel: ObservableObject {
         state.isLoading = true
 
         do {
-            let response = try await agentRepository.gitPull()
-            if response.success {
-                await refresh()
-                Haptics.success()
-            } else {
-                // Check for conflicts
-                if let conflicts = response.conflictedFiles, !conflicts.isEmpty {
-                    state.lastError = "Merge conflicts in: \(conflicts.joined(separator: ", "))"
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                let response = try await workspaceManager.gitPull(workspaceId: workspaceId)
+                if response.isSuccess {
+                    await refresh()
+                    Haptics.success()
                 } else {
-                    state.lastError = response.error ?? "Pull failed"
+                    if let conflicts = response.conflictedFiles, !conflicts.isEmpty {
+                        state.lastError = "Merge conflicts in: \(conflicts.joined(separator: ", "))"
+                    } else {
+                        state.lastError = response.error ?? response.message ?? "Pull failed"
+                    }
+                    Haptics.error()
                 }
-                Haptics.error()
+            } else {
+                let response = try await agentRepository.gitPull()
+                if response.success {
+                    await refresh()
+                    Haptics.success()
+                } else {
+                    // Check for conflicts
+                    if let conflicts = response.conflictedFiles, !conflicts.isEmpty {
+                        state.lastError = "Merge conflicts in: \(conflicts.joined(separator: ", "))"
+                    } else {
+                        state.lastError = response.error ?? "Pull failed"
+                    }
+                    Haptics.error()
+                }
             }
         } catch {
             state.lastError = error.localizedDescription

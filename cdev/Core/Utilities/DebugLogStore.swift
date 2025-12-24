@@ -142,11 +142,19 @@ struct WebSocketLogDetails {
     let direction: Direction
     let eventType: String?
     let payload: String?
+    let sessionId: String?
 
     enum Direction: String {
         case incoming = "←"
         case outgoing = "→"
         case status = "◆"
+    }
+
+    /// Short session ID for display (last 8 chars)
+    var shortSessionId: String? {
+        guard let id = sessionId, !id.isEmpty else { return nil }
+        if id.count <= 8 { return id }
+        return "..." + String(id.suffix(8))
     }
 }
 
@@ -342,21 +350,57 @@ final class DebugLogStore: ObservableObject {
         payload: String? = nil,
         level: DebugLogLevel = .info
     ) {
+        // Extract session_id from payload if present
+        let sessionId = extractSessionId(from: payload)
+
         let details = WebSocketLogDetails(
             direction: direction,
             eventType: eventType,
-            payload: payload
+            payload: payload,
+            sessionId: sessionId
         )
+
+        // Build subtitle: prefer full session_id, fallback to eventType
+        let subtitle: String?
+        if let fullId = sessionId, !fullId.isEmpty {
+            subtitle = fullId
+        } else {
+            subtitle = eventType
+        }
 
         let entry = DebugLogEntry(
             timestamp: Date(),
             category: .websocket,
             level: level,
             title: title,
-            subtitle: eventType,
+            subtitle: subtitle,
             details: .websocket(details)
         )
         add(entry)
+    }
+
+    /// Extract session_id from JSON payload
+    private func extractSessionId(from payload: String?) -> String? {
+        guard let payload = payload else { return nil }
+
+        // Try to extract session_id using regex patterns
+        // Pattern 1: "session_id": "uuid"
+        // Pattern 2: "sessionId": "uuid"
+        // Pattern 3: "session_id":"uuid" (no space)
+        let patterns = [
+            #""session_id"\s*:\s*"([a-f0-9-]+)""#,
+            #""sessionId"\s*:\s*"([a-f0-9-]+)""#
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               let match = regex.firstMatch(in: payload, options: [], range: NSRange(payload.startIndex..., in: payload)),
+               let range = Range(match.range(at: 1), in: payload) {
+                return String(payload[range])
+            }
+        }
+
+        return nil
     }
 
     /// Log general app event

@@ -47,28 +47,36 @@ final class WorkspaceStore: ObservableObject {
     // MARK: - Public Methods
 
     /// Add or update a workspace
-    func saveWorkspace(_ workspace: Workspace) {
+    /// Returns the saved workspace (with its final ID - may differ from input if URL matched existing)
+    @discardableResult
+    func saveWorkspace(_ workspace: Workspace) -> Workspace {
+        var savedWorkspace = workspace
+
         if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
             // Update existing
             workspaces[index] = workspace
+            savedWorkspace = workspace
         } else if let index = workspaces.firstIndex(where: {
             $0.webSocketURL == workspace.webSocketURL
         }) {
             // Update by URL match (same server, different session)
-            var updated = workspace
-            updated = Workspace(
+            // Keep the existing ID to avoid duplicate entries
+            // Prefer new remoteWorkspaceId if provided, otherwise keep existing
+            savedWorkspace = Workspace(
                 id: workspaces[index].id,
                 name: workspace.name,
                 webSocketURL: workspace.webSocketURL,
                 httpURL: workspace.httpURL,
                 lastConnected: workspace.lastConnected,
                 sessionId: workspace.sessionId,
-                branch: workspace.branch
+                branch: workspace.branch,
+                remoteWorkspaceId: workspace.remoteWorkspaceId ?? workspaces[index].remoteWorkspaceId
             )
-            workspaces[index] = updated
+            workspaces[index] = savedWorkspace
         } else {
             // Add new
             workspaces.append(workspace)
+            savedWorkspace = workspace
         }
 
         // Trim to max
@@ -78,6 +86,7 @@ final class WorkspaceStore: ObservableObject {
         }
 
         persistWorkspaces()
+        return savedWorkspace
     }
 
     /// Set active workspace and update last connected time

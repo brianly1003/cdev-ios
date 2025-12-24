@@ -372,7 +372,9 @@ struct DiffDetailView: View {
             // Get repository from DI container
             let container = DependencyContainer.shared
             let repository = container.agentRepository
-            let diffs = try await repository.getGitDiff(file: diff.filePath)
+            // Use workspace-aware API for proper multi-workspace support
+            let workspaceId = await WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
+            let diffs = try await repository.getGitDiff(file: diff.filePath, workspaceId: workspaceId)
 
             if let fetchedDiff = diffs.first {
                 diffContent = fetchedDiff.diff

@@ -94,6 +94,20 @@ final class DashboardViewModel: ObservableObject {
     private let diffCache: DiffCache
     private weak var appState: AppState?
 
+    // Workspace-aware APIs
+    private let workspaceManager = WorkspaceManagerService.shared
+    private let workspaceStore = WorkspaceStore.shared
+
+    /// Get the current workspace ID if available
+    var currentWorkspaceId: String? {
+        workspaceStore.activeWorkspace?.remoteWorkspaceId
+    }
+
+    /// Whether to use workspace-aware APIs
+    private var useWorkspaceAPIs: Bool {
+        currentWorkspaceId != nil && workspaceManager.isConnected
+    }
+
     private var eventTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
 
@@ -648,15 +662,41 @@ final class DashboardViewModel: ObservableObject {
     }
 
     /// Load available sessions for picker (first page)
+    /// Uses workspace-aware session/history API when available
     func loadSessions() async {
         do {
             // Reset pagination state
             sessionsNextOffset = 0
-            let response = try await _agentRepository.getSessions(limit: sessionsPageSize, offset: 0)
-            sessions = response.sessions
-            sessionsHasMore = response.hasMore
-            sessionsNextOffset = response.nextOffset
-            AppLogger.log("[Dashboard] Loaded \(response.sessions.count) sessions, total=\(response.total ?? 0), hasMore=\(sessionsHasMore)")
+
+            // Use workspace-aware API if available
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                AppLogger.log("[Dashboard] Using workspace/session/history: \(workspaceId)")
+                let historyResponse = try await workspaceManager.getSessionHistory(workspaceId: workspaceId, limit: sessionsPageSize)
+
+                // Convert HistorySessionInfo to SessionsResponse.SessionInfo
+                sessions = (historyResponse.sessions ?? []).map { historySession in
+                    SessionsResponse.SessionInfo(
+                        sessionId: historySession.sessionId,
+                        summary: historySession.summary ?? "No summary",
+                        messageCount: historySession.messageCount ?? 0,
+                        lastUpdated: historySession.lastUpdated ?? "",
+                        branch: historySession.branch
+                    )
+                }
+                // workspace/session/history doesn't support pagination yet
+                sessionsHasMore = false
+                sessionsNextOffset = sessions.count
+                AppLogger.log("[Dashboard] Loaded \(sessions.count) sessions from workspace history, total=\(historyResponse.total ?? 0)")
+            } else {
+                // Fallback to workspace/session/history or session/list based on workspaceId
+                let response = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: sessionsPageSize, offset: 0)
+                sessions = response.sessions
+                sessionsHasMore = response.hasMore
+                sessionsNextOffset = response.nextOffset
+                AppLogger.log("[Dashboard] Loaded \(response.sessions.count) sessions, total=\(response.total ?? 0), hasMore=\(sessionsHasMore)")
+            }
+        } catch is CancellationError {
+            AppLogger.log("[Dashboard] Session loading cancelled")
         } catch {
             AppLogger.error(error, context: "Load sessions")
         }
@@ -668,11 +708,14 @@ final class DashboardViewModel: ObservableObject {
 
         isLoadingMoreSessions = true
         do {
-            let response = try await _agentRepository.getSessions(limit: sessionsPageSize, offset: sessionsNextOffset)
+            // Use workspace-aware API when workspaceId is available
+            let response = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: sessionsPageSize, offset: sessionsNextOffset)
             sessions.append(contentsOf: response.sessions)
             sessionsHasMore = response.hasMore
             sessionsNextOffset = response.nextOffset
             AppLogger.log("[Dashboard] Loaded more sessions: +\(response.sessions.count), total now=\(sessions.count), hasMore=\(sessionsHasMore)")
+        } catch is CancellationError {
+            AppLogger.log("[Dashboard] Load more sessions cancelled")
         } catch {
             AppLogger.error(error, context: "Load more sessions")
         }
@@ -688,6 +731,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             let response = try await _agentRepository.getSessionMessages(
                 sessionId: sessionId,
+                workspaceId: currentWorkspaceId,
                 limit: messagesPageSize,
                 offset: messagesNextOffset,
                 order: "desc"
@@ -783,10 +827,15 @@ final class DashboardViewModel: ObservableObject {
         hasActiveConversation = false  // Reset - will be set true on first prompt
         AppLogger.log("[Dashboard] User resumed session: \(sessionId)")
 
+        // IMPORTANT: Start watching the new session BEFORE fetching messages
+        // The workspace/session/messages API requires the session to be watched first
+        await startWatchingCurrentSession()
+
         // Load first page of session messages
         do {
             let messagesResponse = try await _agentRepository.getSessionMessages(
                 sessionId: sessionId,
+                workspaceId: currentWorkspaceId,
                 limit: messagesPageSize,
                 offset: 0,
                 order: "desc"
@@ -839,9 +888,7 @@ final class DashboardViewModel: ObservableObject {
             }
             await forceLogUpdate()
 
-            // Start watching this session for real-time updates
-            await startWatchingCurrentSession()
-
+            // Note: Watch was already started before fetching messages
             Haptics.success()
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
@@ -1022,27 +1069,76 @@ final class DashboardViewModel: ObservableObject {
     }
 
     /// Refresh status
+    /// Uses workspace/status API when workspaceId is available (preferred)
+    /// Falls back to status/get (legacy) when no workspace context
     func refreshStatus() async {
         do {
-            let newStatus = try await _agentRepository.fetchStatus()
+            // Use workspace-aware API when workspaceId is available
+            if let workspaceId = currentWorkspaceId, useWorkspaceAPIs {
+                AppLogger.log("[Dashboard] refreshStatus: using workspace/status for \(workspaceId)")
+                let wsStatus = try await _agentRepository.getWorkspaceStatus(workspaceId: workspaceId)
 
-            // IMPORTANT: Re-read sessionId AFTER await to avoid race condition
-            // During the await, loadRecentSessionHistory may have set the sessionId
-            // We must use the current value, not a pre-await captured value
-            let currentSessionId = agentStatus.sessionId
-            AppLogger.log("[Dashboard] refreshStatus: using sessionId=\(currentSessionId ?? "nil")")
+                // IMPORTANT: Preserve sessionId from multiple sources (priority order):
+                // 1. watchedSessionId from API (if actively watching and not empty)
+                // 2. Current agentStatus.sessionId (set by setWorkspaceContext)
+                // 3. userSelectedSessionId (user's explicit selection)
+                // Note: API may return empty string "" instead of null, so check for both
+                let currentSessionId = agentStatus.sessionId
+                let watchedId = wsStatus.watchedSessionId
+                let resolvedSessionId: String?
+                if let watched = watchedId, !watched.isEmpty {
+                    resolvedSessionId = watched
+                } else if let current = currentSessionId, !current.isEmpty {
+                    resolvedSessionId = current
+                } else if let userSelected = userSelectedSessionId, !userSelected.isEmpty {
+                    resolvedSessionId = userSelected
+                } else {
+                    resolvedSessionId = nil
+                }
+                AppLogger.log("[Dashboard] refreshStatus: resolving sessionId - watchedSessionId=\(watchedId ?? "nil"), currentSessionId=\(currentSessionId ?? "nil"), userSelectedSessionId=\(userSelectedSessionId ?? "nil") -> \(resolvedSessionId ?? "nil")")
 
-            // Update status but preserve sessionId (never use sessionId from /api/status)
-            agentStatus = AgentStatus(
-                claudeState: newStatus.claudeState,
-                sessionId: currentSessionId,  // Keep current sessionId
-                repoName: newStatus.repoName,
-                repoPath: newStatus.repoPath,
-                connectedClients: newStatus.connectedClients,
-                uptime: newStatus.uptime
-            )
-            claudeState = agentStatus.claudeState
-            AppLogger.log("[Dashboard] refreshStatus: completed, claudeState=\(claudeState.rawValue)")
+                // Update agentStatus from workspace status
+                agentStatus = AgentStatus(
+                    claudeState: claudeState,  // Keep current claudeState (updated via events)
+                    sessionId: resolvedSessionId,
+                    repoName: wsStatus.gitRepoName ?? wsStatus.workspaceName,
+                    repoPath: wsStatus.path,
+                    connectedClients: agentStatus.connectedClients,  // Not in workspace/status
+                    uptime: agentStatus.uptime  // Not in workspace/status
+                )
+
+                // Log git tracker state
+                let trackerState = wsStatus.trackerState
+                if !trackerState.isAvailable {
+                    AppLogger.log("[Dashboard] Git tracker state: \(wsStatus.gitTrackerState ?? "unknown"), error: \(wsStatus.gitLastError ?? "none")")
+                }
+
+                AppLogger.log("[Dashboard] refreshStatus (workspace): repoName=\(agentStatus.repoName), sessionId=\(agentStatus.sessionId ?? "nil"), gitTrackerState=\(wsStatus.gitTrackerState ?? "nil"), hasActiveSession=\(wsStatus.hasActiveSession ?? false)")
+            } else {
+                // Legacy: use status/get when no workspace context
+                let newStatus = try await _agentRepository.fetchStatus()
+
+                // IMPORTANT: Re-read sessionId and repoName AFTER await to avoid race condition
+                // During the await, loadRecentSessionHistory or setWorkspaceContext may have set these
+                // We must use the current values, not pre-await captured values
+                let currentSessionId = agentStatus.sessionId
+                let currentRepoName = agentStatus.repoName
+                AppLogger.log("[Dashboard] refreshStatus (legacy): using sessionId=\(currentSessionId ?? "nil"), repoName=\(currentRepoName)")
+
+                // Update status but preserve sessionId and repoName
+                // IMPORTANT: status/get is legacy and returns global config.yaml path, NOT workspace-specific
+                // We use repoName from setWorkspaceContext which has the correct workspace name
+                agentStatus = AgentStatus(
+                    claudeState: newStatus.claudeState,
+                    sessionId: currentSessionId,  // Keep current sessionId
+                    repoName: (currentRepoName?.isEmpty ?? true) ? newStatus.repoName : currentRepoName,  // Keep workspace name if set
+                    repoPath: newStatus.repoPath,
+                    connectedClients: newStatus.connectedClients,
+                    uptime: newStatus.uptime
+                )
+                claudeState = agentStatus.claudeState
+                AppLogger.log("[Dashboard] refreshStatus (legacy): completed, claudeState=\(claudeState.rawValue), repoName=\(agentStatus.repoName)")
+            }
         } catch {
             AppLogger.error(error, context: "Refresh status")
         }
@@ -1127,7 +1223,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             // First get list of sessions to find the most recent one (just need 1)
             AppLogger.log("[Dashboard] Calling getSessions API...")
-            let sessionsResponse = try await _agentRepository.getSessions(limit: 1, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 1, offset: 0)
             AppLogger.log("[Dashboard] Sessions response: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
 
             // Use current session ID if available and not empty, otherwise use most recent
@@ -1179,6 +1275,10 @@ final class DashboardViewModel: ObservableObject {
             hasActiveConversation = false  // Reset - will be set true on first prompt
             AppLogger.log("[Dashboard] Set userSelectedSessionId: \(sessionId)")
 
+            // IMPORTANT: Start watching the session BEFORE fetching messages
+            // The workspace/session/messages API requires the session to be watched first
+            await startWatchingCurrentSession()
+
             // Yield to let UI thread breathe before network call
             await Task.yield()
 
@@ -1188,6 +1288,7 @@ final class DashboardViewModel: ObservableObject {
             do {
                 messagesResponse = try await _agentRepository.getSessionMessages(
                     sessionId: sessionId,
+                    workspaceId: currentWorkspaceId,
                     limit: messagesPageSize,
                     offset: 0,
                     order: "desc"
@@ -1276,9 +1377,7 @@ final class DashboardViewModel: ObservableObject {
             // Update logs array
             await forceLogUpdate()
 
-            // Start watching this session for real-time updates
-            await startWatchingCurrentSession()
-
+            // Note: Watch was already started before fetching messages
             AppLogger.log("[Dashboard] Loaded session history, total logs in view: \(logs.count)")
         } catch {
             // Log the actual error for debugging
@@ -1658,7 +1757,7 @@ final class DashboardViewModel: ObservableObject {
     private func validateSessionExists(_ sessionId: String) async -> Bool {
         do {
             // Load a larger batch for validation since we need to search
-            let sessionsResponse = try await _agentRepository.getSessions(limit: 100, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 100, offset: 0)
             let exists = sessionsResponse.sessions.contains { $0.sessionId == sessionId }
             if !exists {
                 AppLogger.log("[Dashboard] Session \(sessionId) not found in first 100 sessions (deleted or old)")
@@ -1810,7 +1909,7 @@ final class DashboardViewModel: ObservableObject {
     private func getMostRecentSessionId() async -> String? {
         do {
             // Just need the first session, so limit to 1
-            let sessionsResponse = try await _agentRepository.getSessions(limit: 1, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 1, offset: 0)
             AppLogger.log("[Dashboard] getMostRecentSessionId: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
 
             // Prefer current session if available
@@ -1889,11 +1988,12 @@ final class DashboardViewModel: ObservableObject {
         }
 
         do {
-            try await webSocketService.watchSession(sessionId)
+            // Use workspace-aware API if available
+            try await webSocketService.watchSession(sessionId, workspaceId: currentWorkspaceId)
             // JSON-RPC response confirms watching - set state immediately
             isWatchingSession = true
             watchingSessionId = sessionId
-            AppLogger.log("[Dashboard] Now watching session: \(sessionId)")
+            AppLogger.log("[Dashboard] Now watching session: \(sessionId)\(currentWorkspaceId != nil ? " (workspace: \(currentWorkspaceId!))" : "")")
         } catch {
             AppLogger.error(error, context: "Watch session")
         }
@@ -2000,7 +2100,7 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Disconnect from current workspace
+    /// Disconnect from current workspace and reset all state to default
     func disconnect() async {
         AppLogger.log("[Dashboard] Disconnecting from workspace")
 
@@ -2011,11 +2111,135 @@ final class DashboardViewModel: ObservableObject {
         // Clear workspace store active
         WorkspaceStore.shared.clearActive()
 
-        // Clear state
+        // Clear HTTP base URL to stop any pending/cached requests
+        appState?.clearHTTPState()
+
+        // Clear all state to default
         await clearLogsAndDiffs()
         seenElementIds.removeAll()
+        userSelectedSessionId = nil
+        hasActiveConversation = false
         connectionState = .disconnected
         claudeState = .idle
+        agentStatus = AgentStatus()
+        pendingInteraction = nil
+        promptText = ""
+        isLoading = false
+        error = nil
+        isStreaming = false
+        streamingStartTime = nil
+
+        // Also clear from session repository
+        sessionRepository.selectedSessionId = nil
+
+        AppLogger.log("[Dashboard] State reset to default")
+    }
+
+    /// Update workspace context when switching to a new workspace
+    /// Called by AppState after successfully connecting to ensure correct workspace name is displayed
+    func setWorkspaceContext(name: String, sessionId: String?) {
+        AppLogger.log("[Dashboard] setWorkspaceContext: name=\(name), sessionId=\(sessionId ?? "nil"), current userSelectedSessionId=\(userSelectedSessionId ?? "nil")")
+
+        // Clear previous state for new workspace
+        chatElements.removeAll()
+        logs.removeAll()
+        diffs.removeAll()
+        seenElementIds.removeAll()
+        pendingInteraction = nil
+
+        // Determine which session ID to use:
+        // - If loadRecentSessionHistory already set a valid session (from API), keep it
+        // - Otherwise, use the passed sessionId from workspace model
+        // This prevents overwriting a fresh session ID from the API with a stale one
+        let effectiveSessionId: String?
+        if let currentSession = userSelectedSessionId, !currentSession.isEmpty {
+            // Keep the session that was already loaded (e.g., from loadRecentSessionHistory)
+            effectiveSessionId = currentSession
+            AppLogger.log("[Dashboard] setWorkspaceContext: keeping existing session \(currentSession)")
+        } else {
+            // No session loaded yet, use the one from workspace model
+            effectiveSessionId = sessionId
+            AppLogger.log("[Dashboard] setWorkspaceContext: using passed session \(sessionId ?? "nil")")
+        }
+
+        // Update agentStatus with new workspace info
+        agentStatus = AgentStatus(
+            claudeState: claudeState,
+            sessionId: effectiveSessionId,
+            repoName: name,
+            repoPath: agentStatus.repoPath,
+            connectedClients: agentStatus.connectedClients,
+            uptime: agentStatus.uptime
+        )
+
+        // Update session tracking only if we're using the passed sessionId
+        // (not if we're keeping an existing one from loadRecentSessionHistory)
+        if effectiveSessionId == sessionId {
+            userSelectedSessionId = sessionId
+            if let sessionId = sessionId {
+                sessionRepository.selectedSessionId = sessionId
+            }
+        }
+
+        // Reset conversation state
+        hasActiveConversation = false
+        hasCompletedInitialLoad = false
+
+        AppLogger.log("[Dashboard] Workspace context updated: repoName=\(agentStatus.repoName), sessionId=\(effectiveSessionId ?? "nil")")
+    }
+
+    /// Connect to a remote workspace from workspace manager
+    /// Single-port architecture: starts a session for the workspace
+    /// Returns true if connection succeeded, false otherwise
+    @discardableResult
+    func connectToRemoteWorkspace(_ workspace: RemoteWorkspace, host: String) async -> Bool {
+        AppLogger.log("[DashboardVM] ========== CONNECT TO REMOTE WORKSPACE ==========")
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: workspace=\(workspace.name), id=\(workspace.id)")
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: host=\(host), hasActiveSession=\(workspace.hasActiveSession)")
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: sessions=\(workspace.sessions.map { $0.id })")
+
+        // Stop watching current session (don't disconnect - single-port architecture shares WebSocket)
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Stopping current session watch...")
+        await stopWatchingSession()
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Session watch stopped, isConnected=\(webSocketService.isConnected)")
+
+        // Clear session tracking for new workspace
+        userSelectedSessionId = nil
+        hasActiveConversation = false
+        seenElementIds.removeAll()
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Cleared session tracking")
+
+        // Connect via appState (handles URL construction and subscription)
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Calling appState.connectToRemoteWorkspace...")
+        let result = await appState?.connectToRemoteWorkspace(workspace, host: host) ?? false
+        AppLogger.log("[DashboardVM] connectToRemoteWorkspace: appState returned \(result)")
+
+        // If connection succeeded, reload all data for the new workspace
+        if result {
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Reloading data for new workspace...")
+
+            // Clear existing data for clean slate
+            logs = []
+            chatElements = []
+            seenElementIds.removeAll()
+
+            // Load session history and messages
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Loading session history...")
+            await loadRecentSessionHistory(isReconnection: true)
+
+            // Refresh status (includes git status)
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Refreshing status...")
+            await refreshStatus()
+
+            // Re-establish session watch
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Starting session watch...")
+            await startWatchingCurrentSession()
+
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Data reload complete")
+        }
+
+        AppLogger.log("[DashboardVM] ========== CONNECT TO REMOTE WORKSPACE END ==========")
+        return result
     }
 
     /// Retry connection to the last active workspace

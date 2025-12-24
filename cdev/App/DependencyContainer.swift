@@ -15,6 +15,16 @@ final class DependencyContainer {
 
     lazy var keychainService: KeychainService = KeychainService()
 
+    // MARK: - Workspace Manager
+
+    lazy var workspaceManagerService: WorkspaceManagerService = {
+        let service = WorkspaceManagerService.shared
+        service.configure(webSocketService: webSocketService)
+        return service
+    }()
+
+    lazy var managerStore: ManagerStore = ManagerStore.shared
+
     // MARK: - Caches
 
     lazy var logCache: LogCache = LogCache()

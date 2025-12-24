@@ -12,6 +12,7 @@ struct Workspace: Identifiable, Codable, Equatable {
     var lastConnected: Date             // For sorting recent
     var sessionId: String?              // Last Claude session
     var branch: String?                 // Last known branch
+    var remoteWorkspaceId: String?      // Server-side workspace ID (e.g., "ws-abc123")
 
     init(
         id: UUID = UUID(),
@@ -20,7 +21,8 @@ struct Workspace: Identifiable, Codable, Equatable {
         httpURL: URL,
         lastConnected: Date = Date(),
         sessionId: String? = nil,
-        branch: String? = nil
+        branch: String? = nil,
+        remoteWorkspaceId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -29,6 +31,7 @@ struct Workspace: Identifiable, Codable, Equatable {
         self.lastConnected = lastConnected
         self.sessionId = sessionId
         self.branch = branch
+        self.remoteWorkspaceId = remoteWorkspaceId
     }
 
     /// Create from ConnectionInfo

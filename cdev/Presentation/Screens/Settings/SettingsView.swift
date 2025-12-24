@@ -17,6 +17,7 @@ struct SettingsView: View {
     var onDisconnect: (() -> Void)?
     @State private var showDisconnectConfirm = false
     @State private var showClearDataConfirm = false
+    @State private var showWorkspaceManager = false
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
@@ -83,6 +84,14 @@ struct SettingsView: View {
 
                         // Connection Section
                         SettingsSection(title: "Connection", icon: "wifi") {
+                            SettingsButtonRow(
+                                icon: "laptopcomputer.and.iphone",
+                                title: "Remote Workspaces",
+                                style: .normal
+                            ) {
+                                showWorkspaceManager = true
+                            }
+
                             SettingsButtonRow(
                                 icon: "xmark.circle",
                                 title: "Disconnect",
@@ -179,6 +188,10 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will remove all saved workspace connections. You'll need to scan QR codes again.")
+            }
+            .sheet(isPresented: $showWorkspaceManager) {
+                WorkspaceManagerView()
+                    .responsiveSheet()
             }
         }
     }

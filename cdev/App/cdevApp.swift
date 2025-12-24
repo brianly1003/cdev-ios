@@ -6,6 +6,14 @@ struct cdevApp: App {
     @StateObject private var appState = DependencyContainer.shared.makeAppState()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Configure WorkspaceManagerService with WebSocket connection
+        // This must happen early so the service can make JSON-RPC calls
+        WorkspaceManagerService.shared.configure(
+            webSocketService: DependencyContainer.shared.webSocketService
+        )
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(appState: appState)

@@ -1198,7 +1198,7 @@ struct ToolResultElementView: View {
 
                         Group {
                             if searchText.isEmpty {
-                                Text(previewText.isEmpty ? "(empty)" : previewText)
+                                Text(previewText.isEmpty ? "(No content)" : previewText)
                             } else {
                                 HighlightedText(previewText.isEmpty ? "(empty)" : previewText, highlighting: searchText)
                             }

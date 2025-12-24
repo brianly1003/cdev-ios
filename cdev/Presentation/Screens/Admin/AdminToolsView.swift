@@ -20,6 +20,7 @@ struct AdminToolsView: View {
 
     @State private var searchText = ""
     @State private var selectedLog: DebugLogEntry?
+    @State private var loadingLogId: UUID?
 
     /// Filtered logs based on category and search
     private var filteredLogs: [DebugLogEntry] {
@@ -70,7 +71,8 @@ struct AdminToolsView: View {
                         DebugLogListView(
                             logs: filteredLogs,
                             selectedLog: $selectedLog,
-                            autoScroll: logStore.autoScroll
+                            autoScroll: logStore.autoScroll,
+                            loadingLogId: $loadingLogId
                         )
                     } else {
                         // iPad: Split view with side-by-side detail
@@ -78,7 +80,8 @@ struct AdminToolsView: View {
                             DebugLogListView(
                                 logs: filteredLogs,
                                 selectedLog: $selectedLog,
-                                autoScroll: logStore.autoScroll
+                                autoScroll: logStore.autoScroll,
+                                loadingLogId: $loadingLogId
                             )
                             .frame(maxWidth: 400)
 
@@ -88,6 +91,10 @@ struct AdminToolsView: View {
                             // Detail pane
                             if let log = selectedLog {
                                 DebugLogDetailView(entry: log)
+                                    .onAppear {
+                                        // Clear loading state when detail view appears
+                                        loadingLogId = nil
+                                    }
                             } else {
                                 DetailPlaceholderView()
                             }
@@ -120,8 +127,18 @@ struct AdminToolsView: View {
                                     }
                                 }
                             }
+                            .onAppear {
+                                // Clear loading state when detail view appears
+                                loadingLogId = nil
+                            }
                     }
                     .responsiveSheet()
+                }
+            }
+            .onChange(of: selectedLog) { _, newValue in
+                // Clear loading when deselected
+                if newValue == nil {
+                    loadingLogId = nil
                 }
             }
         }
@@ -336,6 +353,8 @@ private struct DebugLogListView: View {
     let logs: [DebugLogEntry]
     @Binding var selectedLog: DebugLogEntry?
     let autoScroll: Bool
+    /// ID of the log currently loading its detail view
+    @Binding var loadingLogId: UUID?
 
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
@@ -347,9 +366,18 @@ private struct DebugLogListView: View {
                     ForEach(logs) { log in
                         DebugLogRowView(
                             entry: log,
-                            isSelected: selectedLog?.id == log.id
+                            isSelected: selectedLog?.id == log.id,
+                            isLoading: loadingLogId == log.id
                         ) {
-                            selectedLog = log
+                            // Set loading state first
+                            loadingLogId = log.id
+                            // Dispatch selection with a small delay to allow
+                            // loading indicator to render before main thread is blocked
+                            Task { @MainActor in
+                                // Yield to let SwiftUI render the loading state
+                                try? await Task.sleep(nanoseconds: 16_000_000)  // ~1 frame (16ms)
+                                selectedLog = log
+                            }
                         }
                         .id(log.id)
 
@@ -388,58 +416,181 @@ private struct DebugLogListView: View {
 private struct DebugLogRowView: View {
     let entry: DebugLogEntry
     let isSelected: Bool
+    let isLoading: Bool
     let onTap: () -> Void
+
+    /// WebSocket direction for accent coloring
+    private var wsDirection: WebSocketLogDetails.Direction? {
+        if case .websocket(let details) = entry.details {
+            return details.direction
+        }
+        return nil
+    }
+
+    /// Background color based on direction
+    private var rowBackground: Color {
+        guard !isSelected else { return ColorSystem.terminalBgSelected }
+
+        // Use subtle tints for WebSocket direction
+        if let direction = wsDirection {
+            switch direction {
+            case .outgoing:
+                return ColorSystem.primary.opacity(0.05)  // Blue tint for requests
+            case .incoming:
+                return ColorSystem.success.opacity(0.05)  // Green tint for responses
+            case .status:
+                return .clear
+            }
+        }
+        return .clear
+    }
+
+    /// Accent bar color for direction
+    private var accentColor: Color {
+        if let direction = wsDirection {
+            switch direction {
+            case .outgoing:
+                return ColorSystem.primary  // Blue for outgoing
+            case .incoming:
+                return ColorSystem.success  // Green for incoming
+            case .status:
+                return ColorSystem.warning
+            }
+        }
+        return .clear
+    }
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: Spacing.xs) {
-                // Category indicator
-                CategoryIndicator(category: entry.category, level: entry.level)
-
-                // Content
-                VStack(alignment: .leading, spacing: 2) {
-                    // Title row
-                    HStack(spacing: Spacing.xxs) {
-                        Text(entry.title)
-                            .font(Typography.terminal)
-                            .foregroundStyle(entry.level.color)
-                            .lineLimit(1)
-
-                        Spacer()
-
-                        // Status badge for HTTP
-                        if case .http(let details) = entry.details {
-                            if let status = details.responseStatus {
-                                StatusBadge(status: status)
-                            }
-                        }
-
-                        // Timestamp
-                        Text(entry.timeString)
-                            .font(Typography.terminalTimestamp)
-                            .foregroundStyle(ColorSystem.textQuaternary)
-                    }
-
-                    // Subtitle (if present)
-                    if let subtitle = entry.subtitle {
-                        Text(subtitle)
-                            .font(Typography.terminalSmall)
-                            .foregroundStyle(ColorSystem.textTertiary)
-                            .lineLimit(1)
-                    }
+            HStack(spacing: 0) {
+                // Left accent bar for WebSocket direction
+                if wsDirection != nil {
+                    Rectangle()
+                        .fill(accentColor)
+                        .frame(width: 3)
                 }
 
-                // Chevron
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(ColorSystem.textQuaternary)
+                HStack(spacing: Spacing.xs) {
+                    // Category indicator with direction
+                    WSCategoryIndicator(
+                        category: entry.category,
+                        level: entry.level,
+                        direction: wsDirection
+                    )
+
+                    // Content
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Title row
+                        HStack(spacing: Spacing.xxs) {
+                            Text(entry.title)
+                                .font(Typography.terminal)
+                                .foregroundStyle(entry.level.color)
+                                .lineLimit(1)
+
+                            Spacer()
+
+                            // Status badge for HTTP
+                            if case .http(let details) = entry.details {
+                                if let status = details.responseStatus {
+                                    StatusBadge(status: status)
+                                }
+                            }
+
+                            // Loading indicator (before timestamp)
+                            if isLoading {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .frame(width: 14, height: 14)
+                            }
+
+                            // Timestamp
+                            Text(entry.timeString)
+                                .font(Typography.terminalTimestamp)
+                                .foregroundStyle(ColorSystem.textQuaternary)
+                        }
+
+                        // Subtitle with session ID indicator
+                        if let subtitle = entry.subtitle {
+                            HStack(spacing: Spacing.xxs) {
+                                // Show session icon if this is a session ID
+                                if case .websocket(let details) = entry.details,
+                                   details.sessionId != nil {
+                                    Image(systemName: "person.circle")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(ColorSystem.textTertiary)
+                                }
+                                Text(subtitle)
+                                    .font(Typography.terminalSmall)
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+
+                    // Chevron
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                }
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
             }
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
-            .background(isSelected ? ColorSystem.terminalBgSelected : .clear)
+            .background(rowBackground)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Category indicator with optional WebSocket direction
+private struct WSCategoryIndicator: View {
+    let category: DebugLogCategory
+    let level: DebugLogLevel
+    let direction: WebSocketLogDetails.Direction?
+
+    var body: some View {
+        ZStack {
+            // Background with direction-aware color
+            RoundedRectangle(cornerRadius: CornerRadius.small)
+                .fill(indicatorColor.opacity(0.15))
+                .frame(width: 24, height: 24)
+
+            // Icon
+            Image(systemName: iconName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(indicatorColor)
+        }
+    }
+
+    private var indicatorColor: Color {
+        if level == .error {
+            return ColorSystem.error
+        } else if level == .warning {
+            return ColorSystem.warning
+        }
+        // Use direction-based colors for WebSocket
+        if let dir = direction {
+            switch dir {
+            case .outgoing: return ColorSystem.primary  // Blue for requests
+            case .incoming: return ColorSystem.success  // Green for responses
+            case .status: return ColorSystem.warning
+            }
+        }
+        return category.color
+    }
+
+    private var iconName: String {
+        switch (category, level, direction) {
+        case (_, .error, _): return "exclamationmark.triangle.fill"
+        case (_, .warning, _): return "exclamationmark.circle.fill"
+        case (.websocket, _, .some(.outgoing)): return "arrow.up.circle.fill"    // Request
+        case (.websocket, _, .some(.incoming)): return "arrow.down.circle.fill"  // Response
+        case (.websocket, _, .some(.status)): return "bolt.fill"
+        case (.websocket, _, .none): return "bolt.fill"
+        case (.http, _, _): return "arrow.up.arrow.down"
+        case (.app, _, _): return "app.fill"
+        case (.all, _, _): return "list.bullet"
+        }
     }
 }
 

@@ -28,7 +28,7 @@ protocol AgentRepositoryProtocol {
     func getGitStatusExtended() async throws -> GitStatusExtendedResponse
 
     /// Get git diff for file
-    func getGitDiff(file: String?) async throws -> [GitDiffPayload]
+    func getGitDiff(file: String?, workspaceId: String?) async throws -> [GitDiffPayload]
 
     // MARK: - Git Operations (Source Control)
 
@@ -66,18 +66,21 @@ protocol AgentRepositoryProtocol {
 
     /// Get list of available Claude sessions (paginated)
     /// - Parameters:
+    ///   - workspaceId: Optional workspace ID for workspace-aware API (uses workspace/session/history)
     ///   - limit: Maximum sessions to return (default: 20, max: 100)
     ///   - offset: Number of sessions to skip (default: 0)
-    func getSessions(limit: Int, offset: Int) async throws -> SessionsResponse
+    func getSessions(workspaceId: String?, limit: Int, offset: Int) async throws -> SessionsResponse
 
     /// Get messages for a specific session (paginated)
     /// - Parameters:
     ///   - sessionId: UUID of the session
+    ///   - workspaceId: Optional workspace ID for workspace-aware API
     ///   - limit: Max messages to return (default: 50, max: 500)
     ///   - offset: Starting position for pagination (default: 0)
     ///   - order: Sort order: "asc" (oldest first) or "desc" (newest first)
     func getSessionMessages(
         sessionId: String,
+        workspaceId: String?,
         limit: Int,
         offset: Int,
         order: String
@@ -88,6 +91,13 @@ protocol AgentRepositoryProtocol {
 
     /// Delete all sessions
     func deleteAllSessions() async throws -> DeleteAllSessionsResponse
+
+    // MARK: - Workspace Status
+
+    /// Get detailed workspace status including git tracker state, sessions, and watch status
+    /// - Parameter workspaceId: Workspace ID to get status for
+    /// - Returns: Workspace status with git tracker info, active sessions, and watch status
+    func getWorkspaceStatus(workspaceId: String) async throws -> WorkspaceStatusResult
 }
 
 /// Response for deleting a single session

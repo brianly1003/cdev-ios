@@ -120,10 +120,8 @@ private class DynamicHeightTextView: UITextView {
 
     override var intrinsicContentSize: CGSize {
         let size = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
-        let height = min(size.height, maxHeight)
-        let finalHeight = max(minHeight, height)
-        AppLogger.log("[DynamicHeightTextView] intrinsicContentSize: sizeThatFits=\(size.height), maxHeight=\(maxHeight), finalHeight=\(finalHeight)")
-        return CGSize(width: UIView.noIntrinsicMetric, height: finalHeight)
+        let height = min(max(minHeight, size.height), maxHeight)
+        return CGSize(width: UIView.noIntrinsicMetric, height: height)
     }
 
     override func layoutSubviews() {
@@ -140,6 +138,7 @@ private struct RainbowTextView: UIViewRepresentable {
     let isDisabled: Bool
     let onSubmit: (() -> Void)?
     var isFocused: FocusState<Bool>.Binding?
+    var onFocusChange: ((Bool) -> Void)?  // Callback for focus changes (workaround for FocusState limitation)
     @Binding var isEditing: Bool
     @Binding var requestFocus: Bool
     @Binding var contentHeight: CGFloat
@@ -178,6 +177,9 @@ private struct RainbowTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: DynamicHeightTextView, context: Context) {
+        // Update coordinator's parent reference to get latest values
+        context.coordinator.parent = self
+
         textView.maxHeight = maxHeight
         textView.isEditable = !isDisabled
 
@@ -202,7 +204,6 @@ private struct RainbowTextView: UIViewRepresentable {
             }
             // Report content height for shimmer decision
             if contentHeight != size.height {
-                AppLogger.log("[RainbowTextView] Content height changed: \(size.height), maxHeight=\(maxHeight), textView.frame.height=\(textView.frame.height)")
                 DispatchQueue.main.async {
                     self.contentHeight = size.height
                 }
@@ -397,13 +398,14 @@ private struct RainbowTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
-            parent.isFocused?.wrappedValue = true
             parent.isEditing = true
+            // Notify parent of focus change (called synchronously for reliability)
+            parent.onFocusChange?(true)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            parent.isFocused?.wrappedValue = false
             parent.isEditing = false
+            parent.onFocusChange?(false)
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
@@ -678,7 +680,7 @@ private struct RainbowData {
 
 extension RainbowTextField {
     /// Creates a RainbowTextField with focus binding support
-    func focused(_ binding: FocusState<Bool>.Binding) -> some View {
+    func focused(_ binding: FocusState<Bool>.Binding, onFocusChange: ((Bool) -> Void)? = nil) -> some View {
         RainbowTextFieldFocused(
             placeholder: placeholder,
             text: $text,
@@ -688,6 +690,7 @@ extension RainbowTextField {
             maxHeight: maxHeight,
             isDisabled: isDisabled,
             isFocused: binding,
+            onFocusChange: onFocusChange,
             onSubmit: onSubmit
         )
     }
@@ -704,6 +707,7 @@ private struct RainbowTextFieldFocused: View {
     var maxHeight: CGFloat
     var isDisabled: Bool
     var isFocused: FocusState<Bool>.Binding
+    var onFocusChange: ((Bool) -> Void)?  // External callback for focus changes
     var onSubmit: (() -> Void)?
 
     @State private var isEditing = false
@@ -789,6 +793,11 @@ private struct RainbowTextFieldFocused: View {
             // Update cache when text changes
             cachedRainbowData = RainbowData.compute(text: newText)
             lastProcessedText = newText
+        }
+        .onChange(of: isEditing) { _, newValue in
+            // Propagate editing state changes to parent via callback
+            // This is more reliable than UIViewRepresentable's callback chain
+            onFocusChange?(newValue)
         }
     }
 }

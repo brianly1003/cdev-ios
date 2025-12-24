@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F7573E08FFEB4527B6E36E6F /* WorkspaceManagerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5019239F1B9C45E19AB5F85C /* WorkspaceManagerService.swift */; };
+		B69B3D0E038242CC98B94C58 /* ManagerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF4EF2107251437CAA6930DA /* ManagerStore.swift */; };
+		6C6F7C67E0BC4F47839E0591 /* RemoteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB7C109681411CAEB15A6B /* RemoteWorkspace.swift */; };
+		0EFDCB15FF3B41FE951A01E6 /* WorkspaceManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2748034E1BA4A519F1A5A90 /* WorkspaceManagerView.swift */; };
+		F5C18B949A1A493E8CC1659A /* WorkspaceManagerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */; };
+		0A1519A314104D649BEE41CC /* WorkspaceRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3B451D511347E388771430 /* WorkspaceRowView.swift */; };
+		1D9707E2BDCA4998B79E53B6 /* ManagerSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E478D5AA9D64455BBDD0E8A /* ManagerSetupView.swift */; };
+		75785EFBBBDF43358ED0BB2C /* RepositoryDiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */; };
 		03F2F253EA8796EC71F75CE3 /* Icons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF636F66805287E5C89A9CF /* Icons.swift */; };
 		05B5CD9B069265B8C9DD84D5 /* AgentEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8269FF3F524FF0280293A8BA /* AgentEvent.swift */; };
 		08108E84EE0C80FB559EB9C6 /* Date+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32E7910F7A1B632FE4171983 /* Date+Extensions.swift */; };
@@ -30,7 +38,6 @@
 		3D2696264B83A12E4CD141C8 /* Animations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7160C0A48ECEA1726CE774CD /* Animations.swift */; };
 		3D673909695AFE31151145C8 /* ConnectionBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F8DAB87223622C34B9FC2C2 /* ConnectionBanner.swift */; };
 		3E2AFF6BECD6952F6E79C306 /* ExplorerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7AC0656DE82AD035E1E8451 /* ExplorerView.swift */; };
-		469BC4C939D1431230E830B3 /* WorkspaceSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA564483907E67448ECB010B /* WorkspaceSwitcher.swift */; };
 		4EA6B33C8F0441852A7146FC /* SearchResultRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77725AD3E154E90C54FF406C /* SearchResultRow.swift */; };
 		4F35262FDFB5FF812D09AE1F /* SessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624A07A99501D68A8E6C516B /* SessionPickerView.swift */; };
 		534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A9FE817775280D126DB8AA /* FloatingToolkit.swift */; };
@@ -121,6 +128,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		5019239F1B9C45E19AB5F85C /* WorkspaceManagerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManagerService.swift; sourceTree = "<group>"; };
+		BF4EF2107251437CAA6930DA /* ManagerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagerStore.swift; sourceTree = "<group>"; };
+		F5EB7C109681411CAEB15A6B /* RemoteWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspace.swift; sourceTree = "<group>"; };
+		C2748034E1BA4A519F1A5A90 /* WorkspaceManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManagerView.swift; sourceTree = "<group>"; };
+		FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManagerViewModel.swift; sourceTree = "<group>"; };
+		6B3B451D511347E388771430 /* WorkspaceRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRowView.swift; sourceTree = "<group>"; };
+		0E478D5AA9D64455BBDD0E8A /* ManagerSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagerSetupView.swift; sourceTree = "<group>"; };
+		774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryDiscoveryView.swift; sourceTree = "<group>"; };
 		00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingKeyboardDismissButton.swift; sourceTree = "<group>"; };
 		0333578E8E5D6052061F9550 /* AgentCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCommand.swift; sourceTree = "<group>"; };
 		0506631280A96B48BA613082 /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
@@ -187,7 +202,6 @@
 		B379AB4C13E24259A80875CF /* View+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Extensions.swift"; sourceTree = "<group>"; };
 		B55B413644061BC9A390F655 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B6BC02BC16D7CC3133DF7BDD /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
-		BA564483907E67448ECB010B /* WorkspaceSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSwitcher.swift; sourceTree = "<group>"; };
 		BCECB98BA86D946C305ED8A0 /* CardModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardModifier.swift; sourceTree = "<group>"; };
 		C134CDCDC43F5EBEBAD4F46F /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		C364EFF52EF9DD0C00954454 /* KeyboardShortcutHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcutHandler.swift; sourceTree = "<group>"; };
@@ -222,6 +236,27 @@
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		ACE0B907EE93457B863BB09A /* WorkspaceManager */ = {
+			isa = PBXGroup;
+			children = (
+				5019239F1B9C45E19AB5F85C /* WorkspaceManagerService.swift */,
+				BF4EF2107251437CAA6930DA /* ManagerStore.swift */,
+			);
+			path = WorkspaceManager;
+			sourceTree = "<group>";
+		};
+		053466281C4C40258DF87509 /* WorkspaceManager */ = {
+			isa = PBXGroup;
+			children = (
+				C2748034E1BA4A519F1A5A90 /* WorkspaceManagerView.swift */,
+				FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */,
+				6B3B451D511347E388771430 /* WorkspaceRowView.swift */,
+				0E478D5AA9D64455BBDD0E8A /* ManagerSetupView.swift */,
+				774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */,
+			);
+			path = WorkspaceManager;
+			sourceTree = "<group>";
+		};
 		00F4D765742B9E7ED5D6B05D /* cdev */ = {
 			isa = PBXGroup;
 			children = (
@@ -601,6 +636,7 @@
 		D523E8E49D2B40EFA9C4ECFB /* Screens */ = {
 			isa = PBXGroup;
 			children = (
+				053466281C4C40258DF87509 /* WorkspaceManager */,
 				F5416DB9D11DA6C70D851707 /* Admin */,
 				2AD9D1DF862779A194BBEE66 /* Dashboard */,
 				E158C01178557ABD8198F2A3 /* DiffViewer */,
@@ -626,6 +662,7 @@
 		E06A902F111EB0CC12BB5092 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				ACE0B907EE93457B863BB09A /* WorkspaceManager */,
 				C364F0032EF9DECD00954454 /* Workspace */,
 				273ED048A89241326434BE27 /* Cache */,
 				93EFD054618BBC346FBF32B2 /* HTTP */,
@@ -659,6 +696,7 @@
 		EEF6C6D7620E41854ED97F13 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				F5EB7C109681411CAEB15A6B /* RemoteWorkspace.swift */,
 				0333578E8E5D6052061F9550 /* AgentCommand.swift */,
 				8269FF3F524FF0280293A8BA /* AgentEvent.swift */,
 				72443A5CFC09CD2A8BA045ED /* AgentStatus.swift */,
@@ -726,7 +764,6 @@
 				RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */,
 				0EF1DE3FDDAE59D2A2E9F467 /* InteractionBanner.swift */,
 				624A07A99501D68A8E6C516B /* SessionPickerView.swift */,
-				BA564483907E67448ECB010B /* WorkspaceSwitcher.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -856,6 +893,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F7573E08FFEB4527B6E36E6F /* WorkspaceManagerService.swift in Sources */,
+				B69B3D0E038242CC98B94C58 /* ManagerStore.swift in Sources */,
+				6C6F7C67E0BC4F47839E0591 /* RemoteWorkspace.swift in Sources */,
+				0EFDCB15FF3B41FE951A01E6 /* WorkspaceManagerView.swift in Sources */,
+				F5C18B949A1A493E8CC1659A /* WorkspaceManagerViewModel.swift in Sources */,
+				0A1519A314104D649BEE41CC /* WorkspaceRowView.swift in Sources */,
+				1D9707E2BDCA4998B79E53B6 /* ManagerSetupView.swift in Sources */,
+				75785EFBBBDF43358ED0BB2C /* RepositoryDiscoveryView.swift in Sources */,
 				D762173953CAFB6ED7C7E26C /* AdminToolsView.swift in Sources */,
 				9BC7B7AAF9ED702C33824CA6 /* AgentCommand.swift in Sources */,
 				3A7B56A607F11436FB96598A /* AgentConnectionProtocol.swift in Sources */,
@@ -947,7 +992,6 @@
 				C364F0042EF9DECD00954454 /* WorkspaceStore.swift in Sources */,
 				C364F0052EF9DECD00954454 /* WorkspaceStateManager.swift in Sources */,
 				F4E3F52FA7F59B20502A055A /* Workspace.swift in Sources */,
-				469BC4C939D1431230E830B3 /* WorkspaceSwitcher.swift in Sources */,
 				3021967992C5331029CA2AB8 /* cdevApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

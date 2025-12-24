@@ -1,0 +1,453 @@
+import SwiftUI
+import Combine
+
+// MARK: - Workspace Operation Type
+
+/// Type of operation being performed on a workspace
+enum WorkspaceOperation: Equatable {
+    case starting
+    case stopping
+    case connecting
+
+    var displayText: String {
+        switch self {
+        case .starting: return "Starting..."
+        case .stopping: return "Stopping..."
+        case .connecting: return "Connecting..."
+        }
+    }
+}
+
+// MARK: - Workspace Manager ViewModel
+
+/// ViewModel for managing remote workspaces
+/// Single-port architecture: handles session lifecycle operations
+@MainActor
+final class WorkspaceManagerViewModel: ObservableObject {
+    // MARK: - Published State
+
+    /// All workspaces from manager
+    @Published private(set) var workspaces: [RemoteWorkspace] = []
+
+    /// Filtered workspaces based on search
+    @Published var searchText: String = ""
+
+    /// Loading states
+    @Published private(set) var isLoading: Bool = false
+
+    /// Per-workspace loading state (tracks which workspace is being operated on)
+    @Published private(set) var loadingWorkspaceId: String?
+    @Published private(set) var currentOperation: WorkspaceOperation?
+
+    /// Track workspaces that failed to connect (observed from service)
+    @Published private(set) var unreachableWorkspaceIds: Set<String> = []
+
+    /// Error state
+    @Published var error: WorkspaceManagerError?
+    @Published var showError: Bool = false
+
+    /// Currently active workspace (connected to agent)
+    @Published var currentWorkspaceId: String?
+
+    /// Show setup sheet
+    @Published var showSetupSheet: Bool = false
+
+    /// Show discovery sheet
+    @Published var showDiscoverySheet: Bool = false
+
+    // MARK: - Dependencies
+
+    private let managerService: WorkspaceManagerService
+    private let managerStore: ManagerStore
+    private let webSocketService: WebSocketServiceProtocol
+    private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Computed Properties
+
+    /// Filtered workspaces based on search text
+    var filteredWorkspaces: [RemoteWorkspace] {
+        guard !searchText.isEmpty else { return workspaces }
+        let query = searchText.lowercased()
+        return workspaces.filter { workspace in
+            workspace.name.lowercased().contains(query) ||
+            workspace.path.lowercased().contains(query)
+        }
+    }
+
+    /// Running workspaces count (workspaces with active sessions)
+    var runningCount: Int {
+        workspaces.filter { $0.hasActiveSession }.count
+    }
+
+    /// Has saved manager connection
+    var hasSavedManager: Bool {
+        managerStore.hasManager
+    }
+
+    /// Saved manager host
+    var savedHost: String? {
+        managerStore.lastHost
+    }
+
+    /// Check if connected to server (WebSocket is active)
+    var isConnected: Bool {
+        webSocketService.isConnected
+    }
+
+    /// Loading state for connecting
+    @Published private(set) var isConnecting: Bool = false
+
+    /// Whether initial connection check is complete
+    /// Used to prevent "Not Connected" flash on appear
+    @Published private(set) var hasCheckedConnection: Bool = false
+
+    // MARK: - Initialization
+
+    init(
+        managerService: WorkspaceManagerService = .shared,
+        managerStore: ManagerStore = .shared,
+        webSocketService: WebSocketServiceProtocol = DependencyContainer.shared.webSocketService
+    ) {
+        self.managerService = managerService
+        self.managerStore = managerStore
+        self.webSocketService = webSocketService
+
+        // Initialize currentWorkspaceId from the active workspace's remoteWorkspaceId
+        // This ensures "Current" badge shows correctly when reopening the view
+        self.currentWorkspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
+
+        // Mark connection check as complete if:
+        // - Already connected (no need to reconnect)
+        // - No saved manager (will show setup sheet)
+        if webSocketService.isConnected || !managerStore.hasManager {
+            self.hasCheckedConnection = true
+        }
+        // Otherwise hasCheckedConnection stays false until connectToSavedManager completes
+
+        setupBindings()
+    }
+
+    private func setupBindings() {
+        // Observe workspaces from service
+        managerService.$workspaces
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$workspaces)
+
+        // Observe loading state
+        managerService.$isLoading
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isLoading)
+
+        // Observe unreachable workspace IDs from service
+        managerService.$unreachableWorkspaceIds
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$unreachableWorkspaceIds)
+
+        // Observe errors
+        managerService.$error
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] error in
+                if let error = error {
+                    self?.error = error
+                    self?.showError = true
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Connection
+
+    /// Connect to saved manager host
+    /// In single-port architecture, this just saves the host and refreshes workspaces
+    func connectToSavedManager() async {
+        guard let host = managerStore.lastHost else {
+            isConnecting = false
+            hasCheckedConnection = true
+            showSetupSheet = true
+            return
+        }
+
+        await connect(to: host)
+    }
+
+    /// Connect to server at specified host
+    /// Establishes WebSocket connection and refreshes workspaces
+    func connect(to host: String) async {
+        isConnecting = true
+        defer {
+            isConnecting = false
+            hasCheckedConnection = true
+        }
+
+        // Determine if host is local (IP or .local)
+        let isLocal = isLocalHost(host)
+        let wsScheme = isLocal ? "ws" : "wss"
+        let httpScheme = isLocal ? "http" : "https"
+
+        // Build URLs for single-port server (8766)
+        let wsURL: URL
+        let httpURL: URL
+
+        if isLocal {
+            wsURL = URL(string: "\(wsScheme)://\(host):\(ServerConnection.serverPort)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(host):\(ServerConnection.serverPort)")!
+        } else {
+            // Dev tunnels: host already includes port in subdomain
+            wsURL = URL(string: "\(wsScheme)://\(host)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(host)")!
+        }
+
+        // Save the host
+        managerStore.saveHost(host)
+        managerService.setCurrentHost(host)
+
+        // Connect WebSocket
+        let connectionInfo = ConnectionInfo(
+            webSocketURL: wsURL,
+            httpURL: httpURL,
+            sessionId: "",
+            repoName: "Workspaces"
+        )
+
+        do {
+            try await webSocketService.connect(to: connectionInfo)
+            // Refresh workspaces after connection
+            await refreshWorkspaces()
+            Haptics.success()
+        } catch {
+            self.error = .rpcError(code: -1, message: "Connection failed: \(error.localizedDescription)")
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
+    /// Check if host is a local network address
+    private func isLocalHost(_ host: String) -> Bool {
+        if host == "localhost" || host == "127.0.0.1" {
+            return true
+        }
+        // IP address pattern
+        let ipPattern = #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#
+        if let regex = try? NSRegularExpression(pattern: ipPattern),
+           regex.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)) != nil {
+            return true
+        }
+        // .local domains (Bonjour)
+        if host.hasSuffix(".local") {
+            return true
+        }
+        return false
+    }
+
+    // MARK: - Workspace Operations
+
+    /// Refresh workspace list
+    func refreshWorkspaces() async {
+        do {
+            _ = try await managerService.listWorkspaces()
+        } catch let error as WorkspaceManagerError {
+            self.error = error
+            self.showError = true
+        } catch {
+            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            self.showError = true
+        }
+    }
+
+    /// Start a session for a workspace
+    func startWorkspace(_ workspace: RemoteWorkspace) async {
+        // Debounce: Prevent multiple rapid taps
+        guard loadingWorkspaceId == nil else {
+            AppLogger.log("[WorkspaceManager] Ignoring start - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
+            return
+        }
+
+        loadingWorkspaceId = workspace.id
+        currentOperation = .starting
+        defer {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+        }
+
+        do {
+            // Start a new session for this workspace
+            _ = try await managerService.startSession(workspaceId: workspace.id)
+            Haptics.success()
+        } catch let error as WorkspaceManagerError {
+            self.error = error
+            self.showError = true
+            Haptics.error()
+        } catch {
+            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
+    /// Stop all sessions for a workspace
+    func stopWorkspace(_ workspace: RemoteWorkspace) async {
+        // Debounce: Prevent multiple rapid taps
+        guard loadingWorkspaceId == nil else {
+            AppLogger.log("[WorkspaceManager] Ignoring stop - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
+            return
+        }
+
+        loadingWorkspaceId = workspace.id
+        currentOperation = .stopping
+        defer {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+        }
+
+        do {
+            // Stop all active sessions for this workspace
+            for session in workspace.sessions where session.status == .running {
+                try await managerService.stopSession(sessionId: session.id)
+            }
+            // Also clear unreachable status when stopped
+            managerService.clearUnreachableStatus(workspace.id)
+            Haptics.light()
+        } catch let error as WorkspaceManagerError {
+            self.error = error
+            self.showError = true
+            Haptics.error()
+        } catch {
+            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
+    /// Connect to a workspace (start session if needed, then switch to it)
+    func connectToWorkspace(_ workspace: RemoteWorkspace) async -> RemoteWorkspace? {
+        AppLogger.log("[WorkspaceManagerVM] connectToWorkspace called for: \(workspace.name), hasActiveSession: \(workspace.hasActiveSession)")
+
+        // Debounce: Prevent multiple rapid taps from creating multiple sessions
+        guard loadingWorkspaceId == nil else {
+            AppLogger.log("[WorkspaceManagerVM] Ignoring connect - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
+            return nil
+        }
+
+        loadingWorkspaceId = workspace.id
+        currentOperation = .connecting
+        defer {
+            AppLogger.log("[WorkspaceManagerVM] connectToWorkspace defer - clearing loadingWorkspaceId")
+            loadingWorkspaceId = nil
+            currentOperation = nil
+        }
+
+        do {
+            // If already has active session, just return directly - no need to refresh
+            if workspace.hasActiveSession {
+                AppLogger.log("[WorkspaceManagerVM] Workspace already has active session - returning directly")
+                currentWorkspaceId = workspace.id
+                Haptics.success()
+                return workspace
+            }
+
+            // Start new session
+            AppLogger.log("[WorkspaceManagerVM] Starting new session for workspace")
+            currentOperation = .starting
+            _ = try await managerService.startSession(workspaceId: workspace.id)
+            AppLogger.log("[WorkspaceManagerVM] Session started")
+
+            // Refresh to get updated workspace with sessions (only after starting)
+            AppLogger.log("[WorkspaceManagerVM] Refreshing workspace list")
+            _ = try await managerService.listWorkspaces()
+
+            // Find the updated workspace
+            guard let updatedWorkspace = workspaces.first(where: { $0.id == workspace.id }) else {
+                AppLogger.log("[WorkspaceManagerVM] ERROR: Workspace not found after refresh")
+                self.error = .workspaceFailed(workspace.id)
+                self.showError = true
+                Haptics.error()
+                return nil
+            }
+
+            AppLogger.log("[WorkspaceManagerVM] SUCCESS: Returning workspace \(updatedWorkspace.name)")
+            currentOperation = .connecting
+            currentWorkspaceId = updatedWorkspace.id
+            Haptics.success()
+            return updatedWorkspace
+        } catch let error as WorkspaceManagerError {
+            AppLogger.log("[WorkspaceManagerVM] ERROR (WorkspaceManagerError): \(error)")
+            self.error = error
+            self.showError = true
+            Haptics.error()
+            // Refresh to get actual status from manager
+            await refreshWorkspaces()
+            return nil
+        } catch {
+            AppLogger.log("[WorkspaceManagerVM] ERROR (generic): \(error)")
+            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            self.showError = true
+            Haptics.error()
+            // Refresh to get actual status from manager
+            await refreshWorkspaces()
+            return nil
+        }
+    }
+
+    /// Called when connection to a workspace agent fails
+    /// Marks workspace as unreachable and refreshes status from manager
+    func handleConnectionFailure(workspaceId: String) async {
+        if currentWorkspaceId == workspaceId {
+            currentWorkspaceId = nil
+        }
+        // Mark as unreachable via service - shows "Unreachable" instead of "Active"
+        managerService.markWorkspaceUnreachable(workspaceId)
+        // Refresh workspace list to get actual status
+        await refreshWorkspaces()
+    }
+
+    /// Check if a workspace is marked as unreachable
+    func isWorkspaceUnreachable(_ workspace: RemoteWorkspace) -> Bool {
+        managerService.isWorkspaceUnreachable(workspace.id)
+    }
+
+    /// Clear unreachable status for a workspace (called when successfully connected or restarted)
+    func clearUnreachableStatus(_ workspaceId: String) {
+        managerService.clearUnreachableStatus(workspaceId)
+    }
+
+    /// Check if a workspace is currently loading
+    func isWorkspaceLoading(_ workspace: RemoteWorkspace) -> Bool {
+        loadingWorkspaceId == workspace.id
+    }
+
+    /// Get the operation type for a loading workspace
+    func operationFor(_ workspace: RemoteWorkspace) -> WorkspaceOperation? {
+        guard loadingWorkspaceId == workspace.id else { return nil }
+        return currentOperation
+    }
+
+    /// Start and connect to workspace (convenience)
+    func startAndConnect(_ workspace: RemoteWorkspace) async -> RemoteWorkspace? {
+        return await connectToWorkspace(workspace)
+    }
+
+    // MARK: - Setup
+
+    /// Clear saved manager and show setup
+    func resetManager() {
+        managerStore.clear()
+        managerService.reset()
+        showSetupSheet = true
+    }
+
+    /// Mark connection check as complete (used when connection failed previously)
+    func markConnectionChecked() {
+        hasCheckedConnection = true
+    }
+}
+
+// MARK: - Preview Helpers
+
+extension WorkspaceManagerViewModel {
+    /// Create a preview instance with mock data
+    static var preview: WorkspaceManagerViewModel {
+        let vm = WorkspaceManagerViewModel()
+        // Note: Can't easily mock the service, but previews can use real service
+        return vm
+    }
+}

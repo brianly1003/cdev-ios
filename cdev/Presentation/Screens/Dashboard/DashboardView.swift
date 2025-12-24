@@ -10,10 +10,10 @@ struct DashboardView: View {
     @State private var showSettings = false
     @State private var showDebugLogs = false
     @State private var showWorkspaceSwitcher = false
-    @State private var showPairing = false
     @State private var showReconnectedToast = false
     @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
+    @State private var isTextFieldEditing: Bool = false  // Tracks actual editing state from UITextView
 
     init(viewModel: DashboardViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -158,9 +158,14 @@ struct DashboardView: View {
                                 isBashMode: $viewModel.isBashMode,
                                 isLoading: viewModel.isLoading,
                                 isFocused: $isInputFocused,
+                                isEditing: $isTextFieldEditing,  // Actual editing state from UITextView
                                 onSend: { Task { await viewModel.sendPrompt() } },
                                 onStop: { Task { await viewModel.stopClaude() } },
-                                onToggleBashMode: { viewModel.toggleBashMode() }
+                                onToggleBashMode: { viewModel.toggleBashMode() },
+                                onFocusChange: { focused in
+                                    // Update the editing state (for command suggestions)
+                                    isTextFieldEditing = focused
+                                }
                             )
 
                             // Keyboard dismiss button - positioned at top-right of ActionBarView
@@ -223,6 +228,7 @@ struct DashboardView: View {
                     SessionPickerView(
                         sessions: viewModel.sessions,
                         currentSessionId: viewModel.agentStatus.sessionId,
+                        workspaceId: viewModel.currentWorkspaceId,
                         hasMore: viewModel.sessionsHasMore,
                         isLoadingMore: viewModel.isLoadingMoreSessions,
                         agentRepository: viewModel.agentRepository,
@@ -241,26 +247,17 @@ struct DashboardView: View {
                         onDismiss: { viewModel.showSessionPicker = false }
                     )
                 }
-                .sheet(isPresented: $showWorkspaceSwitcher) {
-                    WorkspaceSwitcherSheet(
-                        workspaceStore: workspaceStore,
-                        currentWorkspace: workspaceStore.activeWorkspace,
-                        isConnected: viewModel.connectionState.isConnected,
-                        claudeState: viewModel.claudeState,
-                        onSwitch: { workspace in
-                            Task { await viewModel.switchWorkspace(workspace) }
+                .fullScreenCover(isPresented: $showWorkspaceSwitcher) {
+                    WorkspaceManagerView(
+                        onConnectToWorkspace: { workspace, host in
+                            AppLogger.log("[DashboardView] onConnectToWorkspace called: workspace=\(workspace.name), host=\(host)")
+                            AppLogger.log("[DashboardView] onConnectToWorkspace: hasActiveSession=\(workspace.hasActiveSession)")
+                            let result = await viewModel.connectToRemoteWorkspace(workspace, host: host)
+                            AppLogger.log("[DashboardView] onConnectToWorkspace: connectToRemoteWorkspace returned \(result)")
+                            return result
                         },
-                        onAddNew: { showPairing = true },
-                        onDisconnect: {
-                            Task { await viewModel.disconnect() }
-                        }
+                        showDismissButton: true
                     )
-                    .responsiveSheet()
-                }
-                .sheet(isPresented: $showPairing) {
-                    if let pairingViewModel = viewModel.makePairingViewModel() {
-                        PairingView(viewModel: pairingViewModel)
-                    }
                 }
             }
 
@@ -479,8 +476,8 @@ struct StatusBarView: View {
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)
 
-            // Session ID row (when enabled)
-            if showSessionId, let fullId = sessionId, !fullId.isEmpty {
+            // Session ID row (only when connected and enabled)
+            if showSessionId, connectionState.isConnected, let fullId = sessionId, !fullId.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "number")
                         .font(.system(size: 8))
@@ -743,9 +740,11 @@ struct ActionBarView: View {
     @Binding var isBashMode: Bool
     let isLoading: Bool
     var isFocused: FocusState<Bool>.Binding
+    @Binding var isEditing: Bool  // Actual editing state from UITextView (more reliable than FocusState)
     let onSend: () -> Void
     let onStop: () -> Void
     let onToggleBashMode: () -> Void
+    var onFocusChange: ((Bool) -> Void)?  // Callback to update focus state (workaround for FocusState limitation)
 
     // Keyboard height tracking for proper positioning
     @State private var keyboardHeight: CGFloat = 0
@@ -790,7 +789,9 @@ struct ActionBarView: View {
 
     /// Whether to show command suggestions
     private var showSuggestions: Bool {
-        !suggestedCommands.isEmpty && isFocused.wrappedValue
+        // Use isEditing (from UITextView delegate) instead of isFocused.wrappedValue
+        // FocusState doesn't work reliably with UIViewRepresentable
+        !suggestedCommands.isEmpty && isEditing
     }
 
     /// Whether sending is disabled (Claude is running or waiting)
@@ -865,7 +866,7 @@ struct ActionBarView: View {
                             }
                         }
                     )
-                    .focused(isFocused)
+                    .focused(isFocused, onFocusChange: onFocusChange)
                     .autocorrectionDisabled(isBashMode)  // Disable autocorrection in bash mode
                     .padding(.vertical, inputVerticalPadding)
                     .padding(.leading, inputHorizontalPadding)

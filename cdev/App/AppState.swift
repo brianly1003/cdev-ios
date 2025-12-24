@@ -149,6 +149,12 @@ final class AppState: ObservableObject {
         webSocketService.disconnect()
     }
 
+    /// Clear HTTP service base URL (stops any pending/cached requests)
+    func clearHTTPState() {
+        httpService.baseURL = nil
+        AppLogger.log("[AppState] Cleared HTTP base URL")
+    }
+
     // MARK: - Private
 
     private func startListening() {
@@ -166,40 +172,52 @@ final class AppState: ObservableObject {
         }
 
         Task {
-            // First try WorkspaceStore (new system) - check UserDefaults directly
-            if let data = UserDefaults.standard.data(forKey: "cdev.saved_workspaces"),
-               let workspaces = try? JSONDecoder().decode([Workspace].self, from: data),
-               let lastWorkspace = workspaces.sorted(by: { $0.lastConnected > $1.lastConnected }).first {
+            // New architecture: Use WorkspaceManagerService for auto-reconnect
+            // Only auto-connect to the WebSocket server, don't select a specific workspace
+            // Let user choose from workspace manager
 
-                AppLogger.log("[AppState] Auto-reconnecting to workspace: \(lastWorkspace.name) at \(lastWorkspace.webSocketURL)")
-                let connectionInfo = ConnectionInfo(
-                    webSocketURL: lastWorkspace.webSocketURL,
-                    httpURL: lastWorkspace.httpURL,
-                    sessionId: lastWorkspace.sessionId ?? "",
-                    repoName: lastWorkspace.name
-                )
-                httpService.baseURL = connectionInfo.httpURL
-                do {
-                    try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
-                    WorkspaceStore.shared.setActive(lastWorkspace)
-                    AppLogger.log("[AppState] Auto-reconnect successful")
-                } catch {
-                    AppLogger.error(error, context: "Auto-reconnect to workspace")
-                }
+            // Check if we have a saved manager host
+            guard let managerHost = ManagerStore.shared.lastHost else {
+                AppLogger.log("[AppState] No saved manager host, not attempting auto-reconnect")
                 return
             }
 
-            AppLogger.log("[AppState] No saved workspaces found, trying old session storage")
+            AppLogger.log("[AppState] Auto-connecting to manager at: \(managerHost)")
 
-            // Fallback to old session storage
+            // Determine URL scheme based on host type
+            let isLocal = isLocalHost(managerHost)
+            let wsScheme = isLocal ? "ws" : "wss"
+            let httpScheme = isLocal ? "http" : "https"
+
+            let wsURL: URL
+            let httpURL: URL
+
+            if isLocal {
+                wsURL = URL(string: "\(wsScheme)://\(managerHost):\(ServerConnection.serverPort)/ws")!
+                httpURL = URL(string: "\(httpScheme)://\(managerHost):\(ServerConnection.serverPort)")!
+            } else {
+                wsURL = URL(string: "\(wsScheme)://\(managerHost)/ws")!
+                httpURL = URL(string: "\(httpScheme)://\(managerHost)")!
+            }
+
+            let connectionInfo = ConnectionInfo(
+                webSocketURL: wsURL,
+                httpURL: httpURL,
+                sessionId: "",
+                repoName: "Workspaces"
+            )
+
+            httpService.baseURL = httpURL
+
             do {
-                if let lastConnection = try await sessionRepository.loadLastConnection() {
-                    AppLogger.log("Auto-reconnecting to \(lastConnection.host)")
-                    httpService.baseURL = lastConnection.httpURL
-                    try await connectToAgentUseCase.execute(connectionInfo: lastConnection)
-                }
+                try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+                AppLogger.log("[AppState] Auto-connect to manager successful, workspace list available")
+                // Don't auto-select a workspace - let user choose from workspace manager
             } catch {
-                AppLogger.error(error, context: "Auto-reconnect")
+                AppLogger.error(error, context: "Auto-reconnect to manager")
+                webSocketService.disconnect()
+                httpService.baseURL = nil
+                AppLogger.log("[AppState] Auto-reconnect failed")
             }
         }
     }
@@ -208,5 +226,248 @@ final class AppState: ObservableObject {
     /// Deprecated: Use `hasWorkspaces` property for reactive updates
     var hasSavedWorkspaces: Bool {
         hasWorkspaces
+    }
+
+    // MARK: - Agent Connection
+
+    /// Connect directly to a cdev-agent at the given host
+    /// cdev-agent uses: WebSocket on port 8765, HTTP on port 8766
+    func connectToAgent(host: String) async {
+        AppLogger.log("[AppState] Connecting to cdev-agent at \(host)")
+
+        // Determine URL scheme based on host type
+        let isLocal = isLocalHost(host)
+        let wsScheme = isLocal ? "ws" : "wss"
+        let httpScheme = isLocal ? "http" : "https"
+
+        // cdev-agent ports (for local connections)
+        // For dev tunnels, port is embedded in the hostname
+        let wsURL: URL
+        let httpURL: URL
+
+        if isLocal {
+            // Local network: explicit ports
+            wsURL = URL(string: "\(wsScheme)://\(host):8765/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(host):8766")!
+        } else {
+            // Dev tunnels: port is in subdomain, no explicit port needed
+            // e.g., abc123x4-8765.asse.devtunnels.ms for WebSocket
+            // Need to handle HTTP separately (port 8766 tunnel)
+            wsURL = URL(string: "\(wsScheme)://\(host)/ws")!
+            // For HTTP, user needs to provide the 8766 tunnel URL separately
+            // For now, assume same host (might need adjustment)
+            let httpHost = host.replacingOccurrences(of: "-8765.", with: "-8766.")
+            httpURL = URL(string: "\(httpScheme)://\(httpHost)")!
+        }
+
+        // Create workspace entry
+        let workspace = Workspace(
+            name: extractWorkspaceName(from: host),
+            webSocketURL: wsURL,
+            httpURL: httpURL,
+            sessionId: nil,
+            branch: nil
+        )
+
+        // Save to workspace store
+        WorkspaceStore.shared.saveWorkspace(workspace)
+        WorkspaceStore.shared.setActive(workspace)
+
+        // Create connection info
+        let connectionInfo = ConnectionInfo(
+            webSocketURL: wsURL,
+            httpURL: httpURL,
+            sessionId: "",
+            repoName: workspace.name
+        )
+
+        // Set HTTP base URL
+        httpService.baseURL = httpURL
+
+        // Connect
+        do {
+            try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+            AppLogger.log("[AppState] Connected to cdev-agent at \(host)")
+            Haptics.success()
+        } catch {
+            AppLogger.error(error, context: "Connect to cdev-agent")
+            Haptics.error()
+        }
+    }
+
+    /// Check if host is a local network address
+    private func isLocalHost(_ host: String) -> Bool {
+        if host == "localhost" || host == "127.0.0.1" {
+            return true
+        }
+        // IP address pattern
+        let ipPattern = #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#
+        if let regex = try? NSRegularExpression(pattern: ipPattern),
+           regex.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)) != nil {
+            return true
+        }
+        // .local domains (Bonjour)
+        if host.hasSuffix(".local") {
+            return true
+        }
+        return false
+    }
+
+    /// Extract a readable workspace name from host
+    private func extractWorkspaceName(from host: String) -> String {
+        // For IP addresses, use "Agent @ IP"
+        if host.contains(".") && !host.contains("-") {
+            return "Agent @ \(host)"
+        }
+        // For dev tunnels, extract the tunnel ID
+        if let dashIndex = host.firstIndex(of: "-") {
+            return String(host[..<dashIndex])
+        }
+        return host
+    }
+
+    /// Replace port in dev tunnel subdomain
+    /// e.g., "abc123x4-8765.asse.devtunnels.ms" with port 8766 → "abc123x4-8766.asse.devtunnels.ms"
+    private func replacePortInDevTunnel(host: String, newPort: Int) -> String {
+        // Pattern: {id}-{port}.{rest}
+        // Find the pattern: dash followed by 4-5 digit port, then dot
+        let portPattern = #"-(\d{4,5})\."#
+
+        guard let regex = try? NSRegularExpression(pattern: portPattern),
+              let match = regex.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)),
+              let portRange = Range(match.range(at: 0), in: host) else {
+            // If pattern not found, return host as-is (might not be a dev tunnel)
+            return host
+        }
+
+        // Replace the port in the subdomain
+        let newPortString = "-\(newPort)."
+        return host.replacingCharacters(in: portRange, with: newPortString)
+    }
+
+    // MARK: - Remote Workspace Connection
+
+    /// Connect to a remote workspace from the Workspace Manager
+    /// Single-port architecture: uses the same server connection (port 8766)
+    /// Starts a session for the workspace if none exists
+    /// Returns true if connection succeeded, false otherwise
+    @discardableResult
+    func connectToRemoteWorkspace(_ remoteWorkspace: RemoteWorkspace, host: String) async -> Bool {
+        AppLogger.log("[AppState] ========== CONNECT TO REMOTE WORKSPACE ==========")
+        AppLogger.log("[AppState] connectToRemoteWorkspace: workspace=\(remoteWorkspace.name), id=\(remoteWorkspace.id)")
+        AppLogger.log("[AppState] connectToRemoteWorkspace: host=\(host), hasActiveSession=\(remoteWorkspace.hasActiveSession)")
+        AppLogger.log("[AppState] connectToRemoteWorkspace: activeSession=\(remoteWorkspace.activeSession?.id ?? "nil")")
+
+        // Single-port architecture: all workspaces share the same server port
+        let isLocal = isLocalHost(host)
+        let wsScheme = isLocal ? "ws" : "wss"
+        let httpScheme = isLocal ? "http" : "https"
+
+        // Create URLs using single port (8766)
+        let wsURL: URL
+        let httpURL: URL
+
+        if isLocal {
+            // Local network: use single server port
+            wsURL = URL(string: "\(wsScheme)://\(host):\(ServerConnection.serverPort)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(host):\(ServerConnection.serverPort)")!
+        } else {
+            // Dev tunnels: host already includes port in subdomain
+            wsURL = URL(string: "\(wsScheme)://\(host)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(host)")!
+        }
+
+        // Create local workspace entry
+        let workspace = Workspace(
+            name: remoteWorkspace.name,
+            webSocketURL: wsURL,
+            httpURL: httpURL,
+            sessionId: remoteWorkspace.activeSession?.id,  // Use active session if exists
+            branch: nil,
+            remoteWorkspaceId: remoteWorkspace.id  // Server-side workspace ID for workspace-aware APIs
+        )
+
+        // Save to workspace store and use the returned workspace (which has the correct ID)
+        let savedWorkspace = WorkspaceStore.shared.saveWorkspace(workspace)
+        WorkspaceStore.shared.setActive(savedWorkspace)
+        AppLogger.log("[AppState] Saved workspace: \(savedWorkspace.name), id: \(savedWorkspace.id)")
+
+        // Create connection info
+        let connectionInfo = ConnectionInfo(
+            webSocketURL: wsURL,
+            httpURL: httpURL,
+            sessionId: remoteWorkspace.activeSession?.id ?? "",
+            repoName: remoteWorkspace.name
+        )
+
+        // Set HTTP base URL
+        httpService.baseURL = httpURL
+
+        // Connect (if not already connected to this server)
+        do {
+            // Only connect if not already connected
+            AppLogger.log("[AppState] connectToRemoteWorkspace: isConnected=\(webSocketService.isConnected)")
+            if !webSocketService.isConnected {
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Connecting to WebSocket...")
+                try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+                AppLogger.log("[AppState] connectToRemoteWorkspace: WebSocket connected")
+            } else {
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Already connected, skipping connect")
+            }
+
+            // Subscribe to workspace events
+            AppLogger.log("[AppState] connectToRemoteWorkspace: Subscribing to workspace events...")
+            try await WorkspaceManagerService.shared.subscribe(workspaceId: remoteWorkspace.id)
+            AppLogger.log("[AppState] connectToRemoteWorkspace: Subscribed")
+
+            // Get or create session for this workspace
+            var activeSessionId: String?
+
+            if remoteWorkspace.hasActiveSession, let session = remoteWorkspace.activeSession {
+                // Use existing active session
+                activeSessionId = session.id
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Using existing session: \(session.id)")
+            } else {
+                // Start a new session
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Starting new session for workspace...")
+                let session = try await WorkspaceManagerService.shared.startSession(workspaceId: remoteWorkspace.id)
+                activeSessionId = session.id
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Started session: \(session.id)")
+            }
+
+            // Set the session ID for DashboardViewModel to use
+            if let sessionId = activeSessionId {
+                sessionRepository.selectedSessionId = sessionId
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Set selectedSessionId: \(sessionId)")
+            }
+
+            // Update DashboardViewModel workspace context (if cached)
+            // This ensures correct workspace name is displayed immediately
+            AppLogger.log("[AppState] connectToRemoteWorkspace: Updating DashboardViewModel context...")
+            _dashboardViewModel?.setWorkspaceContext(
+                name: remoteWorkspace.name,
+                sessionId: activeSessionId
+            )
+
+            AppLogger.log("[AppState] connectToRemoteWorkspace: SUCCESS - Connected to \(remoteWorkspace.name)")
+            AppLogger.log("[AppState] ========== CONNECT TO REMOTE WORKSPACE END (SUCCESS) ==========")
+            // Clear unreachable status on successful connection
+            WorkspaceManagerService.shared.clearUnreachableStatus(remoteWorkspace.id)
+            Haptics.success()
+            return true
+        } catch {
+            AppLogger.log("[AppState] connectToRemoteWorkspace: FAILED - \(error.localizedDescription)", type: .error)
+            AppLogger.log("[AppState] ========== CONNECT TO REMOTE WORKSPACE END (FAILED) ==========")
+            AppLogger.error(error, context: "Connect to remote workspace")
+            Haptics.error()
+            // Mark workspace as unreachable so UI shows correct status
+            WorkspaceManagerService.shared.markWorkspaceUnreachable(remoteWorkspace.id)
+            // Refresh workspace list from manager
+            Task {
+                AppLogger.log("[AppState] Connection failed, refreshing workspace status from manager")
+                _ = try? await WorkspaceManagerService.shared.listWorkspaces()
+            }
+            return false
+        }
     }
 }
