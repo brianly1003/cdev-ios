@@ -278,11 +278,11 @@ struct DashboardView: View {
                 Spacer()
             }
 
-            // Session awareness toast (join/leave notifications)
+            // Session awareness toast (join/leave notifications) - bottom position for visibility
             VStack {
-                SessionAwarenessToast()
-                    .padding(.top, 100) // Below status bar
                 Spacer()
+                SessionAwarenessToast()
+                    .padding(.bottom, 80) // Above action bar
             }
 
             // ⌘K Quick Switcher overlay
@@ -1131,21 +1131,29 @@ struct SessionAwarenessToast: View {
 
     var body: some View {
         if let notification = sessionAwareness.recentNotification {
-            HStack(spacing: Spacing.xs) {
+            HStack(spacing: Spacing.sm) {
+                // Icon with colored background
                 Image(systemName: notification.isJoin ? "person.badge.plus" : "person.badge.minus")
-                    .font(.system(size: 12))
-                    .foregroundStyle(notification.isJoin ? ColorSystem.success : ColorSystem.warning)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(notification.isJoin ? ColorSystem.success : ColorSystem.warning)
+                    .clipShape(Circle())
 
                 Text(notification.message)
-                    .font(Typography.caption1)
-                    .foregroundStyle(ColorSystem.textSecondary)
+                    .font(Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
             }
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
             .background(ColorSystem.terminalBgElevated)
-            .clipShape(Capsule())
-            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(notification.isJoin ? ColorSystem.success.opacity(0.3) : ColorSystem.warning.opacity(0.3), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.4), radius: 8, y: 4)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: notification)
         }
     }
