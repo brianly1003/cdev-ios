@@ -1104,18 +1104,20 @@ private struct StopButtonWithAnimation: View {
 /// Badge showing number of devices viewing the same session
 struct ViewerCountBadge: View {
     let viewerCount: Int
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: layout.ultraTightSpacing) {
             Image(systemName: "person.2.fill")
-                .font(.system(size: 8))
+                .font(.system(size: layout.iconSmall - 1))
 
             Text("\(viewerCount)")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .font(.system(size: layout.iconSmall - 1, weight: .bold, design: .monospaced))
         }
         .foregroundStyle(ColorSystem.primary)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
+        .padding(.horizontal, layout.tightSpacing + 1)
+        .padding(.vertical, layout.ultraTightSpacing)
         .background(ColorSystem.primary.opacity(0.15))
         .clipShape(Capsule())
         .transition(.scale.combined(with: .opacity))
@@ -1128,31 +1130,29 @@ struct ViewerCountBadge: View {
 /// Toast notification for session join/leave events
 struct SessionAwarenessToast: View {
     @StateObject private var sessionAwareness = SessionAwarenessManager.shared
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     var body: some View {
         if let notification = sessionAwareness.recentNotification {
-            HStack(spacing: Spacing.sm) {
-                // Icon with colored background
+            HStack(spacing: layout.contentSpacing) {
+                // Compact icon with colored background
                 Image(systemName: notification.isJoin ? "person.badge.plus" : "person.badge.minus")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: layout.iconSmall, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
+                    .frame(width: layout.indicatorSizeSmall + 4, height: layout.indicatorSizeSmall + 4)
                     .background(notification.isJoin ? ColorSystem.success : ColorSystem.warning)
                     .clipShape(Circle())
 
                 Text(notification.message)
-                    .font(Typography.body)
-                    .foregroundStyle(ColorSystem.textPrimary)
+                    .font(layout.captionFont)
+                    .foregroundStyle(ColorSystem.textSecondary)
             }
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, layout.smallPadding)
             .background(ColorSystem.terminalBgElevated)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(notification.isJoin ? ColorSystem.success.opacity(0.3) : ColorSystem.warning.opacity(0.3), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.4), radius: 8, y: 4)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.3), radius: layout.shadowRadius, y: 2)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: notification)
         }
