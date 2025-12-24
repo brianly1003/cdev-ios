@@ -37,6 +37,19 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         self.sessions = sessions
     }
 
+    // MARK: - Custom Decoder (handles missing sessions from workspace/add response)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        path = try container.decode(String.self, forKey: .path)
+        autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? false
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        // Sessions may be missing from workspace/add response - default to empty array
+        sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
+    }
+
     // MARK: - Computed Properties
 
     /// Number of active sessions
