@@ -24,6 +24,7 @@
 		1391B9C793E53FE882B95C73 /* View+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B379AB4C13E24259A80875CF /* View+Extensions.swift */; };
 		13FD519957BCD9C5E3F15C7B /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55B413644061BC9A390F655 /* AppState.swift */; };
 		14FDAC0F15F7E11E0858E76A /* DependencyContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EBB1C11BF8210D09994AB8 /* DependencyContainer.swift */; };
+		A1B2C3D4E5F60718A9BCDEF0 /* SessionAwarenessManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718A9BCDEF1 /* SessionAwarenessManager.swift */; };
 		1A843DBC72CE7604BA20A31F /* FileEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7401EB48F061AD156DE555C /* FileEntry.swift */; };
 		23ADBE232F9A0F50A2DF3364 /* BreadcrumbBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D94F4DD3731FE1A70AD7497 /* BreadcrumbBar.swift */; };
 		28BCBAA84F2FE538CDF2A133 /* CardModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCECB98BA86D946C305ED8A0 /* CardModifier.swift */; };
@@ -190,6 +191,7 @@
 		8269FF3F524FF0280293A8BA /* AgentEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentEvent.swift; sourceTree = "<group>"; };
 		8432BF51A96402805348C138 /* ChatMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessageView.swift; sourceTree = "<group>"; };
 		86EBB1C11BF8210D09994AB8 /* DependencyContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyContainer.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718A9BCDEF1 /* SessionAwarenessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAwarenessManager.swift; sourceTree = "<group>"; };
 		886F99E40FD78C4FB0A1CAA0 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		8C484303F2FC2111266820F0 /* AppError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppError.swift; sourceTree = "<group>"; };
 		8E1D6A29B60A4F05A36ACE4C /* SessionRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRepository.swift; sourceTree = "<group>"; };
@@ -503,6 +505,7 @@
 				B55B413644061BC9A390F655 /* AppState.swift */,
 				D2BED9190DAD30ECF6A37DD5 /* cdevApp.swift */,
 				86EBB1C11BF8210D09994AB8 /* DependencyContainer.swift */,
+				A1B2C3D4E5F60718A9BCDEF1 /* SessionAwarenessManager.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -931,6 +934,7 @@
 				8307BF71BF15CB91BBCDD040 /* DebugLogStore.swift in Sources */,
 				AFF6BFB90F633E2136C3BCF6 /* DebugLogTypes.swift in Sources */,
 				14FDAC0F15F7E11E0858E76A /* DependencyContainer.swift in Sources */,
+				A1B2C3D4E5F60718A9BCDEF0 /* SessionAwarenessManager.swift in Sources */,
 				7C84DB771D482C02110886BB /* DiffCache.swift in Sources */,
 				BE98168A1C78FA3D36847993 /* DiffEntry.swift in Sources */,
 				D1077C80747F6966DC82B168 /* DiffListView.swift in Sources */,

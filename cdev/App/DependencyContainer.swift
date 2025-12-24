@@ -25,6 +25,14 @@ final class DependencyContainer {
 
     lazy var managerStore: ManagerStore = ManagerStore.shared
 
+    // MARK: - Session Awareness
+
+    lazy var sessionAwarenessManager: SessionAwarenessManager = {
+        let manager = SessionAwarenessManager.shared
+        // Note: agentRepository will be configured after it's initialized
+        return manager
+    }()
+
     // MARK: - Caches
 
     lazy var logCache: LogCache = LogCache()
@@ -71,7 +79,10 @@ final class DependencyContainer {
 
     @MainActor
     func makeAppState() -> AppState {
-        AppState(
+        // Configure session awareness manager with agent repository
+        sessionAwarenessManager.configure(agentRepository: agentRepository)
+
+        return AppState(
             webSocketService: webSocketService,
             httpService: httpService,
             sessionRepository: sessionRepository,

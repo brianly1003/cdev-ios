@@ -82,6 +82,9 @@ enum JSONRPCMethod {
     static let workspaceSessionMessages = "workspace/session/messages"
     static let workspaceSessionWatch = "workspace/session/watch"
     static let workspaceSessionUnwatch = "workspace/session/unwatch"
+
+    // Client operations (multi-device awareness)
+    static let clientSessionFocus = "client/session/focus"
 }
 
 // MARK: - Initialize
@@ -1182,5 +1185,42 @@ struct WorkspaceStatusResult: Codable, Sendable {
     var trackerState: GitTrackerState {
         guard let state = gitTrackerState else { return .unavailable }
         return GitTrackerState(rawValue: state) ?? .unavailable
+    }
+}
+
+// MARK: - Session Focus (Multi-Device Awareness)
+
+/// Session focus request parameters
+/// Used to notify server when user starts viewing a session
+struct SessionFocusParams: Codable, Sendable {
+    let workspaceId: String
+    let sessionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
+    }
+}
+
+/// Session focus response result
+/// Returns information about other devices viewing the same session
+struct SessionFocusResult: Codable, Sendable {
+    let workspaceId: String?
+    let sessionId: String?
+    let otherViewers: [String]?  // Client UUIDs of other devices viewing this session
+    let viewerCount: Int?         // Total number of viewers (including caller)
+    let success: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
+        case otherViewers = "other_viewers"
+        case viewerCount = "viewer_count"
+    }
+
+    /// Whether there are other viewers besides the caller
+    var hasOtherViewers: Bool {
+        (viewerCount ?? 0) > 1
     }
 }

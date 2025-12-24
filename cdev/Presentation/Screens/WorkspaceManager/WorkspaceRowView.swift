@@ -11,6 +11,7 @@ struct WorkspaceRowView: View {
     let isLoading: Bool
     let isUnreachable: Bool
     let operation: WorkspaceOperation?
+    let isServerConnected: Bool  // Whether we have connection to server
     let onConnect: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
@@ -18,6 +19,11 @@ struct WorkspaceRowView: View {
     // Responsive layout
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    /// Whether row interaction is enabled (only when server is connected)
+    private var isInteractionEnabled: Bool {
+        isServerConnected && !isLoading
+    }
 
     // MARK: - Derived Status
 
@@ -93,6 +99,10 @@ struct WorkspaceRowView: View {
             } else {
                 // Explicit button for the action (works better with swipe actions)
                 Button {
+                    guard isInteractionEnabled else {
+                        Haptics.light()
+                        return
+                    }
                     AppLogger.log("[WorkspaceRow] Action button tapped for: \(workspace.name)")
                     Haptics.medium()
                     onConnect()
@@ -100,14 +110,24 @@ struct WorkspaceRowView: View {
                     actionIcon
                 }
                 .buttonStyle(.borderless)
+                .disabled(!isServerConnected)
             }
         }
         .padding(.horizontal, layout.standardPadding)
         .padding(.vertical, layout.smallPadding)
         .background(isCurrentWorkspace ? ColorSystem.primary.opacity(0.05) : .clear)
         .contentShape(Rectangle())
+        // Dim the row when server is disconnected
+        .opacity(isServerConnected ? 1.0 : 0.5)
+        .animation(.easeInOut(duration: 0.25), value: isServerConnected)
+        // Only allow tap gesture when server is connected
         .simultaneousGesture(
             TapGesture().onEnded {
+                guard isInteractionEnabled else {
+                    // Brief haptic feedback to indicate disabled state
+                    Haptics.light()
+                    return
+                }
                 // Tapping anywhere on the row connects/starts the workspace
                 // Using simultaneousGesture allows both this and swipe actions to work
                 AppLogger.log("[WorkspaceRow] Row tapped for: \(workspace.name)")
@@ -235,6 +255,7 @@ struct SwipeableWorkspaceRow: View {
     let isLoading: Bool
     let isUnreachable: Bool
     let operation: WorkspaceOperation?
+    let isServerConnected: Bool  // Whether we have connection to server
     let onConnect: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
@@ -245,6 +266,7 @@ struct SwipeableWorkspaceRow: View {
         isLoading: Bool = false,
         isUnreachable: Bool = false,
         operation: WorkspaceOperation? = nil,
+        isServerConnected: Bool = true,
         onConnect: @escaping () -> Void,
         onStart: @escaping () -> Void,
         onStop: @escaping () -> Void
@@ -254,6 +276,7 @@ struct SwipeableWorkspaceRow: View {
         self.isLoading = isLoading
         self.isUnreachable = isUnreachable
         self.operation = operation
+        self.isServerConnected = isServerConnected
         self.onConnect = onConnect
         self.onStart = onStart
         self.onStop = onStop
@@ -266,30 +289,35 @@ struct SwipeableWorkspaceRow: View {
             isLoading: isLoading,
             isUnreachable: isUnreachable,
             operation: operation,
+            isServerConnected: isServerConnected,
             onConnect: onConnect,
             onStart: onStart,
             onStop: onStop
         )
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            // Swipe actions:
-            // - No sessions/Unreachable → Start (create session)
-            // - Has sessions → Stop (stop all sessions)
-            if workspace.hasActiveSession && !isUnreachable {
-                Button {
-                    Haptics.warning()
-                    onStop()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
+        // Only show swipe actions when server is connected
+        .swipeActions(edge: .trailing, allowsFullSwipe: isServerConnected) {
+            // Swipe actions disabled when server is disconnected
+            if isServerConnected {
+                // Swipe actions:
+                // - No sessions/Unreachable → Start (create session)
+                // - Has sessions → Stop (stop all sessions)
+                if workspace.hasActiveSession && !isUnreachable {
+                    Button {
+                        Haptics.warning()
+                        onStop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                    .tint(ColorSystem.error)
+                } else {
+                    Button {
+                        Haptics.success()
+                        onStart()
+                    } label: {
+                        Label("Start", systemImage: "play.fill")
+                    }
+                    .tint(ColorSystem.success)
                 }
-                .tint(ColorSystem.error)
-            } else {
-                Button {
-                    Haptics.success()
-                    onStart()
-                } label: {
-                    Label("Start", systemImage: "play.fill")
-                }
-                .tint(ColorSystem.success)
             }
         }
     }
@@ -319,6 +347,7 @@ struct SwipeableWorkspaceRow: View {
             isLoading: false,
             isUnreachable: false,
             operation: nil,
+            isServerConnected: true,
             onConnect: {},
             onStart: {},
             onStop: {}
@@ -346,6 +375,7 @@ struct SwipeableWorkspaceRow: View {
             isLoading: false,
             isUnreachable: true,  // Shows "Unreachable" status
             operation: nil,
+            isServerConnected: true,
             onConnect: {},
             onStart: {},
             onStop: {}
@@ -353,6 +383,7 @@ struct SwipeableWorkspaceRow: View {
 
         Divider()
 
+        // Disconnected server state - row is dimmed
         WorkspaceRowView(
             workspace: RemoteWorkspace(
                 id: "ws-3",
@@ -365,6 +396,7 @@ struct SwipeableWorkspaceRow: View {
             isLoading: false,
             isUnreachable: false,
             operation: nil,
+            isServerConnected: false,  // Server disconnected - row dimmed
             onConnect: {},
             onStart: {},
             onStop: {}
@@ -387,6 +419,7 @@ struct SwipeableWorkspaceRow: View {
             isLoading: false,
             isUnreachable: false,
             operation: nil,
+            isServerConnected: true,
             onConnect: {},
             onStart: {},
             onStop: {}

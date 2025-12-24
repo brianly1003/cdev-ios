@@ -1715,6 +1715,18 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] Session watch stopped: \(reason)")
             }
 
+        case .sessionJoined:
+            // Another device joined the session we're viewing
+            if case .sessionJoined(let payload) = event.payload {
+                SessionAwarenessManager.shared.handleSessionJoined(payload)
+            }
+
+        case .sessionLeft:
+            // Another device left the session we're viewing
+            if case .sessionLeft(let payload) = event.payload {
+                SessionAwarenessManager.shared.handleSessionLeft(payload)
+            }
+
         default:
             break
         }
@@ -1994,6 +2006,11 @@ final class DashboardViewModel: ObservableObject {
             isWatchingSession = true
             watchingSessionId = sessionId
             AppLogger.log("[Dashboard] Now watching session: \(sessionId)\(currentWorkspaceId != nil ? " (workspace: \(currentWorkspaceId!))" : "")")
+
+            // Notify server about session focus for multi-device awareness
+            if let workspaceId = currentWorkspaceId {
+                await SessionAwarenessManager.shared.setFocus(workspaceId: workspaceId, sessionId: sessionId)
+            }
         } catch {
             AppLogger.error(error, context: "Watch session")
         }
@@ -2008,10 +2025,14 @@ final class DashboardViewModel: ObservableObject {
             isWatchingSession = false
             watchingSessionId = nil
             AppLogger.log("[Dashboard] Stopped watching session")
+
+            // Clear session focus for multi-device awareness
+            SessionAwarenessManager.shared.clearFocus()
         } catch {
             // Still clear local state even if command fails
             isWatchingSession = false
             watchingSessionId = nil
+            SessionAwarenessManager.shared.clearFocus()
             AppLogger.error(error, context: "Unwatch session")
         }
     }

@@ -278,6 +278,13 @@ struct DashboardView: View {
                 Spacer()
             }
 
+            // Session awareness toast (join/leave notifications)
+            VStack {
+                SessionAwarenessToast()
+                    .padding(.top, 100) // Below status bar
+                Spacer()
+            }
+
             // ⌘K Quick Switcher overlay
             if quickSwitcherViewModel.isVisible {
                 QuickSwitcherView(
@@ -411,6 +418,7 @@ struct StatusBarView: View {
     var onWorkspaceTap: (() -> Void)?
 
     @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = true
+    @StateObject private var sessionAwareness = SessionAwarenessManager.shared
     @State private var isPulsing = false
     @State private var showCopiedToast = false
     @State private var watchingPulse = false
@@ -458,6 +466,11 @@ struct StatusBarView: View {
                     .padding(.vertical, 2)
                     .background(ColorSystem.error.opacity(0.15))
                     .clipShape(Capsule())
+
+                    // Multi-device viewer count badge
+                    if sessionAwareness.hasOtherViewers {
+                        ViewerCountBadge(viewerCount: sessionAwareness.viewerCount)
+                    }
                 }
 
                 Spacer()
@@ -1082,6 +1095,58 @@ private struct StopButtonWithAnimation: View {
             withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
                 rotation = 360
             }
+        }
+    }
+}
+
+// MARK: - Viewer Count Badge (Multi-Device Awareness)
+
+/// Badge showing number of devices viewing the same session
+struct ViewerCountBadge: View {
+    let viewerCount: Int
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.2.fill")
+                .font(.system(size: 8))
+
+            Text("\(viewerCount)")
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+        }
+        .foregroundStyle(ColorSystem.primary)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(ColorSystem.primary.opacity(0.15))
+        .clipShape(Capsule())
+        .transition(.scale.combined(with: .opacity))
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: viewerCount)
+    }
+}
+
+// MARK: - Session Awareness Toast (Join/Leave Notifications)
+
+/// Toast notification for session join/leave events
+struct SessionAwarenessToast: View {
+    @StateObject private var sessionAwareness = SessionAwarenessManager.shared
+
+    var body: some View {
+        if let notification = sessionAwareness.recentNotification {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: notification.isJoin ? "person.badge.plus" : "person.badge.minus")
+                    .font(.system(size: 12))
+                    .foregroundStyle(notification.isJoin ? ColorSystem.success : ColorSystem.warning)
+
+                Text(notification.message)
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: notification)
         }
     }
 }

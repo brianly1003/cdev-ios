@@ -98,6 +98,15 @@ protocol AgentRepositoryProtocol {
     /// - Parameter workspaceId: Workspace ID to get status for
     /// - Returns: Workspace status with git tracker info, active sessions, and watch status
     func getWorkspaceStatus(workspaceId: String) async throws -> WorkspaceStatusResult
+
+    // MARK: - Multi-Device Session Awareness
+
+    /// Notify server that this device is focusing on a specific session
+    /// - Parameters:
+    ///   - workspaceId: Workspace containing the session
+    ///   - sessionId: Session being viewed
+    /// - Returns: Focus result with information about other viewers
+    func setSessionFocus(workspaceId: String, sessionId: String) async throws -> SessionFocusResult
 }
 
 /// Response for deleting a single session

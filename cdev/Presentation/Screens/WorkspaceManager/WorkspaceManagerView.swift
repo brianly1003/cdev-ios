@@ -233,6 +233,7 @@ struct WorkspaceManagerView: View {
                     isLoading: viewModel.isWorkspaceLoading(workspace),
                     isUnreachable: viewModel.isWorkspaceUnreachable(workspace),
                     operation: viewModel.operationFor(workspace),
+                    isServerConnected: viewModel.isConnected,
                     onConnect: {
                         Task {
                             AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH START ==========")

@@ -17,6 +17,8 @@ enum AgentEventType: String, Codable {
     case sessionEnd = "session_end"
     case sessionWatchStarted = "session_watch_started"  // Session watch subscription confirmed
     case sessionWatchStopped = "session_watch_stopped"  // Session watch subscription ended
+    case sessionJoined = "session_joined"  // Multi-device: another device joined session
+    case sessionLeft = "session_left"      // Multi-device: another device left session
     case statusResponse = "status_response"
     case fileContent = "file_content"
     case heartbeat = "heartbeat"
@@ -74,6 +76,8 @@ enum AgentEventPayload: Codable {
     case gitOperationCompleted(GitOperationCompletedPayload)  // Git operation result
     case sessionLifecycle(SessionLifecyclePayload)
     case sessionWatch(SessionWatchPayload)  // Session watch start/stop confirmation
+    case sessionJoined(SessionJoinedPayload)  // Multi-device: someone joined
+    case sessionLeft(SessionLeftPayload)      // Multi-device: someone left
     case statusResponse(StatusResponsePayload)
     case fileContent(FileContentPayload)
     case heartbeat(HeartbeatPayload)
@@ -109,6 +113,10 @@ enum AgentEventPayload: Codable {
             self = .gitOperationCompleted(payload)
         } else if let payload = try? container.decode(SessionWatchPayload.self), payload.sessionId != nil {
             self = .sessionWatch(payload)
+        } else if let payload = try? container.decode(SessionJoinedPayload.self), payload.joiningClientId != nil {
+            self = .sessionJoined(payload)
+        } else if let payload = try? container.decode(SessionLeftPayload.self), payload.leavingClientId != nil {
+            self = .sessionLeft(payload)
         } else if let payload = try? container.decode(StatusResponsePayload.self), payload.claudeState != nil {
             self = .statusResponse(payload)
         } else if let payload = try? container.decode(FileContentPayload.self), payload.content != nil {
@@ -150,6 +158,10 @@ enum AgentEventPayload: Codable {
         case .sessionLifecycle(let payload):
             try container.encode(payload)
         case .sessionWatch(let payload):
+            try container.encode(payload)
+        case .sessionJoined(let payload):
+            try container.encode(payload)
+        case .sessionLeft(let payload):
             try container.encode(payload)
         case .statusResponse(let payload):
             try container.encode(payload)
@@ -591,6 +603,34 @@ struct SessionWatchPayload: Codable {
         case sessionId = "session_id"
         case watching
         case reason
+    }
+}
+
+// MARK: - Multi-Device Session Awareness Payloads
+
+/// Payload for session_joined event - emitted when another device joins a session we're viewing
+struct SessionJoinedPayload: Codable {
+    let joiningClientId: String?   // UUID of the device that joined
+    let otherViewers: [String]?    // List of all other viewer UUIDs
+    let viewerCount: Int?          // Total number of viewers including the new one
+
+    enum CodingKeys: String, CodingKey {
+        case joiningClientId = "joining_client_id"
+        case otherViewers = "other_viewers"
+        case viewerCount = "viewer_count"
+    }
+}
+
+/// Payload for session_left event - emitted when another device leaves a session we're viewing
+struct SessionLeftPayload: Codable {
+    let leavingClientId: String?   // UUID of the device that left
+    let remainingViewers: [String]? // List of remaining viewer UUIDs
+    let viewerCount: Int?          // Total number of remaining viewers
+
+    enum CodingKeys: String, CodingKey {
+        case leavingClientId = "leaving_client_id"
+        case remainingViewers = "remaining_viewers"
+        case viewerCount = "viewer_count"
     }
 }
 

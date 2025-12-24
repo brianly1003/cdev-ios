@@ -596,6 +596,20 @@ final class AgentRepository: AgentRepositoryProtocol {
         return result
     }
 
+    // MARK: - Multi-Device Session Awareness
+
+    /// Notify server that this device is focusing on a specific session
+    /// Returns information about other devices viewing the same session
+    func setSessionFocus(workspaceId: String, sessionId: String) async throws -> SessionFocusResult {
+        let params = SessionFocusParams(workspaceId: workspaceId, sessionId: sessionId)
+        let result: SessionFocusResult = try await rpcClient.request(
+            method: JSONRPCMethod.clientSessionFocus,
+            params: params
+        )
+        AppLogger.log("[AgentRepository] Session focus set: workspace=\(workspaceId), session=\(sessionId), viewers=\(result.viewerCount ?? 0)")
+        return result
+    }
+
     // MARK: - Internal
 
     func updateStatus(from payload: StatusResponsePayload) {
