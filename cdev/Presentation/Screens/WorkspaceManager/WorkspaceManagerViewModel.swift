@@ -104,6 +104,9 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Show discovery sheet
     @Published var showDiscoverySheet: Bool = false
 
+    /// Show manual add sheet
+    @Published var showManualAddSheet: Bool = false
+
     // MARK: - Dependencies
 
     private let managerService: WorkspaceManagerService
@@ -545,6 +548,15 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Start and connect to workspace (convenience)
     func startAndConnect(_ workspace: RemoteWorkspace) async -> RemoteWorkspace? {
         return await connectToWorkspace(workspace)
+    }
+
+    // MARK: - Manual Workspace Add
+
+    /// Add a workspace manually by path
+    /// Used as an alternative to Discovery Repos when user knows exact path
+    func addWorkspaceManually(path: String) async throws {
+        let workspace = try await managerService.addWorkspace(path: path)
+        AppLogger.log("[WorkspaceManager] Manually added workspace: \(workspace.name)")
     }
 
     // MARK: - Setup

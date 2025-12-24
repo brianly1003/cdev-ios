@@ -72,11 +72,20 @@ struct WorkspaceManagerView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             if viewModel.isConnected {
+                                // Quick add section
+                                Button {
+                                    viewModel.showManualAddSheet = true
+                                } label: {
+                                    Label("Add by Path", systemImage: "folder.badge.plus")
+                                }
+
                                 Button {
                                     viewModel.showDiscoverySheet = true
                                 } label: {
                                     Label("Discover Repos", systemImage: "magnifyingglass")
                                 }
+
+                                Divider()
 
                                 Button {
                                     Task { await viewModel.refreshWorkspaces() }
@@ -127,6 +136,13 @@ struct WorkspaceManagerView: View {
                     }
                 )
                 .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $viewModel.showManualAddSheet) {
+                ManualWorkspaceAddView { path in
+                    try await viewModel.addWorkspaceManually(path: path)
+                }
+                .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
             }
             .task {
@@ -331,20 +347,42 @@ struct WorkspaceManagerView: View {
                     .font(Typography.title3)
                     .foregroundStyle(ColorSystem.textPrimary)
 
-                Text("Add workspaces on your laptop using the CLI, or discover repositories.")
+                Text("Add a workspace by path, or discover repositories on your machine.")
                     .font(Typography.body)
                     .foregroundStyle(ColorSystem.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, Spacing.xl)
 
-                Button {
-                    viewModel.showDiscoverySheet = true
-                } label: {
-                    Label("Discover Repos", systemImage: "magnifyingglass")
-                        .font(Typography.buttonLabel)
-                        .foregroundStyle(ColorSystem.primary)
+                // Action buttons
+                HStack(spacing: Spacing.sm) {
+                    // Quick add button (primary)
+                    Button {
+                        viewModel.showManualAddSheet = true
+                    } label: {
+                        Label("Add by Path", systemImage: "folder.badge.plus")
+                            .font(Typography.buttonLabel)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, Spacing.md)
+                            .padding(.vertical, Spacing.sm)
+                            .background(ColorSystem.primary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    // Discover button (secondary)
+                    Button {
+                        viewModel.showDiscoverySheet = true
+                    } label: {
+                        Label("Discover", systemImage: "magnifyingglass")
+                            .font(Typography.buttonLabel)
+                            .foregroundStyle(ColorSystem.primary)
+                            .padding(.horizontal, Spacing.md)
+                            .padding(.vertical, Spacing.sm)
+                            .background(ColorSystem.primary.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 .padding(.top, Spacing.sm)
             } else {
                 Text("No Results")

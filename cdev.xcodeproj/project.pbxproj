@@ -14,6 +14,7 @@
 		F5C18B949A1A493E8CC1659A /* WorkspaceManagerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */; };
 		0A1519A314104D649BEE41CC /* WorkspaceRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3B451D511347E388771430 /* WorkspaceRowView.swift */; };
 		1D9707E2BDCA4998B79E53B6 /* ManagerSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E478D5AA9D64455BBDD0E8A /* ManagerSetupView.swift */; };
+		MANUALWS001ABC123WORKSPACE /* ManualWorkspaceAddView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MANUALWS002ABC123WORKREF /* ManualWorkspaceAddView.swift */; };
 		75785EFBBBDF43358ED0BB2C /* RepositoryDiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */; };
 		03F2F253EA8796EC71F75CE3 /* Icons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF636F66805287E5C89A9CF /* Icons.swift */; };
 		05B5CD9B069265B8C9DD84D5 /* AgentEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8269FF3F524FF0280293A8BA /* AgentEvent.swift */; };
@@ -136,6 +137,7 @@
 		FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManagerViewModel.swift; sourceTree = "<group>"; };
 		6B3B451D511347E388771430 /* WorkspaceRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRowView.swift; sourceTree = "<group>"; };
 		0E478D5AA9D64455BBDD0E8A /* ManagerSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagerSetupView.swift; sourceTree = "<group>"; };
+		MANUALWS002ABC123WORKREF /* ManualWorkspaceAddView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualWorkspaceAddView.swift; sourceTree = "<group>"; };
 		774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryDiscoveryView.swift; sourceTree = "<group>"; };
 		00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingKeyboardDismissButton.swift; sourceTree = "<group>"; };
 		0333578E8E5D6052061F9550 /* AgentCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCommand.swift; sourceTree = "<group>"; };
@@ -254,6 +256,7 @@
 				FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */,
 				6B3B451D511347E388771430 /* WorkspaceRowView.swift */,
 				0E478D5AA9D64455BBDD0E8A /* ManagerSetupView.swift */,
+				MANUALWS002ABC123WORKREF /* ManualWorkspaceAddView.swift */,
 				774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */,
 			);
 			path = WorkspaceManager;
@@ -903,6 +906,7 @@
 				F5C18B949A1A493E8CC1659A /* WorkspaceManagerViewModel.swift in Sources */,
 				0A1519A314104D649BEE41CC /* WorkspaceRowView.swift in Sources */,
 				1D9707E2BDCA4998B79E53B6 /* ManagerSetupView.swift in Sources */,
+				MANUALWS001ABC123WORKSPACE /* ManualWorkspaceAddView.swift in Sources */,
 				75785EFBBBDF43358ED0BB2C /* RepositoryDiscoveryView.swift in Sources */,
 				D762173953CAFB6ED7C7E26C /* AdminToolsView.swift in Sources */,
 				9BC7B7AAF9ED702C33824CA6 /* AgentCommand.swift in Sources */,
