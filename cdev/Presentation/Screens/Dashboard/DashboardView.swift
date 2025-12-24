@@ -151,7 +151,7 @@ struct DashboardView: View {
                     // Action bar - only show on logs tab
                     // Uses manual keyboard handling, so ignore SwiftUI's automatic keyboard avoidance
                     if viewModel.selectedTab == .logs {
-                        ZStack(alignment: .topTrailing) {
+                        ZStack(alignment: .bottomTrailing) {
                             ActionBarView(
                                 claudeState: viewModel.claudeState,
                                 promptText: $viewModel.promptText,
@@ -168,10 +168,11 @@ struct DashboardView: View {
                                 }
                             )
 
-                            // Keyboard dismiss button - positioned at top-right of ActionBarView
-                            // This ensures it moves with the text field as it grows
+                            // Keyboard dismiss button - positioned relative to input bar (bottom)
+                            // Using bottomTrailing alignment so it stays anchored to input bar,
+                            // not affected by command suggestions appearing above
                             FloatingKeyboardDismissButton()
-                                .padding(.top, -52)  // Position above the ActionBarView
+                                .padding(.bottom, 52)  // Position above the input bar
                                 .padding(.trailing, Spacing.md)
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -939,7 +940,8 @@ struct ActionBarView: View {
         }
         // Only add keyboard padding when THIS input is focused (not search bar)
         .padding(.bottom, isFocused.wrappedValue ? keyboardHeight : 0)
-        .background(ColorSystem.terminalBg)
+        // Note: No background here - suggestions area should be transparent
+        // The input bar (HStack above) has its own background
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
         .animation(.easeOut(duration: 0.25), value: keyboardHeight)
