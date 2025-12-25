@@ -15,6 +15,9 @@ struct RepositoryDiscoveryView: View {
     /// Show debug logs sheet (for FloatingToolkit)
     @State private var showDebugLogs: Bool = false
 
+    /// Scroll request (from floating toolkit force touch)
+    @State private var scrollRequest: ScrollDirection?
+
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     /// Toolkit items - only Debug Logs button
@@ -35,7 +38,14 @@ struct RepositoryDiscoveryView: View {
                         // Search paths input
                         searchPathsSection
                             .padding(.horizontal, layout.standardPadding)
-                            .padding(.vertical, layout.smallPadding)
+                            .padding(.top, layout.smallPadding)
+
+                        // Cache status bar (only show when we have results)
+                        if !viewModel.repositories.isEmpty || viewModel.lastDiscoveryResponse != nil {
+                            cacheStatusBar
+                                .padding(.horizontal, layout.standardPadding)
+                                .padding(.vertical, Spacing.xs)
+                        }
 
                         // Search bar (only show when we have results)
                         if !viewModel.repositories.isEmpty {
@@ -58,6 +68,7 @@ struct RepositoryDiscoveryView: View {
                             repositoryList
                         }
                     }
+                    .dismissKeyboardOnTap()
                 }
                 .navigationTitle("Discover Repos")
                 .navigationBarTitleDisplayMode(.inline)
@@ -99,25 +110,72 @@ struct RepositoryDiscoveryView: View {
             } // End NavigationStack
 
             // Floating toolkit button with Debug Logs only
-            FloatingToolkitButton(items: toolkitItems) { _ in }
+            FloatingToolkitButton(items: toolkitItems) { direction in
+                requestScroll(direction: direction)
+            }
         } // End outer ZStack
     }
 
     // MARK: - Search Paths Section
 
     private var searchPathsSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text("Search Paths")
-                .font(Typography.caption1)
-                .foregroundStyle(ColorSystem.textSecondary)
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            // Header row with label, cache status, and Fresh Scan button
+            HStack {
+                Text("Search Paths")
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
 
+                Spacer()
+
+                // Cache age label (left of Fresh Scan)
+                if let response = viewModel.lastDiscoveryResponse, response.isCached {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 10))
+                        if let age = response.cacheAgeDescription {
+                            Text("Cached \(age)")
+                        } else {
+                            Text("Cached")
+                        }
+                    }
+                    .font(Typography.badge)
+                    .foregroundStyle(response.isCacheStale ? ColorSystem.warning : ColorSystem.textTertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(Capsule())
+                }
+
+                // Fresh scan button
+                Button {
+                    Task { await viewModel.discoverFresh() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Fresh Scan")
+                            .font(Typography.badge)
+                    }
+                    .foregroundStyle(ColorSystem.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(ColorSystem.primary.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.isLoading)
+            }
+
+            // Unified text field style
             HStack(spacing: Spacing.xs) {
                 Image(systemName: "folder")
                     .font(.system(size: 14))
                     .foregroundStyle(ColorSystem.textTertiary)
+                    .frame(width: 24)
 
                 TextField("~/Projects, ~/Code", text: $viewModel.searchPathsInput)
-                    .font(Typography.inputField)
+                    .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -126,14 +184,40 @@ struct RepositoryDiscoveryView: View {
                         Task { await viewModel.discover() }
                     }
             }
+            .frame(height: layout.buttonHeight)
             .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
             .background(ColorSystem.terminalBgElevated)
-            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
 
             Text("Leave empty to search default locations")
-                .font(Typography.caption2)
-                .foregroundStyle(ColorSystem.textTertiary)
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textQuaternary)
+        }
+    }
+
+    // MARK: - Cache Status Bar
+
+    private var cacheStatusBar: some View {
+        HStack(spacing: Spacing.xs) {
+            if let response = viewModel.lastDiscoveryResponse {
+                // Background refresh indicator
+                if response.isRefreshing {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                        Text("Updating...")
+                            .font(Typography.badge)
+                    }
+                    .foregroundStyle(ColorSystem.primary)
+                }
+
+                Spacer()
+
+                // Result count
+                Text("\(response.count) repos")
+                    .font(Typography.badge)
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
         }
     }
 
@@ -144,9 +228,10 @@ struct RepositoryDiscoveryView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14))
                 .foregroundStyle(ColorSystem.textTertiary)
+                .frame(width: 24)
 
             TextField("Search repositories...", text: $viewModel.searchText)
-                .font(Typography.body)
+                .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.textPrimary)
                 .autocorrectionDisabled()
 
@@ -155,80 +240,75 @@ struct RepositoryDiscoveryView: View {
                     viewModel.searchText = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
+                        .font(.system(size: 16))
                         .foregroundStyle(ColorSystem.textTertiary)
                 }
                 .buttonStyle(.plain)
             }
         }
+        .frame(height: layout.buttonHeight)
         .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.xs)
         .background(ColorSystem.terminalBgElevated)
-        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
     }
 
     // MARK: - Repository List
 
     private var repositoryList: some View {
-        List {
-            ForEach(viewModel.filteredRepositories) { repo in
-                RepositoryRowView(
-                    repository: repo,
-                    isLoading: viewModel.loadingRepoId == repo.id
-                )
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    if !repo.isConfigured {
-                        // Add & Connect (full swipe)
-                        Button {
-                            Task {
-                                if let (workspace, host) = await viewModel.addAndStartWorkspace(repo) {
-                                    // Await connection result - only dismiss on success
-                                    let success = await onConnectToWorkspace?(workspace, host) ?? false
-                                    if success {
-                                        dismiss()
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("Add & Connect", systemImage: "arrow.right.circle.fill")
-                        }
-                        .tint(ColorSystem.primary)
-
-                        // Add only
-                        Button {
+        ScrollViewReader { proxy in
+            List {
+                ForEach(viewModel.filteredRepositories) { repo in
+                    RepositoryRowView(
+                        repository: repo,
+                        isLoading: viewModel.loadingRepoId == repo.id,
+                        onAdd: {
                             Task { await viewModel.addWorkspace(repo) }
-                        } label: {
-                            Label("Add", systemImage: "plus.circle.fill")
                         }
-                        .tint(ColorSystem.success)
-                    }
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .id(repo.id)
                 }
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    if repo.isConfigured {
-                        // Connect to already-added workspace
-                        Button {
-                            Task {
-                                if let (workspace, host) = await viewModel.startAndConnect(repo) {
-                                    // Await connection result - only dismiss on success
-                                    let success = await onConnectToWorkspace?(workspace, host) ?? false
-                                    if success {
-                                        dismiss()
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("Connect", systemImage: "arrow.right.circle.fill")
-                        }
-                        .tint(ColorSystem.primary)
-                    }
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: - Scroll Request Handler
+
+    /// Request scroll to top or bottom (triggered by floating toolkit force touch)
+    private func requestScroll(direction: ScrollDirection) {
+        scrollRequest = direction
+        // Auto-reset after a short delay
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            scrollRequest = nil
+        }
+    }
+
+    private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        guard !viewModel.filteredRepositories.isEmpty else { return }
+        switch direction {
+        case .top:
+            if let firstId = viewModel.filteredRepositories.first?.id {
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    proxy.scrollTo(firstId, anchor: .top)
+                }
+            }
+        case .bottom:
+            if let lastId = viewModel.filteredRepositories.last?.id {
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
+            }
+        }
     }
 
     // MARK: - Loading View
@@ -311,37 +391,39 @@ struct RepositoryDiscoveryView: View {
 struct RepositoryRowView: View {
     let repository: DiscoveredRepository
     var isLoading: Bool = false
+    var onAdd: (() -> Void)?
 
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     var body: some View {
-        HStack(spacing: layout.contentSpacing) {
-            // Folder icon
+        HStack(spacing: Spacing.xs) {
+            // Folder icon - compact
             Image(systemName: "folder.fill")
-                .font(.system(size: layout.iconLarge))
+                .font(.system(size: 14))
                 .foregroundStyle(ColorSystem.warning)
+                .frame(width: 20)
 
-            // Repo info
-            VStack(alignment: .leading, spacing: 2) {
+            // Repo info - compact
+            VStack(alignment: .leading, spacing: 1) {
                 Text(repository.name)
-                    .font(Typography.body)
+                    .font(Typography.terminal)
                     .fontWeight(.medium)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .lineLimit(1)
 
                 Text(repository.path)
-                    .font(Typography.caption1)
+                    .font(Typography.terminalSmall)
                     .foregroundStyle(ColorSystem.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
                 if let remote = repository.repoName {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "link")
-                            .font(.system(size: 10))
+                            .font(.system(size: 8))
                         Text(remote)
-                            .font(Typography.caption2)
+                            .font(Typography.badge)
                     }
                     .foregroundStyle(ColorSystem.textQuaternary)
                 }
@@ -349,39 +431,34 @@ struct RepositoryRowView: View {
 
             Spacer(minLength: 0)
 
-            // Loading indicator or status badge
+            // Loading indicator, status badge, or add button
             if isLoading {
                 ProgressView()
-                    .scaleEffect(0.8)
-                    .frame(width: layout.indicatorSize, height: layout.indicatorSize)
+                    .scaleEffect(0.7)
+                    .frame(width: 28, height: 28)
             } else if repository.isConfigured {
-                // Swipe hint for configured repos
-                HStack(spacing: 4) {
-                    Text("Added")
-                        .font(Typography.badge)
-                        .foregroundStyle(ColorSystem.success)
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 8))
-                        .foregroundStyle(ColorSystem.textQuaternary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(ColorSystem.success.opacity(0.12))
-                .clipShape(Capsule())
+                // Already added badge
+                Text("Added")
+                    .font(Typography.badge)
+                    .foregroundStyle(ColorSystem.success)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(ColorSystem.success.opacity(0.12))
+                    .clipShape(Capsule())
             } else {
-                // Swipe hint for unconfigured repos
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8))
-                        .foregroundStyle(ColorSystem.textQuaternary)
-                    Text("Swipe")
-                        .font(Typography.badge)
-                        .foregroundStyle(ColorSystem.textTertiary)
+                // Add button for unconfigured repos
+                Button {
+                    onAdd?()
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(ColorSystem.success)
                 }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, layout.standardPadding)
-        .padding(.vertical, layout.smallPadding)
+        .padding(.vertical, Spacing.xs)
         .contentShape(Rectangle())
     }
 }
@@ -399,6 +476,11 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
 
     /// Track which repo is currently being added/started
     @Published var loadingRepoId: String?
+
+    /// Last discovery response with cache metadata (observed from service)
+    var lastDiscoveryResponse: DiscoveryResponse? {
+        managerService.lastDiscoveryResponse
+    }
 
     private let managerService = WorkspaceManagerService.shared
 
@@ -423,9 +505,19 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
         }
     }
 
-    /// Discover repositories
+    /// Discover repositories (uses cache if available)
     /// Uses shared service state to prevent duplicate concurrent requests
     func discover() async {
+        await performDiscovery(fresh: false)
+    }
+
+    /// Discover repositories with fresh scan (ignores cache)
+    func discoverFresh() async {
+        await performDiscovery(fresh: true)
+    }
+
+    /// Internal discovery implementation
+    private func performDiscovery(fresh: Bool) async {
         guard managerService.isConnected else {
             errorMessage = "Not connected to workspace manager"
             showError = true
@@ -435,7 +527,7 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
         isLoading = true
 
         do {
-            let results = try await managerService.discoverRepositories(paths: searchPaths)
+            let results = try await managerService.discoverRepositories(paths: searchPaths, fresh: fresh)
             repositories = results
         } catch is CancellationError {
             // Task was cancelled (e.g., sheet dismissed) - ignore silently

@@ -424,9 +424,47 @@ struct WorkspaceListResponse: Codable {
 // MARK: - Discovery Response
 
 /// Response from workspace/discover JSON-RPC method
+/// Includes cache metadata for cache-first strategy
 struct DiscoveryResponse: Codable {
     let repositories: [DiscoveredRepository]
     let count: Int
+
+    // Cache metadata (from enterprise discovery engine)
+    let cached: Bool?                    // Whether results came from cache
+    let cacheAgeSeconds: Int64?          // Age of cache in seconds
+    let refreshInProgress: Bool?         // Whether background refresh is running
+    let elapsedMs: Int64?                // Time taken for this request
+    let scannedPaths: Int?               // Number of directories scanned
+    let skippedPaths: Int?               // Number of directories skipped
+
+    enum CodingKeys: String, CodingKey {
+        case repositories, count, cached
+        case cacheAgeSeconds = "cache_age_seconds"
+        case refreshInProgress = "refresh_in_progress"
+        case elapsedMs = "elapsed_ms"
+        case scannedPaths = "scanned_paths"
+        case skippedPaths = "skipped_paths"
+    }
+
+    /// Whether the data is from cache
+    var isCached: Bool { cached ?? false }
+
+    /// Whether a background refresh is happening
+    var isRefreshing: Bool { refreshInProgress ?? false }
+
+    /// Human-readable cache age
+    var cacheAgeDescription: String? {
+        guard let age = cacheAgeSeconds, age > 0 else { return nil }
+        if age < 60 { return "\(age)s ago" }
+        if age < 3600 { return "\(age / 60)m ago" }
+        return "\(age / 3600)h ago"
+    }
+
+    /// Whether cache is considered stale (> 1 hour)
+    var isCacheStale: Bool {
+        guard let age = cacheAgeSeconds else { return false }
+        return age > 3600 // 1 hour
+    }
 }
 
 // MARK: - Session Responses

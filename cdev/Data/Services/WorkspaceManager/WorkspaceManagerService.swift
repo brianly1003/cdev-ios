@@ -25,6 +25,9 @@ final class WorkspaceManagerService: ObservableObject {
     /// Track if repository discovery is in progress (shared across all callers)
     @Published private(set) var isDiscovering: Bool = false
 
+    /// Last discovery response with cache metadata
+    @Published private(set) var lastDiscoveryResponse: DiscoveryResponse?
+
     /// Current discovery task for cancellation
     private var discoveryTask: Task<[DiscoveredRepository], Error>?
 
@@ -163,7 +166,8 @@ final class WorkspaceManagerService: ObservableObject {
             params: EmptyParams()
         )
 
-        workspaces = response.workspaces
+        // Sort workspaces alphabetically by name (case-insensitive)
+        workspaces = response.workspaces.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         // Sync remote workspace IDs to local WorkspaceStore
         // This enables workspace-aware APIs (workspace/session/*) instead of legacy APIs
@@ -178,7 +182,7 @@ final class WorkspaceManagerService: ObservableObject {
         }
 
         AppLogger.log("[WorkspaceManager] Listed \(workspaces.count) workspaces")
-        return response.workspaces
+        return workspaces
     }
 
     /// Get a specific workspace
@@ -219,9 +223,10 @@ final class WorkspaceManagerService: ObservableObject {
             params: AddWorkspaceParams(path: path, name: workspaceName)
         )
 
-        // Add to local workspaces list
+        // Add to local workspaces list and maintain alphabetical sort
         if !workspaces.contains(where: { $0.id == response.id }) {
             workspaces.append(response)
+            workspaces.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
 
         Haptics.success()
@@ -475,15 +480,25 @@ final class WorkspaceManagerService: ObservableObject {
 
     /// Discover Git repositories on the host machine
     /// Uses shared isDiscovering state to prevent duplicate concurrent requests
-    func discoverRepositories(paths: [String]? = nil) async throws -> [DiscoveredRepository] {
+    /// - Parameters:
+    ///   - paths: Custom paths to scan (uses defaults if nil)
+    ///   - fresh: Force fresh scan, ignore cache
+    /// - Returns: Array of discovered repositories
+    func discoverRepositories(paths: [String]? = nil, fresh: Bool = false) async throws -> [DiscoveredRepository] {
         // Skip if already discovering - prevents duplicate requests from multiple callers
-        guard !isDiscovering else {
+        // But allow fresh scan to proceed (it will cancel existing task)
+        guard !isDiscovering || fresh else {
             AppLogger.log("[WorkspaceManager] Skipping discovery - already in progress")
             // Wait for existing task and return its result
             if let existingTask = discoveryTask {
                 return try await existingTask.value
             }
             return []
+        }
+
+        // If fresh scan requested, cancel existing task
+        if fresh && isDiscovering {
+            cancelDiscovery()
         }
 
         guard let ws = webSocketService else {
@@ -494,14 +509,26 @@ final class WorkspaceManagerService: ObservableObject {
 
         // Create and store task for potential reuse/cancellation
         // Discovery can take longer as it scans the filesystem - use 120s timeout
-        let task = Task<[DiscoveredRepository], Error> {
+        let task = Task<[DiscoveredRepository], Error> { [weak self] in
             let client = ws.getJSONRPCClient()
             let response: DiscoveryResponse = try await client.request(
                 method: "workspace/discover",
-                params: DiscoverParams(paths: paths),
+                params: DiscoverParams(paths: paths, fresh: fresh ? true : nil),
                 timeout: 120.0
             )
-            AppLogger.log("[WorkspaceManager] Discovered \(response.count) repositories")
+
+            // Store response for cache metadata access
+            await MainActor.run {
+                self?.lastDiscoveryResponse = response
+            }
+
+            let cacheInfo = response.isCached ? " (cached, \(response.cacheAgeDescription ?? "unknown age"))" : " (fresh scan)"
+            AppLogger.log("[WorkspaceManager] Discovered \(response.count) repositories\(cacheInfo)")
+
+            if response.isRefreshing {
+                AppLogger.log("[WorkspaceManager] Background refresh in progress")
+            }
+
             return response.repositories
         }
 
@@ -720,6 +747,7 @@ private struct AddWorkspaceParams: Encodable {
 
 private struct DiscoverParams: Encodable {
     let paths: [String]?
+    let fresh: Bool?      // Force fresh scan, ignore cache
 }
 
 private struct WMSessionStartParams: Encodable {

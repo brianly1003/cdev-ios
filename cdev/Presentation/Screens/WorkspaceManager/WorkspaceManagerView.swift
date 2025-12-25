@@ -19,6 +19,9 @@ struct WorkspaceManagerView: View {
     /// Show debug logs sheet (for FloatingToolkit)
     @State private var showDebugLogs: Bool = false
 
+    /// Scroll request (from floating toolkit force touch)
+    @State private var scrollRequest: ScrollDirection?
+
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     /// Toolkit items for FloatingToolkitButton (only shows Debug when root view)
@@ -171,7 +174,9 @@ struct WorkspaceManagerView: View {
             } // End NavigationStack
 
             // Floating toolkit button with Debug Logs only
-            FloatingToolkitButton(items: toolkitItems) { _ in }
+            FloatingToolkitButton(items: toolkitItems) { direction in
+                requestScroll(direction: direction)
+            }
         } // End outer ZStack
     }
 
@@ -241,82 +246,120 @@ struct WorkspaceManagerView: View {
     // MARK: - Workspace List
 
     private var workspaceList: some View {
-        List {
-            ForEach(viewModel.filteredWorkspaces) { workspace in
-                SwipeableWorkspaceRow(
-                    workspace: workspace,
-                    isCurrentWorkspace: workspace.id == viewModel.currentWorkspaceId,
-                    isLoading: viewModel.isWorkspaceLoading(workspace),
-                    isUnreachable: viewModel.isWorkspaceUnreachable(workspace),
-                    operation: viewModel.operationFor(workspace),
-                    isServerConnected: viewModel.isConnected,
-                    onConnect: {
-                        Task {
-                            AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH START ==========")
-                            AppLogger.log("[WorkspaceManagerView] onConnect: workspace=\(workspace.name), id=\(workspace.id)")
-                            AppLogger.log("[WorkspaceManagerView] onConnect: hasActiveSession=\(workspace.hasActiveSession), sessions=\(workspace.sessions.count)")
-                            AppLogger.log("[WorkspaceManagerView] onConnect: savedHost=\(viewModel.savedHost ?? "nil"), isConnected=\(viewModel.isConnected)")
-                            AppLogger.log("[WorkspaceManagerView] onConnect: currentWorkspaceId=\(viewModel.currentWorkspaceId ?? "nil")")
+        ScrollViewReader { proxy in
+            List {
+                ForEach(viewModel.filteredWorkspaces) { workspace in
+                    SwipeableWorkspaceRow(
+                        workspace: workspace,
+                        isCurrentWorkspace: workspace.id == viewModel.currentWorkspaceId,
+                        isLoading: viewModel.isWorkspaceLoading(workspace),
+                        isUnreachable: viewModel.isWorkspaceUnreachable(workspace),
+                        operation: viewModel.operationFor(workspace),
+                        isServerConnected: viewModel.isConnected,
+                        onConnect: {
+                            Task {
+                                AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH START ==========")
+                                AppLogger.log("[WorkspaceManagerView] onConnect: workspace=\(workspace.name), id=\(workspace.id)")
+                                AppLogger.log("[WorkspaceManagerView] onConnect: hasActiveSession=\(workspace.hasActiveSession), sessions=\(workspace.sessions.count)")
+                                AppLogger.log("[WorkspaceManagerView] onConnect: savedHost=\(viewModel.savedHost ?? "nil"), isConnected=\(viewModel.isConnected)")
+                                AppLogger.log("[WorkspaceManagerView] onConnect: currentWorkspaceId=\(viewModel.currentWorkspaceId ?? "nil")")
 
-                            // For already-active workspaces, dismiss FIRST to avoid visual glitch
-                            // when WebSocket reconnects (shared WebSocket causes isConnected state change)
-                            if workspace.hasActiveSession {
-                                AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Dismissing first before connection")
-                                dismiss()
+                                // For already-active workspaces, dismiss FIRST to avoid visual glitch
+                                // when WebSocket reconnects (shared WebSocket causes isConnected state change)
+                                if workspace.hasActiveSession {
+                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Dismissing first before connection")
+                                    dismiss()
 
-                                // Small delay to let dismiss animation start
-                                try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
-                                AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: After dismiss delay, calling connectToWorkspace")
+                                    // Small delay to let dismiss animation start
+                                    try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
+                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: After dismiss delay, calling connectToWorkspace")
 
-                                let running = await viewModel.connectToWorkspace(workspace)
-                                AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
+                                    let running = await viewModel.connectToWorkspace(workspace)
+                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
 
-                                if let running = running, let host = viewModel.savedHost {
-                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Calling onConnectToWorkspace callback")
-                                    let success = await onConnectToWorkspace?(running, host) ?? false
-                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: onConnectToWorkspace returned: \(success)")
-                                } else {
-                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
-                                }
-                            } else {
-                                AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Starting new session flow")
-                                // For inactive workspaces, wait for connection result before dismissing
-                                let running = await viewModel.connectToWorkspace(workspace)
-                                AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
-
-                                if let running = running, let host = viewModel.savedHost {
-                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Calling onConnectToWorkspace callback")
-                                    let success = await onConnectToWorkspace?(running, host) ?? false
-                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: onConnectToWorkspace returned: \(success)")
-                                    if success {
-                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Dismissing view")
-                                        dismiss()
+                                    if let running = running, let host = viewModel.savedHost {
+                                        AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Calling onConnectToWorkspace callback")
+                                        let success = await onConnectToWorkspace?(running, host) ?? false
+                                        AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: onConnectToWorkspace returned: \(success)")
                                     } else {
-                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Connection failed, NOT dismissing")
+                                        AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
                                     }
                                 } else {
-                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
+                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Starting new session flow")
+                                    // For inactive workspaces, wait for connection result before dismissing
+                                    let running = await viewModel.connectToWorkspace(workspace)
+                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
+
+                                    if let running = running, let host = viewModel.savedHost {
+                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Calling onConnectToWorkspace callback")
+                                        let success = await onConnectToWorkspace?(running, host) ?? false
+                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: onConnectToWorkspace returned: \(success)")
+                                        if success {
+                                            AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Dismissing view")
+                                            dismiss()
+                                        } else {
+                                            AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Connection failed, NOT dismissing")
+                                        }
+                                    } else {
+                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
+                                    }
                                 }
+                                AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH END ==========")
                             }
-                            AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH END ==========")
+                        },
+                        onStart: {
+                            Task { await viewModel.startWorkspace(workspace) }
+                        },
+                        onStop: {
+                            Task { await viewModel.stopWorkspace(workspace) }
                         }
-                    },
-                    onStart: {
-                        Task { await viewModel.startWorkspace(workspace) }
-                    },
-                    onStop: {
-                        Task { await viewModel.stopWorkspace(workspace) }
-                    }
-                )
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .id(workspace.id)
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .refreshable {
+                await viewModel.refreshWorkspaces()
+            }
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .refreshable {
-            await viewModel.refreshWorkspaces()
+    }
+
+    // MARK: - Scroll Request Handler
+
+    /// Request scroll to top or bottom (triggered by floating toolkit force touch)
+    private func requestScroll(direction: ScrollDirection) {
+        scrollRequest = direction
+        // Auto-reset after a short delay
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            scrollRequest = nil
+        }
+    }
+
+    private func handleScrollRequest(direction: ScrollDirection, proxy: ScrollViewProxy) {
+        guard !viewModel.filteredWorkspaces.isEmpty else { return }
+        switch direction {
+        case .top:
+            if let firstId = viewModel.filteredWorkspaces.first?.id {
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    proxy.scrollTo(firstId, anchor: .top)
+                }
+            }
+        case .bottom:
+            if let lastId = viewModel.filteredWorkspaces.last?.id {
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
+            }
         }
     }
 
