@@ -110,6 +110,7 @@
 		JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC03CLI00000000003 /* JSONRPCClient.swift */; };
 		JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */; };
 		RAINBOW01A2B3C4D5E6F789AB /* RainbowTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */; };
+		WEBSEARCH02BUILD00000001 /* WebSearchResultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WEBSEARCH01FILEREF00001 /* WebSearchResultView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -237,6 +238,7 @@
 		JSONRPC03CLI00000000003 /* JSONRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCClient.swift; sourceTree = "<group>"; };
 		JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMethods.swift; sourceTree = "<group>"; };
 		RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RainbowTextField.swift; sourceTree = "<group>"; };
+		WEBSEARCH01FILEREF00001 /* WebSearchResultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSearchResultView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -770,6 +772,7 @@
 				RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */,
 				0EF1DE3FDDAE59D2A2E9F467 /* InteractionBanner.swift */,
 				624A07A99501D68A8E6C516B /* SessionPickerView.swift */,
+				WEBSEARCH01FILEREF00001 /* WebSearchResultView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -944,6 +947,7 @@
 				D1077C80747F6966DC82B168 /* DiffListView.swift in Sources */,
 				EB18F48F89D3E65D2B084230 /* DirectoryListView.swift in Sources */,
 				C06562567AA8EE70C642BFFF /* ElementView.swift in Sources */,
+				WEBSEARCH02BUILD00000001 /* WebSearchResultView.swift in Sources */,
 				3E2AFF6BECD6952F6E79C306 /* ExplorerView.swift in Sources */,
 				FD706FF421944BBCB1F29F0A /* ExplorerViewModel.swift in Sources */,
 				93FF41E59E7AB360AC48DC8A /* FileCache.swift in Sources */,

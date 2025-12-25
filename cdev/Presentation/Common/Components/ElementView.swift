@@ -1171,6 +1171,7 @@ struct ToolCallElementView: View {
 // MARK: - Tool Result View
 
 /// Collapsible tool result with error state
+/// Specialized rendering for WebSearch results
 struct ToolResultElementView: View {
     let content: ToolResultContent
     var searchText: String = ""
@@ -1178,7 +1179,29 @@ struct ToolResultElementView: View {
 
     private let previewLineCount = 3
 
+    /// Parsed web search result (if this is a WebSearch tool result)
+    private var webSearchResult: ParsedWebSearchResult? {
+        // Check if this is a WebSearch result by content pattern
+        guard content.fullContent.contains("Web search results for query:"),
+              content.fullContent.contains("Links: [") else {
+            return nil
+        }
+        return WebSearchParser.parse(content.fullContent)
+    }
+
     var body: some View {
+        // Use specialized view for WebSearch results
+        if let webSearch = webSearchResult, webSearch.isValid {
+            WebSearchResultView(result: webSearch, searchText: searchText)
+        } else {
+            // Standard tool result display
+            standardResultView
+        }
+    }
+
+    // MARK: - Standard Result View
+
+    private var standardResultView: some View {
         VStack(alignment: .leading, spacing: 2) {
             // Summary/Preview row (always visible)
             Button {

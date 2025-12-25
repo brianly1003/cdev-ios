@@ -159,8 +159,67 @@ final class WorkspaceStore: ObservableObject {
                 httpURL: workspaces[index].httpURL,
                 lastConnected: workspaces[index].lastConnected,
                 sessionId: workspaces[index].sessionId,
-                branch: branch
+                branch: branch,
+                remoteWorkspaceId: workspaces[index].remoteWorkspaceId  // Preserve remoteWorkspaceId
             )
+            persistWorkspaces()
+        }
+    }
+
+    /// Update workspace remote ID from server response
+    /// Call this after workspace/list to sync server-side workspace IDs
+    func updateRemoteWorkspaceId(_ remoteId: String, for workspaceId: UUID) {
+        if let index = workspaces.firstIndex(where: { $0.id == workspaceId }) {
+            workspaces[index] = Workspace(
+                id: workspaces[index].id,
+                name: workspaces[index].name,
+                webSocketURL: workspaces[index].webSocketURL,
+                httpURL: workspaces[index].httpURL,
+                lastConnected: workspaces[index].lastConnected,
+                sessionId: workspaces[index].sessionId,
+                branch: workspaces[index].branch,
+                remoteWorkspaceId: remoteId
+            )
+            persistWorkspaces()
+            AppLogger.log("[WorkspaceStore] Updated remoteWorkspaceId for \(workspaces[index].name): \(remoteId)")
+        }
+    }
+
+    /// Sync remote workspace IDs from server workspace list
+    /// Matches by path and updates local workspace with server-side ID
+    func syncRemoteWorkspaceIds(from remoteWorkspaces: [RemoteWorkspace]) {
+        var updated = false
+        for remote in remoteWorkspaces {
+            // Find matching local workspace by path
+            if let index = workspaces.firstIndex(where: { localWorkspace in
+                // Match by path (removing trailing slashes for comparison)
+                let localPath = localWorkspace.name  // Local workspace uses name as identifier
+                let remotePath = remote.path
+                let remoteName = remote.name
+
+                // Match if name matches OR if this is the active workspace
+                return localPath == remoteName ||
+                       (activeWorkspaceId == localWorkspace.id && localWorkspace.remoteWorkspaceId == nil)
+            }) {
+                // Update with remote workspace ID if not already set or different
+                if workspaces[index].remoteWorkspaceId != remote.id {
+                    workspaces[index] = Workspace(
+                        id: workspaces[index].id,
+                        name: workspaces[index].name,
+                        webSocketURL: workspaces[index].webSocketURL,
+                        httpURL: workspaces[index].httpURL,
+                        lastConnected: workspaces[index].lastConnected,
+                        sessionId: workspaces[index].sessionId,
+                        branch: workspaces[index].branch,
+                        remoteWorkspaceId: remote.id
+                    )
+                    updated = true
+                    AppLogger.log("[WorkspaceStore] Synced remoteWorkspaceId for \(workspaces[index].name): \(remote.id)")
+                }
+            }
+        }
+
+        if updated {
             persistWorkspaces()
         }
     }

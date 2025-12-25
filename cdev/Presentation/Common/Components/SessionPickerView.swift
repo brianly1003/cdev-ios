@@ -178,23 +178,56 @@ struct SessionPickerView: View {
 }
 
 /// Simple session row view (no custom swipe - uses native swipeActions)
+/// Shows running vs historical status with visual indicators
 struct SessionRowView: View {
     let session: SessionsResponse.SessionInfo
     let isCurrentSession: Bool
 
+    /// Status color based on session state
+    private var statusColor: Color {
+        if isCurrentSession {
+            return ColorSystem.success
+        }
+        return session.isRunning ? ColorSystem.success : ColorSystem.textQuaternary
+    }
+
     var body: some View {
         HStack(spacing: Spacing.xs) {
-            // Status indicator
-            Circle()
-                .fill(isCurrentSession ? ColorSystem.success : ColorSystem.textQuaternary)
-                .frame(width: 6, height: 6)
+            // Status indicator - pulsing for running sessions
+            ZStack {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 6, height: 6)
+
+                // Pulse animation for running sessions
+                if session.isRunning {
+                    Circle()
+                        .stroke(statusColor, lineWidth: 1)
+                        .frame(width: 10, height: 10)
+                        .opacity(0.5)
+                }
+            }
+            .frame(width: 12, height: 12)
 
             // Summary and Session ID
             VStack(alignment: .leading, spacing: 1) {
-                Text(session.summary)
-                    .font(Typography.terminal)
-                    .foregroundStyle(isCurrentSession ? ColorSystem.success : ColorSystem.textPrimary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(session.summary)
+                        .font(Typography.terminal)
+                        .foregroundStyle(isCurrentSession ? ColorSystem.success : ColorSystem.textPrimary)
+                        .lineLimit(1)
+
+                    // Running badge for active sessions
+                    if session.isRunning {
+                        Text("RUNNING")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundStyle(ColorSystem.success)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(ColorSystem.success.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
 
                 // Session ID (small, truncated)
                 Text(session.sessionId)
@@ -206,22 +239,35 @@ struct SessionRowView: View {
             Spacer(minLength: Spacing.xs)
 
             // Compact meta - close to chevron
-            HStack(spacing: 4) {
-                Text(session.compactTime)
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(session.compactTime)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+
+                    Text("·")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+
+                    HStack(spacing: 2) {
+                        Image(systemName: "bubble.left")
+                            .font(.system(size: 8))
+                        Text("\(session.messageCount)")
+                    }
                     .font(Typography.terminalSmall)
                     .foregroundStyle(ColorSystem.textQuaternary)
-
-                Text("·")
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textQuaternary)
-
-                HStack(spacing: 2) {
-                    Image(systemName: "bubble.left")
-                        .font(.system(size: 8))
-                    Text("\(session.messageCount)")
                 }
-                .font(Typography.terminalSmall)
-                .foregroundStyle(ColorSystem.textQuaternary)
+
+                // Viewer count if others are viewing
+                if session.viewerCount > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "eye")
+                            .font(.system(size: 7))
+                        Text("\(session.viewerCount)")
+                    }
+                    .font(Typography.terminalTimestamp)
+                    .foregroundStyle(ColorSystem.primary)
+                }
             }
         }
         .padding(.leading, Spacing.sm)

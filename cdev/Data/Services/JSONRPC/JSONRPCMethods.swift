@@ -130,10 +130,13 @@ struct ServerCapabilities: Codable, Sendable {
 struct InitializeResult: Codable, Sendable {
     let serverInfo: ServerInfo?
     let capabilities: ServerCapabilities?
+    /// Unique client ID assigned by server for multi-device awareness
+    let clientId: String?
 
     enum CodingKeys: String, CodingKey {
         case serverInfo = "server_info"
         case capabilities
+        case clientId
     }
 }
 
@@ -615,11 +618,22 @@ struct SessionDeleteResult: Codable, Sendable {
 // MARK: - Session Control (Multi-Workspace)
 
 /// Session start request parameters (starts Claude for a workspace)
+/// Use resume_session_id to continue a historical session
 struct SessionStartParams: Codable, Sendable {
     let workspaceId: String
 
+    /// Historical session ID to resume (from workspace/session/history)
+    /// When provided, the new session will continue where the historical session left off
+    let resumeSessionId: String?
+
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"
+        case resumeSessionId = "resume_session_id"
+    }
+
+    init(workspaceId: String, resumeSessionId: String? = nil) {
+        self.workspaceId = workspaceId
+        self.resumeSessionId = resumeSessionId
     }
 }
 
@@ -967,6 +981,7 @@ struct SessionHistoryParams: Codable, Sendable {
 }
 
 /// Historical session info from session/history
+/// Sessions can be "running" or "historical"
 struct HistorySessionInfo: Codable, Sendable, Identifiable {
     var id: String { sessionId }
 
@@ -976,11 +991,44 @@ struct HistorySessionInfo: Codable, Sendable, Identifiable {
     let lastUpdated: String?
     let branch: String?
 
+    /// Session status: "running" or "historical"
+    let status: String?
+
+    /// Workspace ID this session belongs to
+    let workspaceId: String?
+
+    /// RFC3339 timestamp when session started (running sessions only)
+    let startedAt: String?
+
+    /// RFC3339 timestamp of last activity (running sessions only)
+    let lastActive: String?
+
+    /// List of client IDs currently viewing this session (multi-device awareness)
+    let viewers: [String]?
+
     enum CodingKeys: String, CodingKey {
-        case summary, branch
+        case summary, branch, status, viewers
         case sessionId = "session_id"
         case messageCount = "message_count"
         case lastUpdated = "last_updated"
+        case workspaceId = "workspace_id"
+        case startedAt = "started_at"
+        case lastActive = "last_active"
+    }
+
+    /// Whether this is a running session that can receive prompts
+    var isRunning: Bool {
+        status == "running"
+    }
+
+    /// Whether this is a historical session that must be resumed first
+    var isHistorical: Bool {
+        status == "historical" || status == nil
+    }
+
+    /// Number of viewers
+    var viewerCount: Int {
+        viewers?.count ?? 0
     }
 }
 

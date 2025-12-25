@@ -22,6 +22,12 @@ final class WorkspaceManagerService: ObservableObject {
     /// Track workspaces that failed to connect (agent not responding)
     @Published private(set) var unreachableWorkspaceIds: Set<String> = []
 
+    /// Track if repository discovery is in progress (shared across all callers)
+    @Published private(set) var isDiscovering: Bool = false
+
+    /// Current discovery task for cancellation
+    private var discoveryTask: Task<[DiscoveredRepository], Error>?
+
     // MARK: - Dependencies
 
     private weak var webSocketService: WebSocketServiceProtocol?
@@ -158,6 +164,10 @@ final class WorkspaceManagerService: ObservableObject {
         )
 
         workspaces = response.workspaces
+
+        // Sync remote workspace IDs to local WorkspaceStore
+        // This enables workspace-aware APIs (workspace/session/*) instead of legacy APIs
+        WorkspaceStore.shared.syncRemoteWorkspaceIds(from: response.workspaces)
 
         // Cleanup: Remove unreachable IDs for workspaces that no longer exist
         let currentWorkspaceIds = Set(response.workspaces.map(\.id))
@@ -464,22 +474,57 @@ final class WorkspaceManagerService: ObservableObject {
     // MARK: - Repository Discovery
 
     /// Discover Git repositories on the host machine
+    /// Uses shared isDiscovering state to prevent duplicate concurrent requests
     func discoverRepositories(paths: [String]? = nil) async throws -> [DiscoveredRepository] {
+        // Skip if already discovering - prevents duplicate requests from multiple callers
+        guard !isDiscovering else {
+            AppLogger.log("[WorkspaceManager] Skipping discovery - already in progress")
+            // Wait for existing task and return its result
+            if let existingTask = discoveryTask {
+                return try await existingTask.value
+            }
+            return []
+        }
+
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
 
-        isLoading = true
-        defer { isLoading = false }
+        isDiscovering = true
 
-        let client = ws.getJSONRPCClient()
-        let response: DiscoveryResponse = try await client.request(
-            method: "workspace/discover",
-            params: DiscoverParams(paths: paths)
-        )
+        // Create and store task for potential reuse/cancellation
+        // Discovery can take longer as it scans the filesystem - use 120s timeout
+        let task = Task<[DiscoveredRepository], Error> {
+            let client = ws.getJSONRPCClient()
+            let response: DiscoveryResponse = try await client.request(
+                method: "workspace/discover",
+                params: DiscoverParams(paths: paths),
+                timeout: 120.0
+            )
+            AppLogger.log("[WorkspaceManager] Discovered \(response.count) repositories")
+            return response.repositories
+        }
 
-        AppLogger.log("[WorkspaceManager] Discovered \(response.count) repositories")
-        return response.repositories
+        discoveryTask = task
+
+        do {
+            let result = try await task.value
+            isDiscovering = false
+            discoveryTask = nil
+            return result
+        } catch {
+            isDiscovering = false
+            discoveryTask = nil
+            throw error
+        }
+    }
+
+    /// Cancel any in-progress discovery request
+    func cancelDiscovery() {
+        discoveryTask?.cancel()
+        discoveryTask = nil
+        isDiscovering = false
+        AppLogger.log("[WorkspaceManager] Discovery cancelled")
     }
 
     // MARK: - Git Operations
@@ -645,6 +690,9 @@ final class WorkspaceManagerService: ObservableObject {
 
     /// Reset all state (on disconnect)
     func reset() {
+        // Cancel any pending discovery to prevent memory leaks
+        cancelDiscovery()
+
         workspaces = []
         subscribedWorkspaceIds.removeAll()
         unreachableWorkspaceIds.removeAll()

@@ -12,11 +12,13 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     let autoStart: Bool         // Auto-start session on server launch
     let createdAt: Date?        // When workspace was registered
     var sessions: [Session]     // Active Claude sessions for this workspace
+    let activeSessionId: String? // Currently active session ID (for multi-device)
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, sessions
         case autoStart = "auto_start"
         case createdAt = "created_at"
+        case activeSessionId = "active_session_id"
     }
 
     // MARK: - Init with defaults
@@ -27,7 +29,8 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         path: String,
         autoStart: Bool = false,
         createdAt: Date? = nil,
-        sessions: [Session] = []
+        sessions: [Session] = [],
+        activeSessionId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -35,9 +38,10 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         self.autoStart = autoStart
         self.createdAt = createdAt
         self.sessions = sessions
+        self.activeSessionId = activeSessionId
     }
 
-    // MARK: - Custom Decoder (handles missing sessions from workspace/add response)
+    // MARK: - Custom Decoder (handles missing sessions and date formats)
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -45,9 +49,32 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         name = try container.decode(String.self, forKey: .name)
         path = try container.decode(String.self, forKey: .path)
         autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? false
-        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+
+        // Parse createdAt with flexible ISO8601 format (server sends string)
+        if let dateString = try? container.decode(String.self, forKey: .createdAt) {
+            createdAt = Self.parseDate(from: dateString)
+        } else {
+            createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        }
+
         // Sessions may be missing from workspace/add response - default to empty array
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
+        activeSessionId = try container.decodeIfPresent(String.self, forKey: .activeSessionId)
+    }
+
+    /// Parse date from string with flexible ISO8601 format
+    private static func parseDate(from dateString: String) -> Date? {
+        // Try with fractional seconds first (e.g., "2025-12-25T04:37:28.852943Z")
+        let formatterWithFractional = ISO8601DateFormatter()
+        formatterWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatterWithFractional.date(from: dateString) {
+            return date
+        }
+
+        // Try without fractional seconds (e.g., "2025-12-25T04:50:30+07:00")
+        let formatterWithoutFractional = ISO8601DateFormatter()
+        formatterWithoutFractional.formatOptions = [.withInternetDateTime]
+        return formatterWithoutFractional.date(from: dateString)
     }
 
     // MARK: - Computed Properties
@@ -90,14 +117,22 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
 
 // MARK: - Session
 
-/// An active Claude CLI instance for a workspace
+/// A Claude CLI session for a workspace
+/// Can be either running (active) or historical (past session)
 /// Multiple sessions can exist per workspace (different conversations)
 struct Session: Codable, Identifiable, Equatable, Hashable {
-    let id: String                  // "sess-xyz789" - session identifier
-    let workspaceId: String         // "ws-abc123" - parent workspace
-    let status: SessionStatus       // Current state
-    let startedAt: Date?            // When session started
-    let lastActive: Date?           // Last activity timestamp
+    let id: String                  // Session identifier (UUID)
+    let workspaceId: String         // Parent workspace ID
+    let status: SessionStatus       // "running" or "historical"
+
+    // Running session fields
+    let startedAt: Date?            // When session started (running only)
+    let lastActive: Date?           // Last activity timestamp (running only)
+
+    // Historical session fields
+    let summary: String?            // First prompt summary (historical only)
+    let messageCount: Int?          // Number of messages (historical only)
+    let lastUpdated: Date?          // Last updated time (historical only)
 
     // Runtime state (from session/state call)
     let claudeState: String?        // "idle", "running", "waiting"
@@ -107,11 +142,16 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     let pendingToolUseId: String?   // Tool use ID if waiting for permission
     let pendingToolName: String?    // Tool name if waiting for permission
 
+    // Multi-device awareness
+    let viewers: [String]?          // Client IDs currently viewing this session
+
     enum CodingKeys: String, CodingKey {
-        case id, status
+        case id, status, viewers, summary
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"
+        case messageCount = "message_count"
+        case lastUpdated = "last_updated"
         case claudeState = "claude_state"
         case claudeSessionId = "claude_session_id"
         case isRunning = "is_running"
@@ -128,24 +168,101 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
         status: SessionStatus = .running,
         startedAt: Date? = nil,
         lastActive: Date? = nil,
+        summary: String? = nil,
+        messageCount: Int? = nil,
+        lastUpdated: Date? = nil,
         claudeState: String? = nil,
         claudeSessionId: String? = nil,
         isRunning: Bool? = nil,
         waitingForInput: Bool? = nil,
         pendingToolUseId: String? = nil,
-        pendingToolName: String? = nil
+        pendingToolName: String? = nil,
+        viewers: [String]? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
         self.status = status
         self.startedAt = startedAt
         self.lastActive = lastActive
+        self.summary = summary
+        self.messageCount = messageCount
+        self.lastUpdated = lastUpdated
         self.claudeState = claudeState
         self.claudeSessionId = claudeSessionId
         self.isRunning = isRunning
         self.waitingForInput = waitingForInput
         self.pendingToolUseId = pendingToolUseId
         self.pendingToolName = pendingToolName
+        self.viewers = viewers
+    }
+
+    // MARK: - Custom Decoder (handles different date formats)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        workspaceId = try container.decode(String.self, forKey: .workspaceId)
+        status = try container.decode(SessionStatus.self, forKey: .status)
+
+        // Parse dates with flexible ISO8601 format
+        startedAt = Self.parseOptionalDate(from: container, forKey: .startedAt)
+        lastActive = Self.parseOptionalDate(from: container, forKey: .lastActive)
+        lastUpdated = Self.parseOptionalDate(from: container, forKey: .lastUpdated)
+
+        // Historical session fields
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCount)
+
+        // Runtime state
+        claudeState = try container.decodeIfPresent(String.self, forKey: .claudeState)
+        claudeSessionId = try container.decodeIfPresent(String.self, forKey: .claudeSessionId)
+        isRunning = try container.decodeIfPresent(Bool.self, forKey: .isRunning)
+        waitingForInput = try container.decodeIfPresent(Bool.self, forKey: .waitingForInput)
+        pendingToolUseId = try container.decodeIfPresent(String.self, forKey: .pendingToolUseId)
+        pendingToolName = try container.decodeIfPresent(String.self, forKey: .pendingToolName)
+
+        // Multi-device
+        viewers = try container.decodeIfPresent([String].self, forKey: .viewers)
+    }
+
+    /// Parse date from string with flexible ISO8601 format
+    private static func parseOptionalDate(from container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Date? {
+        guard let dateString = try? container.decode(String.self, forKey: key) else {
+            return nil
+        }
+
+        // Try with fractional seconds first (e.g., "2025-12-25T04:37:57.156106Z")
+        let formatterWithFractional = ISO8601DateFormatter()
+        formatterWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatterWithFractional.date(from: dateString) {
+            return date
+        }
+
+        // Try without fractional seconds (e.g., "2025-12-25T04:50:30+07:00")
+        let formatterWithoutFractional = ISO8601DateFormatter()
+        formatterWithoutFractional.formatOptions = [.withInternetDateTime]
+        return formatterWithoutFractional.date(from: dateString)
+    }
+
+    // MARK: - Computed Properties
+
+    /// Display summary - use summary for historical, or generate for running
+    var displaySummary: String {
+        if let summary = summary, !summary.isEmpty {
+            return summary
+        }
+        return status == .running ? "Active session" : "Session"
+    }
+
+    /// Most recent activity date (from lastActive, lastUpdated, or startedAt)
+    var mostRecentDate: Date? {
+        lastActive ?? lastUpdated ?? startedAt
+    }
+
+    /// Viewer count
+    var viewerCount: Int {
+        viewers?.count ?? 0
     }
 
     // MARK: - Hashable
@@ -162,9 +279,12 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
 // MARK: - Session Status
 
 /// Status of a session (Claude instance)
+/// - running: Active Claude CLI process, can use session/send
+/// - historical: Past session from ~/.claude/projects/, must resume with session/start + resume_session_id
 enum SessionStatus: String, Codable, Equatable {
-    case running    // Session is active
-    case stopped    // Session ended
+    case running    // Session is active - can send prompts directly
+    case historical // Past session - must resume first
+    case stopped    // Session ended (legacy)
     case starting   // Session is starting
     case stopping   // Session is stopping
     case error      // Session failed
@@ -173,6 +293,7 @@ enum SessionStatus: String, Codable, Equatable {
     var displayText: String {
         switch self {
         case .running: return "Running"
+        case .historical: return "Historical"
         case .stopped: return "Stopped"
         case .starting: return "Starting..."
         case .stopping: return "Stopping..."
@@ -184,10 +305,21 @@ enum SessionStatus: String, Codable, Equatable {
     var iconName: String {
         switch self {
         case .running: return "checkmark.circle.fill"
+        case .historical: return "clock.arrow.circlepath"
         case .stopped: return "stop.circle"
         case .starting, .stopping: return "arrow.triangle.2.circlepath"
         case .error: return "exclamationmark.triangle.fill"
         }
+    }
+
+    /// Whether prompts can be sent to this session directly
+    var canSendPrompts: Bool {
+        self == .running
+    }
+
+    /// Whether this session needs to be resumed before sending prompts
+    var needsResume: Bool {
+        self == .historical || self == .stopped
     }
 }
 
@@ -323,6 +455,11 @@ struct SessionStateResponse: Codable {
     let startedAt: Date?
     let lastActive: Date?
 
+    // Historical session fields
+    let summary: String?
+    let messageCount: Int?
+    let lastUpdated: Date?
+
     // Runtime state
     let claudeState: String?
     let claudeSessionId: String?
@@ -331,11 +468,16 @@ struct SessionStateResponse: Codable {
     let pendingToolUseId: String?
     let pendingToolName: String?
 
+    // Multi-device awareness
+    let viewers: [String]?
+
     enum CodingKeys: String, CodingKey {
-        case id, status
+        case id, status, viewers, summary
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"
+        case messageCount = "message_count"
+        case lastUpdated = "last_updated"
         case claudeState = "claude_state"
         case claudeSessionId = "claude_session_id"
         case isRunning = "is_running"
@@ -352,12 +494,16 @@ struct SessionStateResponse: Codable {
             status: status,
             startedAt: startedAt,
             lastActive: lastActive,
+            summary: summary,
+            messageCount: messageCount,
+            lastUpdated: lastUpdated,
             claudeState: claudeState,
             claudeSessionId: claudeSessionId,
             isRunning: isRunning,
             waitingForInput: waitingForInput,
             pendingToolUseId: pendingToolUseId,
-            pendingToolName: pendingToolName
+            pendingToolName: pendingToolName,
+            viewers: viewers
         )
     }
 }

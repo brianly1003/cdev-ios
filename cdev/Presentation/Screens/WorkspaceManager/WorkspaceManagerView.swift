@@ -373,7 +373,7 @@ struct WorkspaceManagerView: View {
                     Button {
                         viewModel.showDiscoverySheet = true
                     } label: {
-                        Label("Discover", systemImage: "magnifyingglass")
+                        Label("Discover Repos", systemImage: "magnifyingglass")
                             .font(Typography.buttonLabel)
                             .foregroundStyle(ColorSystem.primary)
                             .padding(.horizontal, Spacing.md)

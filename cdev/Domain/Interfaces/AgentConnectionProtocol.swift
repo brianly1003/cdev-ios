@@ -48,10 +48,11 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     /// Currently watched session ID (nil if not watching)
     var watchedSessionId: String? { get }
 
-    /// Watch a session for real-time updates
+    /// Watch a session for real-time updates using workspace/session/watch API
     /// - Parameters:
     ///   - sessionId: The session ID to watch
-    ///   - workspaceId: Optional workspace ID for workspace-aware API (uses workspace/session/watch)
+    ///   - workspaceId: The workspace ID (required for workspace/session/watch)
+    /// - Throws: AppError.workspaceIdRequired if workspaceId is nil
     func watchSession(_ sessionId: String, workspaceId: String?) async throws
 
     /// Stop watching the current session

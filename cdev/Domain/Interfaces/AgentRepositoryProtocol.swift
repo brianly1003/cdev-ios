@@ -241,6 +241,19 @@ struct SessionsResponse: Codable {
         (offset ?? 0) + sessions.count
     }
 
+    /// Session status types
+    /// - running: Active Claude CLI process, can use session/send
+    /// - historical: Past session from ~/.claude/projects/, must resume first
+    enum SessionStatus: String, Codable {
+        case running
+        case historical
+
+        /// Whether prompts can be sent to this session directly
+        var canSendPrompts: Bool {
+            self == .running
+        }
+    }
+
     struct SessionInfo: Codable, Identifiable {
         var id: String { sessionId }
         let sessionId: String
@@ -249,21 +262,74 @@ struct SessionsResponse: Codable {
         let lastUpdated: String
         let branch: String?
 
+        /// Session status: "running" or "historical"
+        /// - running: Active Claude CLI process, can use session/send
+        /// - historical: Past session, must resume with session/start + resume_session_id
+        let status: SessionStatus?
+
+        /// Workspace ID this session belongs to
+        let workspaceId: String?
+
+        /// RFC3339 timestamp when session started (running sessions only)
+        let startedAt: String?
+
+        /// RFC3339 timestamp of last activity (running sessions only)
+        let lastActive: String?
+
+        /// List of client IDs currently viewing this session (multi-device awareness)
+        let viewers: [String]?
+
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
             case summary
             case messageCount = "message_count"
             case lastUpdated = "last_updated"
             case branch
+            case status
+            case workspaceId = "workspace_id"
+            case startedAt = "started_at"
+            case lastActive = "last_active"
+            case viewers
         }
 
         /// Memberwise initializer for programmatic creation (e.g., from RPC)
-        init(sessionId: String, summary: String, messageCount: Int, lastUpdated: String, branch: String? = nil) {
+        init(
+            sessionId: String,
+            summary: String,
+            messageCount: Int,
+            lastUpdated: String,
+            branch: String? = nil,
+            status: SessionStatus? = nil,
+            workspaceId: String? = nil,
+            startedAt: String? = nil,
+            lastActive: String? = nil,
+            viewers: [String]? = nil
+        ) {
             self.sessionId = sessionId
             self.summary = summary
             self.messageCount = messageCount
             self.lastUpdated = lastUpdated
             self.branch = branch
+            self.status = status
+            self.workspaceId = workspaceId
+            self.startedAt = startedAt
+            self.lastActive = lastActive
+            self.viewers = viewers
+        }
+
+        /// Whether this is a running session that can receive prompts
+        var isRunning: Bool {
+            status == .running
+        }
+
+        /// Whether this is a historical session that must be resumed first
+        var isHistorical: Bool {
+            status == .historical || status == nil
+        }
+
+        /// Number of other viewers (excluding self)
+        var viewerCount: Int {
+            viewers?.count ?? 0
         }
     }
 }

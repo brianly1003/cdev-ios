@@ -54,6 +54,20 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Flag to enable JSON-RPC mode (set after successful initialize handshake)
     @Atomic private var useJSONRPC = false
 
+    /// Client ID assigned by server during initialize (for multi-device awareness)
+    @Atomic private var _clientId: String?
+
+    /// Client ID assigned by server (nil if not connected or not assigned)
+    var clientId: String? { _clientId }
+
+    /// Check if a viewer/client ID matches this client (for multi-device awareness)
+    /// - Parameter id: The client ID to check
+    /// - Returns: true if the ID matches this client's ID
+    func isMe(_ id: String?) -> Bool {
+        guard let myId = _clientId, let checkId = id else { return false }
+        return myId == checkId
+    }
+
     /// Track pending request IDs to method names for response correlation (with timestamp for cleanup)
     private var pendingRequestMethods: [String: (method: String, timestamp: Date)] = [:]
     private let pendingRequestMethodsLock = NSLock()
@@ -144,6 +158,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
         rpcClient = nil
         useJSONRPC = false
+        _clientId = nil
 
         // Cancel WebSocket and session
         webSocket?.cancel(with: .goingAway, reason: nil)
@@ -790,7 +805,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
             // Success - server supports JSON-RPC
             useJSONRPC = true
-            AppLogger.webSocket("JSON-RPC initialized: server=\(result.serverInfo?.name ?? "unknown") v\(result.serverInfo?.version ?? "?")")
+            _clientId = result.clientId
+            AppLogger.webSocket("JSON-RPC initialized: server=\(result.serverInfo?.name ?? "unknown") v\(result.serverInfo?.version ?? "?"), clientId=\(result.clientId ?? "none")")
 
             if let capabilities = result.capabilities {
                 if let agents = capabilities.agents {
@@ -1091,6 +1107,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     /// Convert JSON-RPC notification to AgentEvent
+    /// Server sends events with workspace_id and session_id at top level for filtering
     private func convertNotificationToEvent(method: String, params: AnyCodable?) -> AgentEvent? {
         // Map notification methods to event types
         // This bridges the JSON-RPC format to existing event handling
@@ -1100,15 +1117,36 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // JSON-RPC uses "event/claude_message" but AgentEventType expects "claude_message"
         let eventType = method.hasPrefix("event/") ? String(method.dropFirst(6)) : method
 
+        // Extract workspace_id and session_id from params for event filtering
+        // Server sends these at the top level of the event for multi-device filtering
+        let workspaceId = paramsDict["workspace_id"] as? String
+        let sessionId = paramsDict["session_id"] as? String
+
+        // Extract payload - could be nested in "payload" key or params itself contains the payload
+        let payload: [String: Any]
+        if let nestedPayload = paramsDict["payload"] as? [String: Any] {
+            payload = nestedPayload
+        } else {
+            // Params IS the payload (minus workspace_id/session_id)
+            payload = paramsDict
+        }
+
         // Re-encode params to Data for AgentEvent decoding
-        // AgentEvent expects: { "event": "...", "payload": {...}, "id": "...", "timestamp": "..." }
-        // JSON-RPC provides: { "method": "event/...", "params": {...} }
+        // AgentEvent expects: { "event": "...", "payload": {...}, "workspace_id": "...", "session_id": "...", "id": "...", "timestamp": "..." }
         do {
             var eventDict: [String: Any] = [:]
             eventDict["event"] = eventType  // Add event type (without "event/" prefix)
-            eventDict["payload"] = paramsDict  // Wrap params in payload key
+            eventDict["payload"] = payload  // Payload content
             eventDict["id"] = UUID().uuidString
-            eventDict["timestamp"] = ISO8601DateFormatter().string(from: Date())
+            eventDict["timestamp"] = paramsDict["timestamp"] as? String ?? ISO8601DateFormatter().string(from: Date())
+
+            // Add workspace_id and session_id at top level for filtering
+            if let workspaceId = workspaceId {
+                eventDict["workspace_id"] = workspaceId
+            }
+            if let sessionId = sessionId {
+                eventDict["session_id"] = sessionId
+            }
 
             let eventData = try JSONSerialization.data(withJSONObject: eventDict)
             return try jsonDecoder.decode(AgentEvent.self, from: eventData)
@@ -1293,9 +1331,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Watch a session for real-time updates
     /// - Parameters:
     ///   - sessionId: The session ID to watch
-    ///   - workspaceId: Optional workspace ID for workspace-aware API (uses workspace/session/watch)
+    ///   - workspaceId: The workspace ID (required for workspace/session/watch API)
     /// - Throws: Connection or encoding errors
-    func watchSession(_ sessionId: String, workspaceId: String? = nil) async throws {
+    func watchSession(_ sessionId: String, workspaceId: String?) async throws {
+        // Workspace ID is required for workspace-aware API
+        guard let workspaceId = workspaceId else {
+            AppLogger.webSocket("Cannot watch session - workspaceId is required", type: .error)
+            throw AppError.workspaceIdRequired
+        }
+
         // Already watching this session? Skip
         guard _watchedSessionId != sessionId else {
             AppLogger.webSocket("Already watching session: \(sessionId)")
@@ -1315,23 +1359,13 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         let client = getJSONRPCClient()
 
-        // Use workspace-aware API if workspaceId is provided
-        if let workspaceId = workspaceId {
-            AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId)")
-            let params = WorkspaceSessionWatchParams(workspaceId: workspaceId, sessionId: sessionId)
-            let _: WorkspaceSessionWatchResult = try await client.request(
-                method: JSONRPCMethod.workspaceSessionWatch,
-                params: params
-            )
-            _watchedWorkspaceId = workspaceId
-        } else {
-            AppLogger.webSocket("Starting watch for session: \(sessionId)")
-            let params = SessionWatchParams(sessionId: sessionId)
-            let _: SessionWatchResult = try await client.request(
-                method: JSONRPCMethod.sessionWatch,
-                params: params
-            )
-        }
+        AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId)")
+        let params = WorkspaceSessionWatchParams(workspaceId: workspaceId, sessionId: sessionId)
+        let _: WorkspaceSessionWatchResult = try await client.request(
+            method: JSONRPCMethod.workspaceSessionWatch,
+            params: params
+        )
+        _watchedWorkspaceId = workspaceId
         _watchedSessionId = sessionId
     }
 
@@ -1345,7 +1379,6 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Clear watched session ID immediately to prevent race conditions
         let previousSessionId = _watchedSessionId
-        let previousWorkspaceId = _watchedWorkspaceId
         _watchedSessionId = nil
         _watchedWorkspaceId = nil
 
@@ -1357,22 +1390,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         let client = getJSONRPCClient()
 
-        // Use workspace-aware API if we were using workspace watch
-        if previousWorkspaceId != nil {
-            AppLogger.webSocket("Stopping workspace watch for session: \(previousSessionId ?? "unknown")")
-            // workspace/session/unwatch takes no params
-            let _: WorkspaceSessionUnwatchResult = try await client.request(
-                method: JSONRPCMethod.workspaceSessionUnwatch,
-                params: EmptyParams()
-            )
-        } else {
-            AppLogger.webSocket("Stopping watch for session: \(previousSessionId ?? "unknown")")
-            let params = SessionWatchParams(sessionId: previousSessionId ?? "")
-            let _: SessionUnwatchResult = try await client.request(
-                method: JSONRPCMethod.sessionUnwatch,
-                params: params
-            )
-        }
+        AppLogger.webSocket("Stopping workspace watch for session: \(previousSessionId ?? "unknown")")
+        // workspace/session/unwatch takes no params
+        let _: WorkspaceSessionUnwatchResult = try await client.request(
+            method: JSONRPCMethod.workspaceSessionUnwatch,
+            params: EmptyParams()
+        )
     }
 }
 

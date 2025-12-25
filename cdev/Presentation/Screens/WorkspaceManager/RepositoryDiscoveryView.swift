@@ -12,72 +12,95 @@ struct RepositoryDiscoveryView: View {
     /// Returns true if connection succeeded (dismisses view), false otherwise (stays on page)
     var onConnectToWorkspace: ((RemoteWorkspace, String) async -> Bool)?
 
+    /// Show debug logs sheet (for FloatingToolkit)
+    @State private var showDebugLogs: Bool = false
+
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
+    /// Toolkit items - only Debug Logs button
+    private var toolkitItems: [ToolkitItem] {
+        ToolkitBuilder()
+            .add(.debugLogs { showDebugLogs = true })
+            .build()
+    }
+
     var body: some View {
-        NavigationStack {
-            ZStack {
-                ColorSystem.terminalBg
-                    .ignoresSafeArea()
+        ZStack {
+            NavigationStack {
+                ZStack {
+                    ColorSystem.terminalBg
+                        .ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    // Search paths input
-                    searchPathsSection
-                        .padding(.horizontal, layout.standardPadding)
-                        .padding(.vertical, layout.smallPadding)
-
-                    // Search bar (only show when we have results)
-                    if !viewModel.repositories.isEmpty {
-                        searchBar
+                    VStack(spacing: 0) {
+                        // Search paths input
+                        searchPathsSection
                             .padding(.horizontal, layout.standardPadding)
-                            .padding(.bottom, layout.smallPadding)
-                    }
+                            .padding(.vertical, layout.smallPadding)
 
-                    Divider()
-                        .background(ColorSystem.terminalBgHighlight)
+                        // Search bar (only show when we have results)
+                        if !viewModel.repositories.isEmpty {
+                            searchBar
+                                .padding(.horizontal, layout.standardPadding)
+                                .padding(.bottom, layout.smallPadding)
+                        }
 
-                    // Results
-                    if viewModel.isLoading {
-                        loadingView
-                    } else if viewModel.repositories.isEmpty {
-                        emptyStateView
-                    } else if viewModel.filteredRepositories.isEmpty {
-                        noSearchResultsView
-                    } else {
-                        repositoryList
+                        Divider()
+                            .background(ColorSystem.terminalBgHighlight)
+
+                        // Results
+                        if viewModel.isLoading {
+                            loadingView
+                        } else if viewModel.repositories.isEmpty {
+                            emptyStateView
+                        } else if viewModel.filteredRepositories.isEmpty {
+                            noSearchResultsView
+                        } else {
+                            repositoryList
+                        }
                     }
                 }
-            }
-            .navigationTitle("Discover Repos")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
+                .navigationTitle("Discover Repos")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") {
+                            dismiss()
+                        }
+                        .foregroundStyle(ColorSystem.textSecondary)
                     }
-                    .foregroundStyle(ColorSystem.textSecondary)
-                }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await viewModel.discover() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: layout.iconAction))
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            Task { await viewModel.discover() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: layout.iconAction))
+                        }
+                        .disabled(viewModel.isLoading)
                     }
-                    .disabled(viewModel.isLoading)
                 }
-            }
-            .alert("Error", isPresented: $viewModel.showError) {
-                Button("OK") {}
-            } message: {
-                Text(viewModel.errorMessage)
-            }
-            .task {
-                // Auto-discover on appear
-                await viewModel.discover()
-            }
-        }
+                .alert("Error", isPresented: $viewModel.showError) {
+                    Button("OK") {}
+                } message: {
+                    Text(viewModel.errorMessage)
+                }
+                .sheet(isPresented: $showDebugLogs) {
+                    AdminToolsView()
+                        .responsiveSheet()
+                }
+                .task {
+                    // Auto-discover on appear
+                    await viewModel.discover()
+                }
+                .onDisappear {
+                    // Cancel any pending discovery when sheet is dismissed
+                    viewModel.cancelDiscovery()
+                }
+            } // End NavigationStack
+
+            // Floating toolkit button with Debug Logs only
+            FloatingToolkitButton(items: toolkitItems) { _ in }
+        } // End outer ZStack
     }
 
     // MARK: - Search Paths Section
@@ -401,6 +424,7 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
     }
 
     /// Discover repositories
+    /// Uses shared service state to prevent duplicate concurrent requests
     func discover() async {
         guard managerService.isConnected else {
             errorMessage = "Not connected to workspace manager"
@@ -409,10 +433,13 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
         }
 
         isLoading = true
-        defer { isLoading = false }
 
         do {
-            repositories = try await managerService.discoverRepositories(paths: searchPaths)
+            let results = try await managerService.discoverRepositories(paths: searchPaths)
+            repositories = results
+        } catch is CancellationError {
+            // Task was cancelled (e.g., sheet dismissed) - ignore silently
+            AppLogger.log("[Discovery] Repository discovery cancelled")
         } catch let error as WorkspaceManagerError {
             errorMessage = error.localizedDescription
             showError = true
@@ -420,6 +447,14 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             showError = true
         }
+
+        isLoading = false
+    }
+
+    /// Cancel any pending discovery request (called when view disappears)
+    func cancelDiscovery() {
+        managerService.cancelDiscovery()
+        isLoading = false
     }
 
     /// Add a discovered repository as a workspace (just marks it, doesn't connect)

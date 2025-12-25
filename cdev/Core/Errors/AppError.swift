@@ -23,6 +23,7 @@ enum AppError: LocalizedError {
     case claudeAlreadyRunning
     case claudeNotRunning
     case commandFailed(reason: String)
+    case workspaceIdRequired
 
     // Pairing errors
     case invalidQRCode
@@ -82,6 +83,8 @@ enum AppError: LocalizedError {
             return "Claude is not running"
         case .commandFailed(let reason):
             return "Command failed: \(reason)"
+        case .workspaceIdRequired:
+            return "Workspace ID is required for this operation"
         case .invalidQRCode:
             return "Invalid QR code"
         case .pairingFailed(let reason):

@@ -27,17 +27,33 @@ enum AgentEventType: String, Codable {
 }
 
 /// Base event structure from agent
+/// Events now include workspace_id and session_id at top level for filtering
 struct AgentEvent: Codable, Identifiable {
     let id: String
     let type: AgentEventType
     let payload: AgentEventPayload
     let timestamp: Date
 
-    init(id: String = UUID().uuidString, type: AgentEventType, payload: AgentEventPayload, timestamp: Date = Date()) {
+    /// Workspace ID for event filtering (events from multi-workspace server)
+    let workspaceId: String?
+
+    /// Session ID for event filtering (filter events by current session)
+    let sessionId: String?
+
+    init(
+        id: String = UUID().uuidString,
+        type: AgentEventType,
+        payload: AgentEventPayload,
+        timestamp: Date = Date(),
+        workspaceId: String? = nil,
+        sessionId: String? = nil
+    ) {
         self.id = id
         self.type = type
         self.payload = payload
         self.timestamp = timestamp
+        self.workspaceId = workspaceId
+        self.sessionId = sessionId
     }
 
     enum CodingKeys: String, CodingKey {
@@ -45,6 +61,8 @@ struct AgentEvent: Codable, Identifiable {
         case type = "event"  // Agent sends "event", not "type"
         case payload
         case timestamp
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -52,6 +70,8 @@ struct AgentEvent: Codable, Identifiable {
         self.id = (try? container.decode(String.self, forKey: .id)) ?? UUID().uuidString
         self.type = try container.decode(AgentEventType.self, forKey: .type)
         self.payload = try container.decode(AgentEventPayload.self, forKey: .payload)
+        self.workspaceId = try container.decodeIfPresent(String.self, forKey: .workspaceId)
+        self.sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
 
         if let timestampString = try? container.decode(String.self, forKey: .timestamp),
            let date = Date.fromISO8601(timestampString) {
@@ -59,6 +79,24 @@ struct AgentEvent: Codable, Identifiable {
         } else {
             self.timestamp = Date()
         }
+    }
+
+    /// Check if this event matches the specified session
+    /// - Parameter targetSessionId: The session ID to match against
+    /// - Returns: true if event matches session or has no session context
+    func matchesSession(_ targetSessionId: String?) -> Bool {
+        guard let targetSessionId = targetSessionId else { return true }
+        guard let eventSessionId = sessionId else { return true }
+        return eventSessionId == targetSessionId
+    }
+
+    /// Check if this event matches the specified workspace
+    /// - Parameter targetWorkspaceId: The workspace ID to match against
+    /// - Returns: true if event matches workspace or has no workspace context
+    func matchesWorkspace(_ targetWorkspaceId: String?) -> Bool {
+        guard let targetWorkspaceId = targetWorkspaceId else { return true }
+        guard let eventWorkspaceId = workspaceId else { return true }
+        return eventWorkspaceId == targetWorkspaceId
     }
 }
 

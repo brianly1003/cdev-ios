@@ -452,7 +452,7 @@ final class AgentRepository: AgentRepositoryProtocol {
 
     func getSessionMessages(
         sessionId: String,
-        workspaceId: String? = nil,
+        workspaceId: String?,
         limit: Int = 20,
         offset: Int = 0,
         order: String = "desc"
@@ -472,92 +472,51 @@ final class AgentRepository: AgentRepositoryProtocol {
             )
         }
 
-        // Use workspace-aware API if workspaceId is provided
-        if let workspaceId = workspaceId {
-            AppLogger.network("[Sessions] Using workspace/session/messages for workspace: \(workspaceId)")
-            let params = WorkspaceSessionMessagesParams(
-                workspaceId: workspaceId,
-                sessionId: sessionId,
-                limit: limit,
-                offset: offset,
-                order: order
-            )
-
-            do {
-                let result: WorkspaceSessionMessagesResult = try await rpcClient.request(
-                    method: JSONRPCMethod.workspaceSessionMessages,
-                    params: params
-                )
-
-                // Convert workspace messages to SessionMessage format
-                let messages: [SessionMessagesResponse.SessionMessage] = (result.messages ?? []).compactMap { msg -> SessionMessagesResponse.SessionMessage? in
-                    guard let message = msg.message,
-                          let type = msg.type else { return nil }
-                    return SessionMessagesResponse.SessionMessage(
-                        type: type,
-                        uuid: msg.uuid,
-                        sessionId: msg.sessionId,
-                        timestamp: msg.timestamp,
-                        gitBranch: msg.gitBranch,
-                        message: message,
-                        isContextCompaction: msg.isContextCompaction
-                    )
-                }
-
-                return SessionMessagesResponse(
-                    sessionId: result.sessionId ?? sessionId,
-                    messages: messages,
-                    total: result.total ?? messages.count,
-                    limit: result.limit ?? limit,
-                    offset: result.offset ?? offset,
-                    hasMore: result.hasMore ?? false,
-                    cacheHit: nil,
-                    queryTimeMs: result.queryTimeMs
-                )
-            } catch {
-                AppLogger.network("workspace/session/messages decode error: \(error)", type: .error)
-                // Fall back to legacy API
-            }
+        // Workspace ID is required for workspace/session/messages API
+        guard let workspaceId = workspaceId else {
+            AppLogger.network("[Sessions] Error: workspaceId required for workspace/session/messages", type: .error)
+            throw AgentRepositoryError.workspaceIdRequired
         }
 
-        // JSON-RPC implementation (legacy) - uses same message format as HTTP API
-        let params = SessionMessagesParams(
+        AppLogger.network("[Sessions] Using workspace/session/messages for workspace: \(workspaceId)")
+        let params = WorkspaceSessionMessagesParams(
+            workspaceId: workspaceId,
             sessionId: sessionId,
-            agentType: nil,
             limit: limit,
             offset: offset,
             order: order
         )
 
-        do {
-            let result: SessionMessagesResult = try await rpcClient.request(
-                method: JSONRPCMethod.sessionMessages,
-                params: params
-            )
+        let result: WorkspaceSessionMessagesResult = try await rpcClient.request(
+            method: JSONRPCMethod.workspaceSessionMessages,
+            params: params
+        )
 
-            // Messages are already in the correct format (same as HTTP API)
-            return SessionMessagesResponse(
-                sessionId: result.sessionId ?? sessionId,
-                messages: result.messages ?? [],
-                total: result.total ?? (result.messages?.count ?? 0),
-                limit: result.limit ?? limit,
-                offset: result.offset ?? offset,
-                hasMore: result.hasMore ?? false,
-                cacheHit: nil,
-                queryTimeMs: result.queryTimeMs
-            )
-        } catch {
-            AppLogger.network("session/messages decode error: \(error)", type: .error)
-            // Return empty response on decode failure (server may return different format)
-            return SessionMessagesResponse(
-                sessionId: sessionId,
-                messages: [],
-                total: 0,
-                limit: limit,
-                offset: offset,
-                hasMore: false
+        // Convert workspace messages to SessionMessage format
+        let messages: [SessionMessagesResponse.SessionMessage] = (result.messages ?? []).compactMap { msg -> SessionMessagesResponse.SessionMessage? in
+            guard let message = msg.message,
+                  let type = msg.type else { return nil }
+            return SessionMessagesResponse.SessionMessage(
+                type: type,
+                uuid: msg.uuid,
+                sessionId: msg.sessionId,
+                timestamp: msg.timestamp,
+                gitBranch: msg.gitBranch,
+                message: message,
+                isContextCompaction: msg.isContextCompaction
             )
         }
+
+        return SessionMessagesResponse(
+            sessionId: result.sessionId ?? sessionId,
+            messages: messages,
+            total: result.total ?? messages.count,
+            limit: result.limit ?? limit,
+            offset: result.offset ?? offset,
+            hasMore: result.hasMore ?? false,
+            cacheHit: nil,
+            queryTimeMs: result.queryTimeMs
+        )
     }
 
     func deleteSession(sessionId: String) async throws -> DeleteSessionResponse {
@@ -637,5 +596,18 @@ final class AgentRepository: AgentRepositoryProtocol {
             connectedClients: _status.connectedClients,
             uptime: _status.uptime
         )
+    }
+}
+
+// MARK: - Errors
+
+enum AgentRepositoryError: LocalizedError {
+    case workspaceIdRequired
+
+    var errorDescription: String? {
+        switch self {
+        case .workspaceIdRequired:
+            return "Workspace ID is required for this operation. Please ensure a workspace is selected."
+        }
     }
 }
