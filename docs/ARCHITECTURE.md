@@ -673,148 +673,147 @@ actor FileCache {
 
 ## File Explorer Backend API Integration
 
-> **Status**: ✅ Fully Integrated with cdev-agent
+> **Status**: ✅ Fully Integrated with cdev-agent via JSON-RPC
 
-The File Explorer uses the following cdev-agent Repository API endpoints:
+The File Explorer uses JSON-RPC 2.0 over WebSocket for all repository operations. All HTTP endpoints have been deprecated.
 
-### 1. Directory Listing Endpoint
+### 1. Directory Listing
 
-**Endpoint**: `GET /api/repository/files/list`
+**JSON-RPC Method**: `repository/files/list`
 
-**Query Parameters**:
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `directory` | string | No | Directory path. Empty = root directory |
-| `limit` | int | No | Maximum results (default: 100, max: 1000) |
-| `offset` | int | No | Pagination offset |
-| `recursive` | bool | No | Include subdirectories (default: false) |
-| `sort` | string | No | Sort by: `name`, `size`, `modified` |
-| `order` | string | No | Sort order: `asc`, `desc` |
-
-**Response** (200 OK):
+**Request**:
 ```json
 {
-  "directory": "cdev/Domain/Models",
-  "files": [
-    {
-      "path": "cdev/Domain/Models/AgentEvent.swift",
-      "name": "AgentEvent.swift",
-      "directory": "cdev/Domain/Models",
-      "extension": "swift",
-      "size_bytes": 12450,
-      "modified_at": "2025-01-15T10:30:00Z",
-      "is_binary": false,
-      "is_sensitive": false,
-      "git_tracked": true
-    }
-  ],
-  "directories": [
-    {
-      "path": "cdev/Domain/Models/Interfaces",
-      "name": "Interfaces",
-      "file_count": 5,
-      "total_size_bytes": 24680
-    }
-  ],
-  "total_files": 8,
-  "total_directories": 2,
-  "pagination": {
-    "limit": 100,
-    "offset": 0,
-    "has_more": false
+  "jsonrpc": "2.0",
+  "id": "req-123",
+  "method": "repository/files/list",
+  "params": {
+    "directory": "cdev/Domain/Models",
+    "limit": 500
   }
 }
 ```
 
-**Response Fields**:
-| Field | Type | Description |
-|-------|------|-------------|
-| `directory` | string | Current directory path |
-| `files` | array | List of files in directory |
-| `directories` | array | List of subdirectories |
-| `total_files` | int | Total file count |
-| `total_directories` | int | Total directory count |
-| `pagination` | object | Pagination metadata |
-
-**File Entry Fields**:
-| Field | Type | Description |
-|-------|------|-------------|
-| `path` | string | Full relative path |
-| `name` | string | File name |
-| `directory` | string | Parent directory |
-| `extension` | string? | File extension |
-| `size_bytes` | int64 | Size in bytes |
-| `modified_at` | string? | ISO 8601 timestamp |
-| `is_binary` | bool | Whether file is binary |
-| `is_sensitive` | bool | Whether file contains secrets |
-| `git_tracked` | bool | Whether tracked by git |
-
-**Directory Entry Fields**:
-| Field | Type | Description |
-|-------|------|-------------|
-| `path` | string | Full relative path |
-| `name` | string | Directory name |
-| `file_count` | int | Number of files inside |
-| `total_size_bytes` | int64 | Total size of contents |
-
-**Error Responses**:
-| Status | Description |
-|--------|-------------|
-| 503 | Repository indexer not available |
-
-### 2. File Search Endpoint
-
-**Endpoint**: `GET /api/repository/search`
-
-**Query Parameters**:
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `q` | string | Yes | Search query |
-| `mode` | string | No | `fuzzy`, `exact`, `prefix`, `extension` (default: fuzzy) |
-| `limit` | int | No | Maximum results (default: 50, max: 500) |
-| `exclude_binaries` | bool | No | Exclude binary files (default: true) |
-
-**Response** (200 OK):
+**Response**:
 ```json
 {
-  "query": "ViewModel",
-  "mode": "fuzzy",
-  "results": [
-    {
-      "path": "cdev/Presentation/Screens/Dashboard/DashboardViewModel.swift",
-      "name": "DashboardViewModel.swift",
-      "directory": "cdev/Presentation/Screens/Dashboard",
-      "extension": "swift",
-      "size_bytes": 15420,
-      "match_score": 0.95
+  "jsonrpc": "2.0",
+  "id": "req-123",
+  "result": {
+    "directory": "cdev/Domain/Models",
+    "files": [
+      {
+        "path": "cdev/Domain/Models/AgentEvent.swift",
+        "name": "AgentEvent.swift",
+        "directory": "cdev/Domain/Models",
+        "extension": "swift",
+        "size_bytes": 12450,
+        "modified_at": "2025-01-15T10:30:00Z",
+        "is_binary": false,
+        "git_tracked": true
+      }
+    ],
+    "directories": [
+      {
+        "path": "cdev/Domain/Models/Interfaces",
+        "name": "Interfaces",
+        "file_count": 5,
+        "total_size_bytes": 24680
+      }
+    ],
+    "total_files": 8,
+    "total_directories": 2,
+    "pagination": {
+      "limit": 500,
+      "offset": 0,
+      "has_more": false
     }
-  ],
-  "total": 12,
-  "elapsed_ms": 5
+  }
 }
 ```
 
-### 3. File Content Endpoint
+### 2. File Search
 
-**Endpoint**: `GET /api/file`
+**JSON-RPC Method**: `repository/search`
 
-> Used by File Explorer to read file contents.
-
-**Query Parameters**:
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `path` | string | Yes | Relative file path |
-
-**Response** (200 OK):
+**Request**:
 ```json
 {
-  "path": "cdev/App/AppState.swift",
-  "content": "import Foundation\n\n/// App state...",
-  "encoding": "utf-8",
-  "size": 5280,
-  "truncated": false
+  "jsonrpc": "2.0",
+  "id": "req-124",
+  "method": "repository/search",
+  "params": {
+    "query": "ViewModel",
+    "mode": "fuzzy",
+    "limit": 50,
+    "exclude_binaries": true
+  }
 }
 ```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-124",
+  "result": {
+    "query": "ViewModel",
+    "mode": "fuzzy",
+    "results": [
+      {
+        "path": "cdev/Presentation/Screens/Dashboard/DashboardViewModel.swift",
+        "name": "DashboardViewModel.swift",
+        "directory": "cdev/Presentation/Screens/Dashboard",
+        "extension": "swift",
+        "size_bytes": 15420,
+        "match_score": 0.95
+      }
+    ],
+    "total": 12,
+    "elapsed_ms": 5
+  }
+}
+```
+
+### 3. File Content
+
+**JSON-RPC Method**: `file/get`
+
+**Request**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-125",
+  "method": "file/get",
+  "params": {
+    "path": "cdev/App/AppState.swift"
+  }
+}
+```
+
+**Response**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-125",
+  "result": {
+    "path": "cdev/App/AppState.swift",
+    "content": "import Foundation\n\n/// App state...",
+    "encoding": "utf-8",
+    "size": 5280,
+    "truncated": false
+  }
+}
+```
+
+### 4. Additional Repository Methods
+
+| Method | Description |
+|--------|-------------|
+| `repository/index/status` | Get indexer status (ready/indexing/error) |
+| `repository/files/tree` | Get file tree structure with depth control |
+| `repository/stats` | Get repository statistics (file counts, languages) |
+| `repository/index/rebuild` | Trigger index rebuild |
 
 ### Backend Implementation Notes
 
@@ -916,14 +915,15 @@ func ListDirectory(w http.ResponseWriter, r *http.Request) {
 
 ### iOS Integration
 
-The File Explorer is fully integrated via `DependencyContainer`:
+The File Explorer uses JSON-RPC via `DependencyContainer`:
 
 ```swift
 // DependencyContainer.swift
 lazy var fileRepository: FileRepositoryProtocol = FileRepository(
+    webSocketService: webSocketService,
     httpService: httpService,
     cache: fileCache,
-    useMockData: false  // Uses real cdev-agent API
+    useMockData: false  // Uses JSON-RPC via WebSocket
 )
 ```
 
@@ -932,40 +932,52 @@ lazy var fileRepository: FileRepositoryProtocol = FileRepository(
 ```swift
 // FileRepository.swift
 private func fetchRemoteDirectory(path: String) async throws -> [FileEntry] {
-    var queryItems: [URLQueryItem] = []
-    if !path.isEmpty {
-        queryItems.append(URLQueryItem(name: "directory", value: path))
+    guard let rpcClient = rpcClient else {
+        throw AppError.webSocketDisconnected
     }
-    queryItems.append(URLQueryItem(name: "limit", value: "500"))
 
-    let response: RepositoryFileListResponse = try await httpService.get(
-        path: "/api/repository/files/list",
-        queryItems: queryItems
+    let params = RepositoryFilesListParams(
+        directory: path.isEmpty ? nil : path,
+        limit: 500
+    )
+
+    let response: RepositoryFilesListResult = try await rpcClient.request(
+        method: JSONRPCMethod.repositoryFilesList,
+        params: params,
+        timeout: nil
     )
 
     // Combine directories and files
     var entries: [FileEntry] = []
-    for dirDTO in response.directories {
-        entries.append(FileEntry(from: dirDTO))
+    for dirInfo in response.safeDirectories {
+        entries.append(FileEntry(from: dirInfo))
     }
-    for fileDTO in response.files {
-        entries.append(FileEntry(from: fileDTO))
+    for fileInfo in response.safeFiles {
+        entries.append(FileEntry(from: fileInfo))
     }
     return entries
 }
 ```
 
-**DTO Models:**
+**JSON-RPC Types:**
 
 ```swift
-// Matches cdev-agent response format
-struct RepositoryFileListResponse: Codable {
-    let directory: String
-    let files: [FileInfoDTO]
-    let directories: [DirectoryInfoDTO]
-    let totalFiles: Int
-    let totalDirectories: Int
-    let pagination: PaginationDTO
+// JSONRPCMethods.swift
+struct RepositoryFilesListParams: Codable, Sendable {
+    let workspaceId: String?
+    let directory: String?
+    let limit: Int?
+    let offset: Int?
+    let includeHidden: Bool?
+}
+
+struct RepositoryFilesListResult: Codable, Sendable {
+    let directory: String?
+    let files: [RepositoryFileInfo]?
+    let directories: [RepositoryDirectoryInfo]?
+    let totalFiles: Int?
+    let totalDirectories: Int?
+    let pagination: RepositoryPagination?
 }
 
 struct FileInfoDTO: Codable {

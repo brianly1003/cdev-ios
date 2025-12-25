@@ -139,11 +139,13 @@ struct ExplorerView: View {
 #Preview {
     // Create mock repository and view model for preview
     let cache = FileCache()
+    let webSocketService = WebSocketService()
     let httpService = HTTPService()
     let repository = FileRepository(
+        webSocketService: webSocketService,
         httpService: httpService,
         cache: cache,
-        useMockData: true
+        useMockData: true  // Use mock data for preview
     )
     let viewModel = ExplorerViewModel(fileRepository: repository)
 

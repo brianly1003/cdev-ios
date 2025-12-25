@@ -124,6 +124,19 @@ This document outlines the migration strategy for cdev-ios from the current hybr
 | WS `unwatch_session` | `session/unwatch` | No params |
 | - (new) | `initialize` | Capability negotiation |
 
+### Repository API Migration (Completed Dec 2025)
+
+| Deprecated HTTP | New JSON-RPC Method | Notes |
+|-----------------|---------------------|-------|
+| GET `/api/repository/files/list` | `repository/files/list` | Directory listing |
+| GET `/api/repository/search` | `repository/search` | File search with fuzzy matching |
+| GET `/api/repository/index/status` | `repository/index/status` | Index status |
+| GET `/api/repository/files/tree` | `repository/files/tree` | File tree structure |
+| GET `/api/repository/stats` | `repository/stats` | Repository statistics |
+| POST `/api/repository/index/rebuild` | `repository/index/rebuild` | Trigger index rebuild |
+| GET `/api/file` | `file/get` | Read file content |
+| GET `/api/files/list` | `file/list` | Legacy file listing |
+
 ### Event Type Mapping (Notifications)
 
 | Current Event Type | New Notification Method | Changes |
@@ -464,39 +477,48 @@ let status: StatusResult = try await rpcClient.request(method: "status/get", par
 ## 8. Migration Checklist
 
 ### Phase 1: Infrastructure (Core Types)
-- [ ] Create `JSONRPCMessage.swift` with all message types
-- [ ] Create `JSONRPCError.swift` with error codes
-- [ ] Create `JSONRPCClient.swift` actor for request management
+- [x] Create `JSONRPCMessage.swift` with all message types
+- [x] Create `JSONRPCError.swift` with error codes
+- [x] Create `JSONRPCClient.swift` actor for request management
 - [ ] Add unit tests for encoding/decoding
 
 ### Phase 2: WebSocket Integration
-- [ ] Add JSON-RPC message detection in `WebSocketService`
-- [ ] Implement request/response correlation
-- [ ] Add `initialize` call on connect
-- [ ] Route notifications to event stream
-- [ ] Update connection state with capabilities
+- [x] Add JSON-RPC message detection in `WebSocketService`
+- [x] Implement request/response correlation
+- [x] Add `initialize` call on connect
+- [x] Route notifications to event stream
+- [x] Update connection state with capabilities
 
-### Phase 3: Repository Refactor
-- [ ] Update `runClaude()` to use `agent/run`
-- [ ] Update `stopClaude()` to use `agent/stop`
-- [ ] Update `respondToClaude()` to use `agent/respond`
-- [ ] Update `fetchStatus()` to use `status/get`
-- [ ] Update `getGitStatus()` to use `git/status`
-- [ ] Update `getGitDiff()` to use `git/diff`
-- [ ] Update `getFile()` to use `file/get`
-- [ ] Update session methods to use `session/*`
+### Phase 3: Agent Repository Refactor
+- [x] Update `runClaude()` to use `agent/run`
+- [x] Update `stopClaude()` to use `agent/stop`
+- [x] Update `respondToClaude()` to use `agent/respond`
+- [x] Update `fetchStatus()` to use `status/get`
+- [x] Update `getGitStatus()` to use `git/status`
+- [x] Update `getGitDiff()` to use `git/diff`
+- [x] Update session methods to use `session/*`
 
-### Phase 4: Event Handling
-- [ ] Update event parsing for notification format
-- [ ] Keep event payload structures (same format)
-- [ ] Test all event types work correctly
+### Phase 4: File Repository Refactor (NEW - Completed Dec 2025)
+- [x] Update `listDirectory()` to use `repository/files/list`
+- [x] Update `searchFiles()` to use `repository/search`
+- [x] Update `readFile()` to use `file/get`
+- [x] Add `getIndexStatus()` for `repository/index/status`
+- [x] Add `getFileTree()` for `repository/files/tree`
+- [x] Add `getStats()` for `repository/stats`
+- [x] Add `rebuildIndex()` for `repository/index/rebuild`
+- [x] Remove all HTTP fallbacks for repository APIs
 
-### Phase 5: HTTP Fallback (Optional)
-- [ ] Keep HTTP for health check only
-- [ ] Remove other HTTP endpoints
-- [ ] Simplify HTTPService
+### Phase 5: Event Handling
+- [x] Update event parsing for notification format
+- [x] Keep event payload structures (same format)
+- [x] Test all event types work correctly
 
-### Phase 6: Testing & Validation
+### Phase 6: HTTP Cleanup
+- [x] Remove HTTP endpoints for repository APIs
+- [x] Remove HTTP endpoints for file APIs
+- [ ] Keep HTTP for health check only (optional)
+
+### Phase 7: Testing & Validation
 - [ ] Integration tests with real server
 - [ ] Connection stability tests
 - [ ] Reconnection handling tests

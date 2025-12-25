@@ -86,6 +86,14 @@ enum JSONRPCMethod {
 
     // Client operations (multi-device awareness)
     static let clientSessionFocus = "client/session/focus"
+
+    // Repository operations (file indexing and search)
+    static let repositoryIndexStatus = "repository/index/status"
+    static let repositorySearch = "repository/search"
+    static let repositoryFilesList = "repository/files/list"
+    static let repositoryFilesTree = "repository/files/tree"
+    static let repositoryStats = "repository/stats"
+    static let repositoryIndexRebuild = "repository/index/rebuild"
 }
 
 // MARK: - Initialize
@@ -329,6 +337,7 @@ struct FileGetParams: Codable, Sendable {
 struct FileGetResult: Codable, Sendable {
     let path: String?
     let content: String?
+    let encoding: String?
     let size: Int?
     let truncated: Bool?
 }
@@ -551,10 +560,16 @@ struct FileInfo: Codable, Sendable {
     let size: Int?
 }
 
-/// File list response result
+/// File list response result (matches file/list JSON-RPC response)
 struct FileListResult: Codable, Sendable {
     let path: String?
-    let files: [FileInfo]?
+    let entries: [FileInfo]?
+    let totalCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case path, entries
+        case totalCount = "total_count"
+    }
 }
 
 // MARK: - Session Elements
@@ -1300,5 +1315,375 @@ struct SessionActivateResult: Codable, Sendable {
         case workspaceId = "workspace_id"
         case sessionId = "session_id"
         case message
+    }
+}
+
+// MARK: - Repository Index Status
+
+/// Repository index status request parameters
+struct RepositoryIndexStatusParams: Codable, Sendable {
+    let workspaceId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+    }
+
+    init(workspaceId: String? = nil) {
+        self.workspaceId = workspaceId
+    }
+}
+
+/// Repository index status response result
+struct RepositoryIndexStatusResult: Codable, Sendable {
+    let status: String?           // "ready", "indexing", "error"
+    let progress: Double?         // 0.0 - 1.0 when indexing
+    let totalFiles: Int?
+    let indexedFiles: Int?
+    let lastIndexedAt: String?    // ISO8601 timestamp
+    let indexSizeBytes: Int64?
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, progress
+        case totalFiles = "total_files"
+        case indexedFiles = "indexed_files"
+        case lastIndexedAt = "last_indexed_at"
+        case indexSizeBytes = "index_size_bytes"
+        case errorMessage = "error_message"
+    }
+
+    /// Whether the index is ready for search
+    var isReady: Bool {
+        status == "ready"
+    }
+
+    /// Whether indexing is in progress
+    var isIndexing: Bool {
+        status == "indexing"
+    }
+}
+
+// MARK: - Repository Search
+
+/// Repository search request parameters
+struct RepositorySearchParams: Codable, Sendable {
+    let query: String
+    let workspaceId: String?
+    let mode: String?              // "fuzzy", "exact", "prefix"
+    let limit: Int?
+    let offset: Int?
+    let excludeBinaries: Bool?
+    let fileTypes: [String]?       // Filter by extension: ["swift", "ts"]
+
+    enum CodingKeys: String, CodingKey {
+        case query, mode, limit, offset
+        case workspaceId = "workspace_id"
+        case excludeBinaries = "exclude_binaries"
+        case fileTypes = "file_types"
+    }
+
+    init(
+        query: String,
+        workspaceId: String? = nil,
+        mode: String? = "fuzzy",
+        limit: Int? = 50,
+        offset: Int? = nil,
+        excludeBinaries: Bool? = true,
+        fileTypes: [String]? = nil
+    ) {
+        self.query = query
+        self.workspaceId = workspaceId
+        self.mode = mode
+        self.limit = limit
+        self.offset = offset
+        self.excludeBinaries = excludeBinaries
+        self.fileTypes = fileTypes
+    }
+}
+
+/// Repository search result file
+struct RepositorySearchFile: Codable, Sendable {
+    let path: String
+    let name: String
+    let directory: String?
+    let ext: String?
+    let sizeBytes: Int64?
+    let modifiedAt: String?
+    let isBinary: Bool?
+    let matchScore: Double?
+    let lineCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case path, name, directory
+        case ext = "extension"
+        case sizeBytes = "size_bytes"
+        case modifiedAt = "modified_at"
+        case isBinary = "is_binary"
+        case matchScore = "match_score"
+        case lineCount = "line_count"
+    }
+}
+
+/// Repository search response result
+struct RepositorySearchResult: Codable, Sendable {
+    let query: String?
+    let mode: String?
+    let results: [RepositorySearchFile]?
+    let total: Int?
+    let elapsedMs: Int64?
+    let hasMore: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case query, mode, results, total
+        case elapsedMs = "elapsed_ms"
+        case hasMore = "has_more"
+    }
+}
+
+// MARK: - Repository Files List
+
+/// Repository files list request parameters
+struct RepositoryFilesListParams: Codable, Sendable {
+    let workspaceId: String?
+    let directory: String?         // Directory path (empty/nil for root)
+    let limit: Int?
+    let offset: Int?
+    let includeHidden: Bool?       // Include .dotfiles
+
+    enum CodingKeys: String, CodingKey {
+        case directory, limit, offset
+        case workspaceId = "workspace_id"
+        case includeHidden = "include_hidden"
+    }
+
+    init(
+        workspaceId: String? = nil,
+        directory: String? = nil,
+        limit: Int? = 500,
+        offset: Int? = nil,
+        includeHidden: Bool? = nil
+    ) {
+        self.workspaceId = workspaceId
+        self.directory = directory
+        self.limit = limit
+        self.offset = offset
+        self.includeHidden = includeHidden
+    }
+}
+
+/// Repository file info (for files)
+struct RepositoryFileInfo: Codable, Sendable {
+    let path: String
+    let name: String
+    let directory: String?
+    let ext: String?
+    let sizeBytes: Int64?
+    let modifiedAt: String?
+    let isBinary: Bool?
+    let isSensitive: Bool?
+    let gitTracked: Bool?
+    let gitIgnored: Bool?
+    let isSymlink: Bool?
+    let lineCount: Int?
+    let indexedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, name, directory
+        case ext = "extension"
+        case sizeBytes = "size_bytes"
+        case modifiedAt = "modified_at"
+        case isBinary = "is_binary"
+        case isSensitive = "is_sensitive"
+        case gitTracked = "git_tracked"
+        case gitIgnored = "git_ignored"
+        case isSymlink = "is_symlink"
+        case lineCount = "line_count"
+        case indexedAt = "indexed_at"
+    }
+}
+
+/// Repository directory info (for directories)
+struct RepositoryDirectoryInfo: Codable, Sendable {
+    let path: String
+    let name: String
+    let fileCount: Int?
+    let totalSizeBytes: Int64?
+    let lastModified: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, name
+        case fileCount = "file_count"
+        case totalSizeBytes = "total_size_bytes"
+        case lastModified = "last_modified"
+    }
+}
+
+/// Repository files list response result
+struct RepositoryFilesListResult: Codable, Sendable {
+    let directory: String?
+    let files: [RepositoryFileInfo]?
+    let directories: [RepositoryDirectoryInfo]?
+    let totalFiles: Int?
+    let totalDirectories: Int?
+    let pagination: RepositoryPagination?
+
+    enum CodingKeys: String, CodingKey {
+        case directory, files, directories, pagination
+        case totalFiles = "total_files"
+        case totalDirectories = "total_directories"
+    }
+
+    /// Safe accessor for files
+    var safeFiles: [RepositoryFileInfo] { files ?? [] }
+
+    /// Safe accessor for directories
+    var safeDirectories: [RepositoryDirectoryInfo] { directories ?? [] }
+}
+
+/// Pagination info
+struct RepositoryPagination: Codable, Sendable {
+    let limit: Int?
+    let offset: Int?
+    let hasMore: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case limit, offset
+        case hasMore = "has_more"
+    }
+}
+
+// MARK: - Repository Files Tree
+
+/// Repository files tree request parameters
+struct RepositoryFilesTreeParams: Codable, Sendable {
+    let workspaceId: String?
+    let path: String?              // Root path (nil for repo root)
+    let depth: Int?                // Max depth to traverse
+    let includeHidden: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case path, depth
+        case workspaceId = "workspace_id"
+        case includeHidden = "include_hidden"
+    }
+
+    init(
+        workspaceId: String? = nil,
+        path: String? = nil,
+        depth: Int? = 3,
+        includeHidden: Bool? = nil
+    ) {
+        self.workspaceId = workspaceId
+        self.path = path
+        self.depth = depth
+        self.includeHidden = includeHidden
+    }
+}
+
+/// Tree node representing a file or directory
+struct RepositoryTreeNode: Codable, Sendable, Identifiable {
+    var id: String { path }
+
+    let path: String
+    let name: String
+    let type: String               // "file" or "directory"
+    let children: [RepositoryTreeNode]?
+    let sizeBytes: Int64?
+    let modifiedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, name, type, children
+        case sizeBytes = "size_bytes"
+        case modifiedAt = "modified_at"
+    }
+
+    var isDirectory: Bool { type == "directory" }
+    var isFile: Bool { type == "file" }
+}
+
+/// Repository files tree response result
+struct RepositoryFilesTreeResult: Codable, Sendable {
+    let root: RepositoryTreeNode?
+    let totalNodes: Int?
+    let maxDepthReached: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case root
+        case totalNodes = "total_nodes"
+        case maxDepthReached = "max_depth_reached"
+    }
+}
+
+// MARK: - Repository Stats
+
+/// Repository stats request parameters
+struct RepositoryStatsParams: Codable, Sendable {
+    let workspaceId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+    }
+
+    init(workspaceId: String? = nil) {
+        self.workspaceId = workspaceId
+    }
+}
+
+/// Language statistics
+struct RepositoryLanguageStat: Codable, Sendable {
+    let language: String
+    let files: Int?
+    let lines: Int?
+    let bytes: Int64?
+    let percentage: Double?
+}
+
+/// Repository stats response result
+struct RepositoryStatsResult: Codable, Sendable {
+    let totalFiles: Int?
+    let totalDirectories: Int?
+    let totalSizeBytes: Int64?
+    let totalLines: Int?
+    let languages: [RepositoryLanguageStat]?
+    let largestFiles: [RepositoryFileInfo]?
+    let recentlyModified: [RepositoryFileInfo]?
+
+    enum CodingKeys: String, CodingKey {
+        case languages
+        case totalFiles = "total_files"
+        case totalDirectories = "total_directories"
+        case totalSizeBytes = "total_size_bytes"
+        case totalLines = "total_lines"
+        case largestFiles = "largest_files"
+        case recentlyModified = "recently_modified"
+    }
+}
+
+// MARK: - Repository Index Rebuild
+
+/// Repository index rebuild request parameters
+struct RepositoryIndexRebuildParams: Codable, Sendable {
+    let workspaceId: String?
+    let force: Bool?               // Force full rebuild even if index exists
+
+    enum CodingKeys: String, CodingKey {
+        case force
+        case workspaceId = "workspace_id"
+    }
+
+    init(workspaceId: String? = nil, force: Bool? = nil) {
+        self.workspaceId = workspaceId
+        self.force = force
+    }
+}
+
+/// Repository index rebuild response result
+struct RepositoryIndexRebuildResult: Codable, Sendable {
+    let status: String?            // "started", "queued", "already_indexing"
+    let message: String?
+
+    /// Whether rebuild was started or queued
+    var isStarted: Bool {
+        status == "started" || status == "queued"
     }
 }

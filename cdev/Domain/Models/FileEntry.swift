@@ -111,9 +111,52 @@ struct FileEntry: Identifiable, Hashable {
         self.gitStatus = nil
         self.matchScore = nil
     }
+
+    // MARK: - JSON-RPC Response Initializers
+
+    /// Create from JSON-RPC RepositoryFileInfo (file)
+    init(from info: RepositoryFileInfo) {
+        self.id = info.path
+        self.name = info.name
+        self.path = info.path
+        self.type = .file
+        self.size = info.sizeBytes.map { Int($0) }
+        self.modified = info.modifiedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+        self.childrenCount = nil
+        self.gitStatus = nil
+        self.matchScore = nil
+    }
+
+    /// Create from JSON-RPC RepositoryDirectoryInfo (directory)
+    init(from info: RepositoryDirectoryInfo) {
+        // Handle empty path for root directory
+        let dirPath = info.path.isEmpty ? info.name : info.path
+        self.id = dirPath.isEmpty ? info.name : dirPath
+        self.name = info.name.isEmpty ? "." : info.name
+        self.path = dirPath
+        self.type = .directory
+        self.size = nil
+        self.modified = info.lastModified.flatMap { ISO8601DateFormatter().date(from: $0) }
+        self.childrenCount = info.fileCount
+        self.gitStatus = nil
+        self.matchScore = nil
+    }
+
+    /// Create from JSON-RPC RepositorySearchFile (search result)
+    init(from file: RepositorySearchFile) {
+        self.id = file.path
+        self.name = file.name
+        self.path = file.path
+        self.type = .file
+        self.size = file.sizeBytes.map { Int($0) }
+        self.modified = file.modifiedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+        self.childrenCount = nil
+        self.gitStatus = nil
+        self.matchScore = file.matchScore
+    }
 }
 
-// MARK: - API Response Types (Matches cdev-agent /api/repository/files/list)
+// MARK: - Legacy API Response Types (HTTP - deprecated, use JSON-RPC instead)
 
 /// API response for directory listing from cdev-agent
 struct RepositoryFileListResponse: Codable {
@@ -196,7 +239,7 @@ struct DirectoryInfoDTO: Codable {
     }
 }
 
-// MARK: - Search Response (Matches cdev-agent /api/repository/search)
+// MARK: - Legacy Search Response (HTTP - deprecated, use JSON-RPC instead)
 
 /// API response for file search from cdev-agent
 struct RepositorySearchResponse: Codable {

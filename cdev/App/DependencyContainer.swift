@@ -53,9 +53,10 @@ final class DependencyContainer {
     )
 
     lazy var fileRepository: FileRepositoryProtocol = FileRepository(
+        webSocketService: webSocketService,
         httpService: httpService,
         cache: fileCache,
-        useMockData: false  // Use real cdev-agent API
+        useMockData: false  // Use real cdev-agent API via JSON-RPC
     )
 
     // MARK: - Use Cases
