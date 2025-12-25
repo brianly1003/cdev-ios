@@ -1023,6 +1023,13 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             try await _agentRepository.stopClaude()
+            // Update state immediately after successful stop
+            // (don't wait for WebSocket event which may be delayed or missing)
+            claudeState = .idle
+            isStreaming = false
+            streamingStartTime = nil
+            hasActiveConversation = false
+            AppLogger.log("[Dashboard] Claude stopped via stopClaude()")
             Haptics.success()
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
