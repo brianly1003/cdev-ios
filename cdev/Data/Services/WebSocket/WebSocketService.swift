@@ -398,6 +398,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     // MARK: - Connection
 
     func connect(to connectionInfo: ConnectionInfo) async throws {
+        // Guard against duplicate connection attempts (race condition prevention)
+        if isConnected {
+            AppLogger.webSocket("Already connected, skipping duplicate connect request")
+            return
+        }
+
         self.connectionInfo = connectionInfo
         // Only reset reconnect attempts for fresh connections, not during reconnection loop
         if !isReconnecting {

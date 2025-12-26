@@ -1276,6 +1276,7 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.error(error, context: "Refresh status")
         }
         // Only refresh git status if initial load is done (to avoid race condition)
+        AppLogger.log("[Dashboard] refreshStatus: hasCompletedInitialLoad=\(hasCompletedInitialLoad), will call refreshGitStatus: \(hasCompletedInitialLoad)")
         if hasCompletedInitialLoad {
             await refreshGitStatus()
         }
@@ -1283,8 +1284,10 @@ final class DashboardViewModel: ObservableObject {
 
     /// Refresh git status from API
     func refreshGitStatus() async {
+        AppLogger.log("[Dashboard] refreshGitStatus: calling sourceControlViewModel.refresh()")
         // Refresh source control view (this fetches git status)
         await sourceControlViewModel.refresh()
+        AppLogger.log("[Dashboard] refreshGitStatus: sourceControlViewModel.refresh() completed")
 
         // Update legacy diff cache from sourceControlViewModel state (no extra API call)
         await diffCache.clear()
@@ -1354,19 +1357,29 @@ final class DashboardViewModel: ObservableObject {
         }
 
         do {
-            // First get list of sessions to find the most recent one (just need 1)
-            AppLogger.log("[Dashboard] Calling getSessions API...")
-            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 1, offset: 0)
-            AppLogger.log("[Dashboard] Sessions response: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
-
-            // Use current session ID if available and not empty, otherwise use most recent
+            // Determine which session to load:
+            // 1. If userSelectedSessionId is already set (e.g., from setWorkspaceContext after starting a new session), use that
+            // 2. Otherwise, query the sessions API to find the most recent session
             var sessionId: String?
-            if let current = sessionsResponse.current, !current.isEmpty {
-                sessionId = current
-                AppLogger.log("[Dashboard] Using current session: \(current)")
+
+            if let existingSessionId = userSelectedSessionId, !existingSessionId.isEmpty {
+                // Use the session ID that was already set (e.g., when connecting to a new workspace)
+                sessionId = existingSessionId
+                AppLogger.log("[Dashboard] Using existing userSelectedSessionId: \(existingSessionId)")
             } else {
-                sessionId = sessionsResponse.sessions.first?.sessionId
-                AppLogger.log("[Dashboard] Using first session: \(sessionId ?? "none")")
+                // No session set yet - query the API to find one
+                AppLogger.log("[Dashboard] Calling getSessions API...")
+                let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 1, offset: 0)
+                AppLogger.log("[Dashboard] Sessions response: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
+
+                // Use current session ID if available and not empty, otherwise use most recent
+                if let current = sessionsResponse.current, !current.isEmpty {
+                    sessionId = current
+                    AppLogger.log("[Dashboard] Using current session: \(current)")
+                } else {
+                    sessionId = sessionsResponse.sessions.first?.sessionId
+                    AppLogger.log("[Dashboard] Using first session: \(sessionId ?? "none")")
+                }
             }
 
             guard let sessionId = sessionId, !sessionId.isEmpty else {
@@ -2487,7 +2500,9 @@ final class DashboardViewModel: ObservableObject {
 
             // Load session history and messages
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Loading session history...")
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: userSelectedSessionId=\(userSelectedSessionId ?? "nil"), workspaceId=\(currentWorkspaceId ?? "nil")")
             await loadRecentSessionHistory(isReconnection: true)
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: After loadRecentSessionHistory, hasCompletedInitialLoad=\(hasCompletedInitialLoad)")
 
             // Refresh status (includes git status)
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Refreshing status...")

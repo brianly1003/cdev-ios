@@ -231,6 +231,16 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Connect to server with automatic retry
     /// Shows progress in serverStatus
     func connectWithRetry(to host: String) async {
+        // Skip if already connected (prevents duplicate connections from AppState + WorkspaceManagerView race)
+        if webSocketService.isConnected {
+            AppLogger.log("[WorkspaceManager] Skipping connect - already connected")
+            serverStatus = .connected
+            isConnecting = false
+            hasCheckedConnection = true
+            await refreshWorkspaces()
+            return
+        }
+
         // Reset cancellation flag
         connectionCancelled = false
         currentRetryAttempt = 0
