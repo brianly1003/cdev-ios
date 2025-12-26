@@ -1976,11 +1976,15 @@ final class DashboardViewModel: ObservableObject {
                 // WORKAROUND: Re-watch the session to ensure we keep receiving events
                 // This compensates for potential server-side bug where unwatch from one client
                 // might affect event delivery to other clients watching the same session
-                if let currentSessionId = userSelectedSessionId,
-                   event.sessionId == currentSessionId {
-                    AppLogger.log("[Dashboard] Another device left session \(currentSessionId), re-establishing watch to ensure event delivery")
-                    Task {
-                        await startWatchingCurrentSession()
+                // Note: session_left events may not include session_id, so re-watch if we have an active session
+                if let currentSessionId = userSelectedSessionId, !currentSessionId.isEmpty {
+                    // Re-watch if event has no session_id OR if it matches our session
+                    let eventSessionId = event.sessionId
+                    if eventSessionId == nil || eventSessionId == currentSessionId {
+                        AppLogger.log("[Dashboard] Another device left (eventSessionId=\(eventSessionId ?? "nil")), re-establishing watch for session \(currentSessionId)")
+                        Task {
+                            await startWatchingCurrentSession()
+                        }
                     }
                 }
             }
