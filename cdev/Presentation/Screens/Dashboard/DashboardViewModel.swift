@@ -1972,6 +1972,17 @@ final class DashboardViewModel: ObservableObject {
             // Another device left the session we're viewing
             if case .sessionLeft(let payload) = event.payload {
                 SessionAwarenessManager.shared.handleSessionLeft(payload)
+
+                // WORKAROUND: Re-watch the session to ensure we keep receiving events
+                // This compensates for potential server-side bug where unwatch from one client
+                // might affect event delivery to other clients watching the same session
+                if let currentSessionId = userSelectedSessionId,
+                   event.sessionId == currentSessionId {
+                    AppLogger.log("[Dashboard] Another device left session \(currentSessionId), re-establishing watch to ensure event delivery")
+                    Task {
+                        await startWatchingCurrentSession()
+                    }
+                }
             }
 
         default:
