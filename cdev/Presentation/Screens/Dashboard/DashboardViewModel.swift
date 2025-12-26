@@ -2475,6 +2475,11 @@ final class DashboardViewModel: ObservableObject {
         hasActiveConversation = false
         hasCompletedInitialLoad = false
 
+        // Reset Explorer for new workspace (async - fire and forget)
+        Task {
+            await explorerViewModel.resetForNewWorkspace()
+        }
+
         AppLogger.log("[Dashboard] Workspace context updated: repoName=\(agentStatus.repoName ?? "nil"), sessionId=\(effectiveSessionId ?? "nil")")
     }
 

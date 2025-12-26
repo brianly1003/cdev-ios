@@ -218,6 +218,38 @@ final class ExplorerViewModel: ObservableObject {
         await loadDirectory()
     }
 
+    /// Reset explorer state for a new workspace
+    /// Clears all state and navigates back to root directory
+    func resetForNewWorkspace() async {
+        AppLogger.log("[ExplorerViewModel] Resetting for new workspace")
+
+        // Cancel any ongoing operations
+        loadingTask?.cancel()
+        searchDebounceTask?.cancel()
+        currentSearchTask?.cancel()
+        fileLoadingTask?.cancel()
+
+        // Clear all state
+        entries = []
+        currentPath = ""
+        navigationStack = []
+        selectedFile = nil
+        fileContent = nil
+        searchQuery = ""
+        searchResults = []
+        error = nil
+        searchError = nil
+        isLoading = false
+        isLoadingFile = false
+        isSearching = false
+
+        // Invalidate entire cache
+        await fileRepository.invalidateCache(path: "")
+
+        // Load root directory for new workspace
+        await loadDirectory()
+    }
+
     // MARK: - File Operations
 
     /// Current file loading task
