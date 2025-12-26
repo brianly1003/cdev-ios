@@ -82,6 +82,7 @@ struct cdevApp: App {
 struct SplashScreen: View {
     @State private var logoScale: CGFloat = 0.8
     @State private var logoOpacity: Double = 0
+    @State private var glowPulse: Bool = false
 
     var body: some View {
         ZStack {
@@ -90,13 +91,31 @@ struct SplashScreen: View {
                 .ignoresSafeArea()
 
             VStack(spacing: Spacing.md) {
-                // App Logo with animation
-                Image("AppLogo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 80, height: 80)
-                    .scaleEffect(logoScale)
-                    .opacity(logoOpacity)
+                // App Logo with glow aura
+                ZStack {
+                    // Outer glow pulse
+                    Circle()
+                        .fill(ColorSystem.brand.opacity(0.15))
+                        .frame(width: 96, height: 96)
+                        .blur(radius: 12)
+                        .scaleEffect(glowPulse ? 1.15 : 1.0)
+                        .opacity(glowPulse ? 0.3 : 0.5)
+
+                    // Inner glow
+                    Circle()
+                        .fill(ColorSystem.brand.opacity(0.25))
+                        .frame(width: 86, height: 86)
+                        .blur(radius: 6)
+
+                    // App Logo
+                    Image("AppLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 80, height: 80)
+                        .shadow(color: ColorSystem.brand.opacity(0.35), radius: 8)
+                }
+                .scaleEffect(logoScale)
+                .opacity(logoOpacity)
 
                 // App name
                 Text("Cdev")
@@ -110,6 +129,10 @@ struct SplashScreen: View {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
                 logoScale = 1.0
                 logoOpacity = 1.0
+            }
+            // Start glow pulse animation
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                glowPulse = true
             }
         }
     }
