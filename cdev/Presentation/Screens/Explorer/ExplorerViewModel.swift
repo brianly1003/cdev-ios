@@ -17,9 +17,31 @@ final class ExplorerViewModel: ObservableObject {
 
     // MARK: - File Viewer State
 
-    @Published var selectedFile: FileEntry?
-    @Published private(set) var fileContent: String?
-    @Published private(set) var isLoadingFile = false
+    @Published var selectedFile: FileEntry? {
+        didSet {
+            #if DEBUG
+            AppLogger.log("[ExplorerVM] selectedFile: '\(oldValue?.path ?? "nil")' → '\(selectedFile?.path ?? "nil")'")
+            #endif
+        }
+    }
+    @Published private(set) var fileContent: String? {
+        didSet {
+            #if DEBUG
+            let oldLen = oldValue?.count ?? 0
+            let newLen = fileContent?.count ?? 0
+            AppLogger.log("[ExplorerVM] fileContent: \(oldLen) → \(newLen) chars")
+            #endif
+        }
+    }
+    @Published private(set) var isLoadingFile = false {
+        didSet {
+            #if DEBUG
+            if oldValue != isLoadingFile {
+                AppLogger.log("[ExplorerVM] isLoadingFile: \(oldValue) → \(isLoadingFile)")
+            }
+            #endif
+        }
+    }
 
     // MARK: - Search State
 

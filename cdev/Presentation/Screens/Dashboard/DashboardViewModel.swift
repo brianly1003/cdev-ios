@@ -7,17 +7,41 @@ final class DashboardViewModel: ObservableObject {
     // MARK: - Published State
 
     // Connection
-    @Published var connectionState: ConnectionState = .disconnected
+    @Published var connectionState: ConnectionState = .disconnected {
+        didSet {
+            #if DEBUG
+            if oldValue != connectionState {
+                AppLogger.log("[DashboardVM] connectionState: \(oldValue) → \(connectionState)")
+            }
+            #endif
+        }
+    }
     @Published var agentStatus: AgentStatus = AgentStatus()
 
     // Claude
-    @Published var claudeState: ClaudeState = .idle
+    @Published var claudeState: ClaudeState = .idle {
+        didSet {
+            #if DEBUG
+            if oldValue != claudeState {
+                AppLogger.log("[DashboardVM] claudeState: \(oldValue) → \(claudeState)")
+            }
+            #endif
+        }
+    }
     @Published var pendingInteraction: PendingInteraction?
 
     // Logs & Diffs
     @Published var logs: [LogEntry] = []
     @Published var diffs: [DiffEntry] = []
-    @Published var selectedTab: DashboardTab = .logs
+    @Published var selectedTab: DashboardTab = .logs {
+        didSet {
+            #if DEBUG
+            if oldValue != selectedTab {
+                AppLogger.log("[DashboardVM] selectedTab: \(oldValue) → \(selectedTab)")
+            }
+            #endif
+        }
+    }
 
     // Chat Messages (unified view with tool calls)
     @Published var chatMessages: [ChatMessage] = []

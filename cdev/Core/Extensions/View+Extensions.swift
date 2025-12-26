@@ -235,3 +235,103 @@ extension View {
         modifier(ResponsiveSheetModifier())
     }
 }
+
+// MARK: - Debug Logging Modifiers
+
+#if DEBUG
+/// Logs view lifecycle events (onAppear/onDisappear) in debug builds
+struct ViewLifecycleLogger: ViewModifier {
+    let viewName: String
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                AppLogger.log("[\(viewName)] onAppear")
+            }
+            .onDisappear {
+                AppLogger.log("[\(viewName)] onDisappear")
+            }
+    }
+}
+
+extension View {
+    /// Log view lifecycle events (onAppear/onDisappear) in debug builds
+    /// - Parameter name: The name to identify this view in logs
+    func logLifecycle(_ name: String) -> some View {
+        modifier(ViewLifecycleLogger(viewName: name))
+    }
+
+    /// Present a sheet with automatic logging of presentation and dismissal
+    /// - Parameters:
+    ///   - item: Binding to identifiable item that triggers sheet
+    ///   - name: Name to identify this sheet in logs
+    ///   - content: View builder for sheet content
+    func loggedSheet<Item: Identifiable, Content: View>(
+        item: Binding<Item?>,
+        name: String,
+        @ViewBuilder content: @escaping (Item) -> Content
+    ) -> some View {
+        self.sheet(item: item, onDismiss: {
+            AppLogger.log("[\(name)] Sheet dismissed")
+        }) { item in
+            content(item)
+                .onAppear {
+                    AppLogger.log("[\(name)] Sheet presented: \(item.id)")
+                }
+        }
+    }
+
+    /// Present a sheet with automatic logging (boolean binding version)
+    /// - Parameters:
+    ///   - isPresented: Binding to boolean that triggers sheet
+    ///   - name: Name to identify this sheet in logs
+    ///   - content: View builder for sheet content
+    func loggedSheet<Content: View>(
+        isPresented: Binding<Bool>,
+        name: String,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        self.sheet(isPresented: isPresented, onDismiss: {
+            AppLogger.log("[\(name)] Sheet dismissed")
+        }) {
+            content()
+                .onAppear {
+                    AppLogger.log("[\(name)] Sheet presented")
+                }
+        }
+    }
+
+    /// Log state changes with old and new values
+    /// - Parameters:
+    ///   - value: The value to observe
+    ///   - name: Name to identify this state in logs
+    func logStateChange<V: Equatable>(of value: V, name: String) -> some View {
+        self.onChange(of: value) { oldValue, newValue in
+            AppLogger.log("[\(name)] state changed: '\(oldValue)' → '\(newValue)'")
+        }
+    }
+}
+#else
+// No-op versions for release builds
+extension View {
+    func logLifecycle(_ name: String) -> some View { self }
+
+    func loggedSheet<Item: Identifiable, Content: View>(
+        item: Binding<Item?>,
+        name: String,
+        @ViewBuilder content: @escaping (Item) -> Content
+    ) -> some View {
+        self.sheet(item: item, content: content)
+    }
+
+    func loggedSheet<Content: View>(
+        isPresented: Binding<Bool>,
+        name: String,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        self.sheet(isPresented: isPresented, content: content)
+    }
+
+    func logStateChange<V: Equatable>(of value: V, name: String) -> some View { self }
+}
+#endif

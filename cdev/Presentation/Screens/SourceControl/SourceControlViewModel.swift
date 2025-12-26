@@ -6,7 +6,15 @@ import Combine
 final class SourceControlViewModel: ObservableObject {
     // MARK: - Published State
 
-    @Published var state: RepositoryState = RepositoryState()
+    @Published var state: RepositoryState = RepositoryState() {
+        didSet {
+            #if DEBUG
+            if oldValue.totalCount != state.totalCount || oldValue.isLoading != state.isLoading {
+                AppLogger.log("[SourceControlVM] state: total=\(oldValue.totalCount)→\(state.totalCount), loading=\(oldValue.isLoading)→\(state.isLoading)")
+            }
+            #endif
+        }
+    }
     @Published var stagedExpanded: Bool = true
     @Published var changesExpanded: Bool = true
     @Published var isCommitting: Bool = false
