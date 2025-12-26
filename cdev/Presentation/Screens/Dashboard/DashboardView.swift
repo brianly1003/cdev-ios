@@ -753,13 +753,8 @@ struct CommandSuggestionsView: View {
                 }
             }
         }
-        .background(ColorSystem.terminalBgElevated)
+        .background(.clear)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(ColorSystem.terminalBgHighlight, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.3), radius: 8, y: -4)
     }
 }
 
