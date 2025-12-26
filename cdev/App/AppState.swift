@@ -9,6 +9,15 @@ final class AppState: ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published private(set) var hasWorkspaces: Bool = false
 
+    // MARK: - App Lifecycle State
+
+    /// Tracks if disconnection is expected (app going to background)
+    /// When true, we don't navigate away from Dashboard on disconnect
+    @Published private(set) var isExpectedDisconnection: Bool = false
+
+    /// Tracks if user explicitly disconnected (vs background/network issues)
+    @Published private(set) var wasExplicitDisconnect: Bool = false
+
     // MARK: - Cached ViewModels (prevents recreation on state changes)
 
     private var _dashboardViewModel: DashboardViewModel?
@@ -153,6 +162,86 @@ final class AppState: ObservableObject {
     func clearHTTPState() {
         httpService.baseURL = nil
         AppLogger.log("[AppState] Cleared HTTP base URL")
+    }
+
+    // MARK: - App Lifecycle
+
+    /// Mark that we expect a disconnection (app going to background)
+    /// This prevents navigation away from Dashboard on disconnect
+    func markExpectedDisconnection() {
+        isExpectedDisconnection = true
+        wasExplicitDisconnect = false
+        AppLogger.log("[AppState] Marked expected disconnection (background)")
+    }
+
+    /// Clear the expected disconnection flag (connection restored)
+    func clearExpectedDisconnection() {
+        isExpectedDisconnection = false
+        AppLogger.log("[AppState] Cleared expected disconnection flag")
+    }
+
+    /// Mark that user explicitly disconnected (navigated away)
+    func markExplicitDisconnect() {
+        wasExplicitDisconnect = true
+        isExpectedDisconnection = false
+        AppLogger.log("[AppState] Marked explicit disconnect")
+    }
+
+    /// Reconnect to the active workspace after app returns from background
+    func reconnectToActiveWorkspace() async {
+        guard let workspace = WorkspaceStore.shared.activeWorkspace else {
+            AppLogger.log("[AppState] No active workspace to reconnect to")
+            return
+        }
+
+        AppLogger.log("[AppState] Attempting to reconnect to: \(workspace.name)")
+
+        // Check if already connected
+        if webSocketService.isConnected {
+            AppLogger.log("[AppState] Already connected, skipping reconnection")
+            clearExpectedDisconnection()
+            return
+        }
+
+        // Set connection state to reconnecting
+        connectionState = .reconnecting(attempt: 1)
+
+        // Create connection info from saved workspace
+        let connectionInfo = ConnectionInfo(
+            webSocketURL: workspace.webSocketURL,
+            httpURL: workspace.httpURL,
+            sessionId: workspace.sessionId ?? "",
+            repoName: workspace.name
+        )
+
+        // Restore HTTP base URL
+        httpService.baseURL = workspace.httpURL
+
+        do {
+            try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+            AppLogger.log("[AppState] Reconnection successful")
+
+            // Re-subscribe to workspace events if we have a remote workspace ID
+            if let remoteId = workspace.remoteWorkspaceId {
+                try await WorkspaceManagerService.shared.subscribe(workspaceId: remoteId)
+                AppLogger.log("[AppState] Re-subscribed to workspace events")
+            }
+
+            // Restore session context in DashboardViewModel
+            if let sessionId = workspace.sessionId ?? sessionRepository.selectedSessionId {
+                _dashboardViewModel?.setWorkspaceContext(
+                    name: workspace.name,
+                    sessionId: sessionId
+                )
+            }
+
+            clearExpectedDisconnection()
+            Haptics.success()
+        } catch {
+            AppLogger.error(error, context: "Reconnect to workspace")
+            connectionState = .failed(reason: error.localizedDescription)
+            // Don't clear expected disconnection - let RootView retry
+        }
     }
 
     // MARK: - Private

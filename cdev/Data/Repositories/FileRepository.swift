@@ -43,6 +43,12 @@ final class FileRepository: FileRepositoryProtocol {
         webSocketService.isConnected
     }
 
+    /// Get current workspace ID from WorkspaceStore
+    @MainActor
+    private var currentWorkspaceId: String? {
+        WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
+    }
+
     // MARK: - FileRepositoryProtocol
 
     func listDirectory(path: String) async throws -> [FileEntry] {
@@ -224,15 +230,22 @@ final class FileRepository: FileRepositoryProtocol {
             throw AppError.webSocketDisconnected
         }
 
-        // Build params for repository/files/list
-        let params = RepositoryFilesListParams(
-            workspaceId: nil,  // Uses current workspace context
+        // Get workspace ID from active workspace
+        let workspaceId = await MainActor.run { self.currentWorkspaceId }
+        guard let wsId = workspaceId else {
+            AppLogger.log("[FileRepository] No workspace ID available for file listing", type: .warning)
+            throw AppError.commandFailed(reason: "No workspace selected")
+        }
+
+        // Build params for workspace/files/list
+        let params = WorkspaceFilesListParams(
+            workspaceId: wsId,
             directory: path.isEmpty ? nil : path,
             limit: 500
         )
 
         let response: RepositoryFilesListResult = try await rpcClient.request(
-            method: JSONRPCMethod.repositoryFilesList,
+            method: JSONRPCMethod.workspaceFilesList,
             params: params,
             timeout: nil
         )
@@ -259,9 +272,16 @@ final class FileRepository: FileRepositoryProtocol {
             throw AppError.webSocketDisconnected
         }
 
-        let params = FileGetParams(path: path)
+        // Get workspace ID from active workspace
+        let workspaceId = await MainActor.run { self.currentWorkspaceId }
+        guard let wsId = workspaceId else {
+            AppLogger.log("[FileRepository] No workspace ID available for file content", type: .warning)
+            throw AppError.commandFailed(reason: "No workspace selected")
+        }
+
+        let params = WorkspaceFileGetParams(workspaceId: wsId, path: path)
         let result: FileGetResult = try await rpcClient.request(
-            method: JSONRPCMethod.fileGet,
+            method: JSONRPCMethod.workspaceFileGet,
             params: params,
             timeout: nil
         )

@@ -36,7 +36,8 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     func handleAppDidBecomeActive()
 
     /// Handle app resigning active (background)
-    func handleAppWillResignActive()
+    /// - Parameter preserveWatch: If true, keeps session watch active for Dashboard persistence
+    func handleAppWillResignActive(preserveWatch: Bool)
 
     // MARK: - JSON-RPC
 

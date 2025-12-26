@@ -15,6 +15,7 @@ struct WorkspaceRowView: View {
     let onConnect: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
+    let onRemove: () -> Void
 
     // Responsive layout
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -97,7 +98,7 @@ struct WorkspaceRowView: View {
                     .scaleEffect(0.8)
                     .frame(width: layout.indicatorSize, height: layout.indicatorSize)
             } else {
-                // Explicit button for the action (works better with swipe actions)
+                // Navigate/Start button
                 Button {
                     guard isInteractionEnabled else {
                         Haptics.light()
@@ -259,6 +260,7 @@ struct SwipeableWorkspaceRow: View {
     let onConnect: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
+    let onRemove: () -> Void
 
     init(
         workspace: RemoteWorkspace,
@@ -269,7 +271,8 @@ struct SwipeableWorkspaceRow: View {
         isServerConnected: Bool = true,
         onConnect: @escaping () -> Void,
         onStart: @escaping () -> Void,
-        onStop: @escaping () -> Void
+        onStop: @escaping () -> Void,
+        onRemove: @escaping () -> Void
     ) {
         self.workspace = workspace
         self.isCurrentWorkspace = isCurrentWorkspace
@@ -280,6 +283,7 @@ struct SwipeableWorkspaceRow: View {
         self.onConnect = onConnect
         self.onStart = onStart
         self.onStop = onStop
+        self.onRemove = onRemove
     }
 
     var body: some View {
@@ -292,15 +296,22 @@ struct SwipeableWorkspaceRow: View {
             isServerConnected: isServerConnected,
             onConnect: onConnect,
             onStart: onStart,
-            onStop: onStop
+            onStop: onStop,
+            onRemove: onRemove
         )
         // Only show swipe actions when server is connected
-        .swipeActions(edge: .trailing, allowsFullSwipe: isServerConnected) {
-            // Swipe actions disabled when server is disconnected
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if isServerConnected {
-                // Swipe actions:
-                // - No sessions/Unreachable → Start (create session)
-                // - Has sessions → Stop (stop all sessions)
+                // Remove button (always shown)
+                Button(role: .destructive) {
+                    Haptics.warning()
+                    onRemove()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+                .tint(ColorSystem.error)
+
+                // Stop button (only when workspace has active sessions)
                 if workspace.hasActiveSession && !isUnreachable {
                     Button {
                         Haptics.warning()
@@ -308,15 +319,7 @@ struct SwipeableWorkspaceRow: View {
                     } label: {
                         Label("Stop", systemImage: "stop.fill")
                     }
-                    .tint(ColorSystem.error)
-                } else {
-                    Button {
-                        Haptics.success()
-                        onStart()
-                    } label: {
-                        Label("Start", systemImage: "play.fill")
-                    }
-                    .tint(ColorSystem.success)
+                    .tint(ColorSystem.warning)
                 }
             }
         }
@@ -350,7 +353,8 @@ struct SwipeableWorkspaceRow: View {
             isServerConnected: true,
             onConnect: {},
             onStart: {},
-            onStop: {}
+            onStop: {},
+            onRemove: {}
         )
 
         Divider()
@@ -378,7 +382,8 @@ struct SwipeableWorkspaceRow: View {
             isServerConnected: true,
             onConnect: {},
             onStart: {},
-            onStop: {}
+            onStop: {},
+            onRemove: {}
         )
 
         Divider()
@@ -399,7 +404,8 @@ struct SwipeableWorkspaceRow: View {
             isServerConnected: false,  // Server disconnected - row dimmed
             onConnect: {},
             onStart: {},
-            onStop: {}
+            onStop: {},
+            onRemove: {}
         )
 
         Divider()
@@ -422,7 +428,8 @@ struct SwipeableWorkspaceRow: View {
             isServerConnected: true,
             onConnect: {},
             onStart: {},
-            onStop: {}
+            onStop: {},
+            onRemove: {}
         )
     }
     .background(ColorSystem.terminalBg)

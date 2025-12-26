@@ -559,6 +559,53 @@ final class WorkspaceManagerViewModel: ObservableObject {
         AppLogger.log("[WorkspaceManager] Manually added workspace: \(workspace.name)")
     }
 
+    // MARK: - Remove Workspace
+
+    /// Remove a workspace from the manager
+    /// This removes the workspace from the list but does not delete files
+    func removeWorkspace(_ workspace: RemoteWorkspace) async {
+        // Debounce: Prevent multiple rapid taps
+        guard loadingWorkspaceId == nil else {
+            AppLogger.log("[WorkspaceManager] Ignoring remove - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
+            return
+        }
+
+        loadingWorkspaceId = workspace.id
+        defer {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+        }
+
+        do {
+            // Stop all sessions first if any are running
+            for session in workspace.sessions where session.status == .running {
+                try await managerService.stopSession(sessionId: session.id)
+            }
+
+            // Remove workspace from manager
+            try await managerService.removeWorkspace(workspace.id)
+
+            // Clear from current if it was selected
+            if currentWorkspaceId == workspace.id {
+                currentWorkspaceId = nil
+            }
+
+            // Clear unreachable status
+            managerService.clearUnreachableStatus(workspace.id)
+
+            AppLogger.log("[WorkspaceManager] Removed workspace: \(workspace.name)")
+            Haptics.success()
+        } catch let error as WorkspaceManagerError {
+            self.error = error
+            self.showError = true
+            Haptics.error()
+        } catch {
+            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
     // MARK: - Setup
 
     /// Clear saved manager and show setup

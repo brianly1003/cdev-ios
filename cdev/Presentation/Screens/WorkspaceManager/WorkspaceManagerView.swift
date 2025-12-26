@@ -22,6 +22,9 @@ struct WorkspaceManagerView: View {
     /// Scroll request (from floating toolkit force touch)
     @State private var scrollRequest: ScrollDirection?
 
+    /// Workspace pending removal (for confirmation alert)
+    @State private var workspaceToRemove: RemoteWorkspace?
+
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     /// Toolkit items for FloatingToolkitButton (only shows Debug when root view)
@@ -171,6 +174,26 @@ struct WorkspaceManagerView: View {
                 AdminToolsView()
                     .responsiveSheet()
             }
+            .alert(
+                "Remove Workspace",
+                isPresented: Binding(
+                    get: { workspaceToRemove != nil },
+                    set: { if !$0 { workspaceToRemove = nil } }
+                ),
+                presenting: workspaceToRemove
+            ) { workspace in
+                Button("Cancel", role: .cancel) {
+                    workspaceToRemove = nil
+                }
+                Button("Remove", role: .destructive) {
+                    Task {
+                        await viewModel.removeWorkspace(workspace)
+                        workspaceToRemove = nil
+                    }
+                }
+            } message: { workspace in
+                Text("Remove \"\(workspace.name)\" from your workspaces?\n\nThis will stop any active sessions. Your files will not be deleted.")
+            }
             } // End NavigationStack
 
             // Floating toolkit button with Debug Logs only
@@ -312,6 +335,10 @@ struct WorkspaceManagerView: View {
                         },
                         onStop: {
                             Task { await viewModel.stopWorkspace(workspace) }
+                        },
+                        onRemove: {
+                            // Show confirmation alert before removing
+                            workspaceToRemove = workspace
                         }
                     )
                     .listRowBackground(Color.clear)
@@ -398,30 +425,28 @@ struct WorkspaceManagerView: View {
 
                 // Action buttons
                 HStack(spacing: Spacing.sm) {
-                    // Quick add button (primary)
                     Button {
                         viewModel.showManualAddSheet = true
                     } label: {
                         Label("Add by Path", systemImage: "folder.badge.plus")
                             .font(Typography.buttonLabel)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(ColorSystem.primary)
                             .padding(.horizontal, Spacing.md)
                             .padding(.vertical, Spacing.sm)
-                            .background(ColorSystem.primary)
+                            .background(ColorSystem.primary.opacity(0.15))
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
 
-                    // Discover button (secondary)
                     Button {
                         viewModel.showDiscoverySheet = true
                     } label: {
                         Label("Discover Repos", systemImage: "magnifyingglass")
                             .font(Typography.buttonLabel)
-                            .foregroundStyle(ColorSystem.primary)
+                            .foregroundStyle(ColorSystem.textSecondary)
                             .padding(.horizontal, Spacing.md)
                             .padding(.vertical, Spacing.sm)
-                            .background(ColorSystem.primary.opacity(0.12))
+                            .background(ColorSystem.textSecondary.opacity(0.12))
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)

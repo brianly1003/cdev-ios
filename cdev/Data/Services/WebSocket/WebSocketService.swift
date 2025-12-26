@@ -1077,7 +1077,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             Task { @MainActor in
                 DebugLogStore.shared.logWebSocket(
                     direction: .incoming,
-                    title: "JSON-RPC: \(method)",
+                    title: method,
                     eventType: method,
                     // payload: rawLine.count < 2000 ? rawLine : String(rawLine.prefix(2000)) + "..."
                     payload: rawLine  // Full payload for copy support
@@ -1303,8 +1303,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     /// Called when app enters background - stop reconnection attempts to save resources
-    func handleAppWillResignActive() {
-        AppLogger.webSocket("App will resign active - pausing reconnection")
+    /// - Parameter preserveWatch: If true, keeps session watch active (for Dashboard persistence)
+    func handleAppWillResignActive(preserveWatch: Bool) {
+        AppLogger.webSocket("App will resign active - pausing reconnection (preserveWatch=\(preserveWatch))")
 
         // Stop reconnection attempts when app goes to background
         shouldAutoReconnect = false
@@ -1315,8 +1316,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // Stop timers to save CPU/battery
         stopTimers()
 
-        // Unwatch session when going to background to reduce server load
-        if _watchedSessionId != nil {
+        // Only unwatch if NOT preserving watch (Dashboard persistence)
+        // When preserveWatch is true, we want to resume watching on reconnect
+        if !preserveWatch && _watchedSessionId != nil {
             Task {
                 try? await unwatchSession()
             }

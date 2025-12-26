@@ -483,6 +483,7 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
     }
 
     private let managerService = WorkspaceManagerService.shared
+    private var refreshPollTask: Task<Void, Never>?
 
     /// Parse search paths from input
     private var searchPaths: [String]? {
@@ -524,11 +525,20 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
             return
         }
 
+        // Cancel any existing poll task
+        refreshPollTask?.cancel()
+        refreshPollTask = nil
+
         isLoading = true
 
         do {
             let results = try await managerService.discoverRepositories(paths: searchPaths, fresh: fresh)
             repositories = results
+
+            // If background refresh is in progress, start polling for updates
+            if lastDiscoveryResponse?.isRefreshing == true {
+                startRefreshPolling()
+            }
         } catch is CancellationError {
             // Task was cancelled (e.g., sheet dismissed) - ignore silently
             AppLogger.log("[Discovery] Repository discovery cancelled")
@@ -543,8 +553,37 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
         isLoading = false
     }
 
+    /// Poll for background refresh completion
+    private func startRefreshPolling() {
+        refreshPollTask?.cancel()
+        refreshPollTask = Task {
+            // Poll every 2 seconds while refresh is in progress
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2 seconds
+
+                guard !Task.isCancelled else { break }
+
+                do {
+                    let results = try await managerService.discoverRepositories(paths: searchPaths, fresh: false)
+                    repositories = results
+
+                    // Stop polling when refresh completes
+                    if lastDiscoveryResponse?.isRefreshing != true {
+                        AppLogger.log("[Discovery] Background refresh completed")
+                        break
+                    }
+                } catch {
+                    // Stop polling on error
+                    break
+                }
+            }
+        }
+    }
+
     /// Cancel any pending discovery request (called when view disappears)
     func cancelDiscovery() {
+        refreshPollTask?.cancel()
+        refreshPollTask = nil
         managerService.cancelDiscovery()
         isLoading = false
     }

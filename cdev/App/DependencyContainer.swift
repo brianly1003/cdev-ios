@@ -48,8 +48,7 @@ final class DependencyContainer {
     )
 
     lazy var agentRepository: AgentRepositoryProtocol = AgentRepository(
-        webSocketService: webSocketService,
-        httpService: httpService
+        webSocketService: webSocketService
     )
 
     lazy var fileRepository: FileRepositoryProtocol = FileRepository(

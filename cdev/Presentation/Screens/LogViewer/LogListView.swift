@@ -661,13 +661,11 @@ private struct ElementsScrollView: View {
                     scheduleScroll(proxy: proxy, animated: true)
                 }
                 .onChange(of: isVisible) { oldVisible, newVisible in
+                    // NOTE: Do NOT auto-scroll when tab becomes visible
+                    // This preserves the user's scroll position when switching tabs
                     AppLogger.log("[ElementsScrollView] isVisible changed - old=\(oldVisible), new=\(newVisible), elementsCount=\(elements.count)")
-                    guard newVisible, !elements.isEmpty else {
-                        AppLogger.log("[ElementsScrollView] Skipping scroll - visible=\(newVisible), elementsCount=\(elements.count)")
-                        return
-                    }
-                    AppLogger.log("[ElementsScrollView] Tab became visible, scheduling scroll")
-                    scheduleScroll(proxy: proxy, animated: false)
+                    // Previously this would schedule a scroll to bottom, but that causes
+                    // the scroll position to reset when switching tabs, which is jarring UX
                 }
                 .onChange(of: isInputFocused) { _, focused in
                     // Auto-scroll when keyboard appears or dismisses
@@ -898,8 +896,9 @@ private struct LogsScrollView: View {
                 scheduleScroll(proxy: proxy, animated: true)
             }
             .onChange(of: isVisible) { _, visible in
-                guard visible, !logs.isEmpty else { return }
-                scheduleScroll(proxy: proxy, animated: false)
+                // NOTE: Do NOT auto-scroll when tab becomes visible
+                // This preserves the user's scroll position when switching tabs
+                _ = visible  // Silence unused warning
             }
             .onChange(of: isInputFocused) { _, focused in
                 // Auto-scroll when keyboard appears (input focused)

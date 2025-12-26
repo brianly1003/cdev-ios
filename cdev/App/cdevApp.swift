@@ -7,6 +7,9 @@ struct cdevApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSplash = true
 
+    /// Tracks if user is on Dashboard (persisted for app lifecycle)
+    @AppStorage("cdev.userOnDashboard") private var userOnDashboard: Bool = false
+
     init() {
         // Configure WorkspaceManagerService with WebSocket connection
         // This must happen early so the service can make JSON-RPC calls
@@ -65,7 +68,8 @@ struct cdevApp: App {
             break
         case .background:
             // App is backgrounding - prepare for potential disconnection
-            webSocketService.handleAppWillResignActive()
+            // Preserve watch if user is on Dashboard (will reconnect on foreground)
+            webSocketService.handleAppWillResignActive(preserveWatch: userOnDashboard)
         @unknown default:
             break
         }

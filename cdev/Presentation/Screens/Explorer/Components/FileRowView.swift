@@ -24,18 +24,27 @@ struct FileRowView: View {
                 .foregroundStyle(iconColor)
                 .frame(width: 20)
 
-            // Name and metadata
+            // Name and metadata (2 lines max)
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name)
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .lineLimit(1)
 
-                // Subtitle: children count for directories, nothing for files
-                if entry.isDirectory, let count = entry.childrenCount {
-                    Text("\(count) item\(count == 1 ? "" : "s")")
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(ColorSystem.textTertiary)
+                // Subtitle: directory summary OR modified time (single line)
+                if entry.isDirectory {
+                    // For directories: "2 folders, 4 files" (size shown on right)
+                    if let summary = entry.directoryCountSummary {
+                        Text(summary)
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                            .lineLimit(1)
+                    } else if let modified = entry.modifiedDisplay {
+                        // Fallback to modified time if no count info
+                        Text(modified)
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textQuaternary)
+                    }
                 }
             }
 
@@ -52,8 +61,17 @@ struct FileRowView: View {
                     .clipShape(Capsule())
             }
 
-            // File size (files only)
-            if let size = entry.formattedSize {
+            // Size display
+            // Directories: use pre-formatted totalSizeDisplay from API
+            // Files: use calculated formattedSize
+            if entry.isDirectory {
+                if let size = entry.totalSizeDisplay {
+                    Text(size)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .frame(minWidth: 50, alignment: .trailing)
+                }
+            } else if let size = entry.formattedSize {
                 Text(size)
                     .font(Typography.terminalSmall)
                     .foregroundStyle(ColorSystem.textTertiary)

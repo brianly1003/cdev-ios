@@ -114,8 +114,13 @@ struct ExplorerView: View {
             // Loading skeleton
             DirectoryLoadingView()
         } else if viewModel.entries.isEmpty {
-            // Empty state
-            EmptyDirectoryView(isRoot: viewModel.currentPath.isEmpty)
+            // Empty state with parent navigation
+            EmptyDirectoryView(
+                isRoot: viewModel.currentPath.isEmpty,
+                onBack: {
+                    Task { await viewModel.navigateBack() }
+                }
+            )
         } else {
             // Directory list
             DirectoryListView(

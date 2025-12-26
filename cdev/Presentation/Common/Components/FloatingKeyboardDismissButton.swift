@@ -10,10 +10,18 @@ import SwiftUI
 /// ```
 struct FloatingKeyboardDismissButton: View {
     @State private var isKeyboardVisible = false
+    @State private var keyboardTopScreen: CGFloat = 0  // Keyboard top in screen coordinates
 
     var body: some View {
-        Group {
-            if isKeyboardVisible {
+        GeometryReader { geometry in
+            let globalFrame = geometry.frame(in: .global)
+            // Convert keyboard screen position to local coordinates
+            let keyboardTopLocal = keyboardTopScreen - globalFrame.minY
+            // Position button above keyboard (clamped to visible area)
+            let editTextOffset: CGFloat = 60
+            let buttonY = min(keyboardTopLocal - 30, geometry.size.height - 30) - editTextOffset
+
+            if isKeyboardVisible && buttonY > 0 {
                 Button {
                     hideKeyboard()
                     Haptics.light()
@@ -27,15 +35,29 @@ struct FloatingKeyboardDismissButton: View {
                         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
                 }
                 .opacity(0.8)
+                .position(
+                    x: geometry.size.width - 16,
+                    y: buttonY
+                )
                 .transition(.scale.combined(with: .opacity))
+                .onAppear {
+                    AppLogger.log("[FloatingKeyboardDismiss] Button position - globalFrame=\(globalFrame), keyboardTopLocal=\(keyboardTopLocal), buttonY=\(buttonY)")
+                }
             }
         }
+        .ignoresSafeArea(.keyboard)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isKeyboardVisible)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            isKeyboardVisible = true
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+            if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                keyboardTopScreen = frame.origin.y
+                isKeyboardVisible = true
+                AppLogger.log("[FloatingKeyboardDismiss] Keyboard SHOW - keyboardTopScreen=\(keyboardTopScreen)")
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            AppLogger.log("[FloatingKeyboardDismiss] Keyboard HIDE")
             isKeyboardVisible = false
+            keyboardTopScreen = 0
         }
     }
 

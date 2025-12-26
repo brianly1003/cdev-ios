@@ -8,9 +8,15 @@ struct FileEntry: Identifiable, Hashable {
     let type: EntryType
     let size: Int?             // File size in bytes (nil for directories)
     let modified: Date?
-    let childrenCount: Int?    // Number of items (directories only)
+    let childrenCount: Int?    // Number of items (directories only) - legacy
     var gitStatus: GitFileStatus?  // Modified/Added/Deleted indicator
     let matchScore: Double?    // Search relevance score (0.0-1.0)
+
+    // Enhanced directory metadata (from updated API)
+    let folderCount: Int?          // Number of subdirectories (direct children)
+    let fileCount: Int?            // Number of files (recursive)
+    let totalSizeDisplay: String?  // Pre-formatted size like "38.8 KB"
+    let modifiedDisplay: String?   // Pre-formatted like "2 hours ago"
 
     enum EntryType: String, Codable {
         case file
@@ -36,7 +42,8 @@ struct FileEntry: Identifiable, Hashable {
 
     var formattedSize: String? {
         guard let size = size else { return nil }
-        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+        // Use .binary (1024 base) to match server calculation
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .binary)
     }
 
     var parentPath: String {
@@ -44,6 +51,40 @@ struct FileEntry: Identifiable, Hashable {
         let components = path.split(separator: "/")
         guard components.count > 1 else { return "" }
         return components.dropLast().joined(separator: "/")
+    }
+
+    /// Formatted count summary for directories: "3 folders, 4 files • 2 days ago"
+    /// Size is displayed separately on the right side of the row
+    var directoryCountSummary: String? {
+        guard isDirectory else { return nil }
+
+        var parts: [String] = []
+
+        // Folder count
+        if let folders = folderCount, folders > 0 {
+            parts.append("\(folders) folder\(folders == 1 ? "" : "s")")
+        }
+
+        // File count
+        if let files = fileCount, files > 0 {
+            parts.append("\(files) file\(files == 1 ? "" : "s")")
+        }
+
+        // Fallback to legacy childrenCount if new fields not available
+        if parts.isEmpty, let count = childrenCount, count > 0 {
+            parts.append("\(count) item\(count == 1 ? "" : "s")")
+        }
+
+        guard !parts.isEmpty else { return nil }
+
+        var summary = parts.joined(separator: ", ")
+
+        // Add modified time if available
+        if let timeStr = modifiedDisplay {
+            summary += " • \(timeStr)"
+        }
+
+        return summary
     }
 
     // MARK: - Init
@@ -57,7 +98,11 @@ struct FileEntry: Identifiable, Hashable {
         modified: Date? = nil,
         childrenCount: Int? = nil,
         gitStatus: GitFileStatus? = nil,
-        matchScore: Double? = nil
+        matchScore: Double? = nil,
+        folderCount: Int? = nil,
+        fileCount: Int? = nil,
+        totalSizeDisplay: String? = nil,
+        modifiedDisplay: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -68,48 +113,10 @@ struct FileEntry: Identifiable, Hashable {
         self.childrenCount = childrenCount
         self.gitStatus = gitStatus
         self.matchScore = matchScore
-    }
-
-    /// Create from API DTO (legacy)
-    init(from dto: FileEntryDTO, parentPath: String) {
-        let fullPath = parentPath.isEmpty ? dto.name : "\(parentPath)/\(dto.name)"
-        self.id = fullPath
-        self.name = dto.name
-        self.path = fullPath
-        self.type = dto.type == "directory" ? .directory : .file
-        self.size = dto.size
-        self.modified = dto.modified.flatMap { ISO8601DateFormatter().date(from: $0) }
-        self.childrenCount = dto.childrenCount
-        self.gitStatus = nil
-        self.matchScore = nil
-    }
-
-    /// Create from cdev-agent FileInfo DTO (file)
-    init(from dto: FileInfoDTO) {
-        self.id = dto.path
-        self.name = dto.name
-        self.path = dto.path
-        self.type = .file
-        self.size = dto.sizeBytes.map { Int($0) }
-        self.modified = dto.modifiedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
-        self.childrenCount = nil
-        self.gitStatus = nil
-        self.matchScore = dto.matchScore
-    }
-
-    /// Create from cdev-agent DirectoryInfo DTO (directory)
-    init(from dto: DirectoryInfoDTO) {
-        // Handle empty path for root directory
-        let dirPath = dto.path.isEmpty ? dto.name : dto.path
-        self.id = dirPath.isEmpty ? dto.name : dirPath
-        self.name = dto.name.isEmpty ? "." : dto.name
-        self.path = dirPath
-        self.type = .directory
-        self.size = nil
-        self.modified = dto.lastModified.flatMap { ISO8601DateFormatter().date(from: $0) }
-        self.childrenCount = dto.fileCount
-        self.gitStatus = nil
-        self.matchScore = nil
+        self.folderCount = folderCount
+        self.fileCount = fileCount
+        self.totalSizeDisplay = totalSizeDisplay
+        self.modifiedDisplay = modifiedDisplay
     }
 
     // MARK: - JSON-RPC Response Initializers
@@ -125,6 +132,10 @@ struct FileEntry: Identifiable, Hashable {
         self.childrenCount = nil
         self.gitStatus = nil
         self.matchScore = nil
+        self.folderCount = nil
+        self.fileCount = nil
+        self.totalSizeDisplay = nil
+        self.modifiedDisplay = nil
     }
 
     /// Create from JSON-RPC RepositoryDirectoryInfo (directory)
@@ -135,11 +146,16 @@ struct FileEntry: Identifiable, Hashable {
         self.name = info.name.isEmpty ? "." : info.name
         self.path = dirPath
         self.type = .directory
-        self.size = nil
+        self.size = info.totalSizeBytes.map { Int($0) }
         self.modified = info.lastModified.flatMap { ISO8601DateFormatter().date(from: $0) }
-        self.childrenCount = info.fileCount
+        self.childrenCount = nil
         self.gitStatus = nil
         self.matchScore = nil
+        // Enhanced directory metadata
+        self.folderCount = info.folderCount
+        self.fileCount = info.fileCount
+        self.totalSizeDisplay = info.totalSizeDisplay
+        self.modifiedDisplay = info.modifiedDisplay
     }
 
     /// Create from JSON-RPC RepositorySearchFile (search result)
@@ -153,133 +169,10 @@ struct FileEntry: Identifiable, Hashable {
         self.childrenCount = nil
         self.gitStatus = nil
         self.matchScore = file.matchScore
-    }
-}
-
-// MARK: - Legacy API Response Types (HTTP - deprecated, use JSON-RPC instead)
-
-/// API response for directory listing from cdev-agent
-struct RepositoryFileListResponse: Codable {
-    let directory: String?
-    let files: [FileInfoDTO]?
-    let directories: [DirectoryInfoDTO]?
-    let totalFiles: Int?
-    let totalDirectories: Int?
-    let pagination: PaginationDTO?
-
-    enum CodingKeys: String, CodingKey {
-        case directory, files, directories, pagination
-        case totalFiles = "total_files"
-        case totalDirectories = "total_directories"
-    }
-
-    // Convenience accessors with defaults
-    var safeFiles: [FileInfoDTO] { files ?? [] }
-    var safeDirectories: [DirectoryInfoDTO] { directories ?? [] }
-}
-
-/// Pagination info from API
-struct PaginationDTO: Codable {
-    let limit: Int
-    let offset: Int
-    let hasMore: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case limit, offset
-        case hasMore = "has_more"
-    }
-}
-
-/// DTO for file info from cdev-agent API
-struct FileInfoDTO: Codable {
-    let path: String
-    let name: String
-    let directory: String?
-    let ext: String?
-    let sizeBytes: Int64?
-    let modifiedAt: String?
-    let isBinary: Bool?
-    let isSensitive: Bool?
-    let gitTracked: Bool?
-    let gitIgnored: Bool?
-    let isSymlink: Bool?
-    let lineCount: Int?
-    let indexedAt: String?
-    let matchScore: Double?  // For search results
-
-    enum CodingKeys: String, CodingKey {
-        case path, name, directory
-        case ext = "extension"
-        case sizeBytes = "size_bytes"
-        case modifiedAt = "modified_at"
-        case isBinary = "is_binary"
-        case isSensitive = "is_sensitive"
-        case gitTracked = "git_tracked"
-        case gitIgnored = "git_ignored"
-        case isSymlink = "is_symlink"
-        case lineCount = "line_count"
-        case indexedAt = "indexed_at"
-        case matchScore = "match_score"
-    }
-}
-
-/// DTO for directory info from cdev-agent API
-struct DirectoryInfoDTO: Codable {
-    let path: String
-    let name: String
-    let fileCount: Int?
-    let totalSizeBytes: Int64?
-    let lastModified: String?
-
-    enum CodingKeys: String, CodingKey {
-        case path, name
-        case fileCount = "file_count"
-        case totalSizeBytes = "total_size_bytes"
-        case lastModified = "last_modified"
-    }
-}
-
-// MARK: - Legacy Search Response (HTTP - deprecated, use JSON-RPC instead)
-
-/// API response for file search from cdev-agent
-struct RepositorySearchResponse: Codable {
-    let query: String
-    let mode: String
-    let results: [FileInfoDTO]
-    let total: Int
-    let elapsedMs: Int64
-
-    enum CodingKeys: String, CodingKey {
-        case query, mode, results, total
-        case elapsedMs = "elapsed_ms"
-    }
-}
-
-// MARK: - Legacy DTO (for backwards compatibility)
-
-/// Legacy directory listing response
-struct DirectoryListingResponse: Codable {
-    let path: String
-    let entries: [FileEntryDTO]
-    let totalCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case path, entries
-        case totalCount = "total_count"
-    }
-}
-
-/// Legacy file entry DTO
-struct FileEntryDTO: Codable {
-    let name: String
-    let type: String
-    let size: Int?
-    let modified: String?
-    let childrenCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case name, type, size, modified
-        case childrenCount = "children_count"
+        self.folderCount = nil
+        self.fileCount = nil
+        self.totalSizeDisplay = nil
+        self.modifiedDisplay = nil
     }
 }
 

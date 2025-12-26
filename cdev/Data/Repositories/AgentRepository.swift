@@ -1,17 +1,9 @@
 import Foundation
 
 /// Repository for agent data operations via JSON-RPC
-/// Supports both legacy agent/* APIs and new session/* APIs (multi-workspace)
+/// Uses session/* APIs for multi-workspace support
 final class AgentRepository: AgentRepositoryProtocol {
     private let webSocketService: WebSocketServiceProtocol
-    private let httpService: HTTPServiceProtocol?
-
-    /// Temporary flag to use HTTP fallback for session/messages (for testing)
-    private let useHTTPForMessages = false  // Set to false to use RPC
-
-    /// Use new session/* APIs for multi-workspace support
-    /// When true, uses session/send, session/stop, session/respond instead of agent/* APIs
-    private let useSessionAPIs: Bool = true
 
     @Atomic private var _status: AgentStatus = AgentStatus()
 
@@ -19,9 +11,8 @@ final class AgentRepository: AgentRepositoryProtocol {
         get async { _status }
     }
 
-    init(webSocketService: WebSocketServiceProtocol, httpService: HTTPServiceProtocol? = nil) {
+    init(webSocketService: WebSocketServiceProtocol) {
         self.webSocketService = webSocketService
-        self.httpService = httpService
     }
 
     // MARK: - JSON-RPC Client
@@ -78,116 +69,78 @@ final class AgentRepository: AgentRepositoryProtocol {
     // MARK: - Claude Control
 
     func runClaude(prompt: String, mode: SessionMode, sessionId: String?) async throws {
-        // Try to use new session/* APIs for multi-workspace support
-        if useSessionAPIs {
-            // Get session ID - use provided sessionId or get from active workspace
-            let effectiveSessionId = await MainActor.run { () -> String? in
-                if let sid = sessionId, !sid.isEmpty {
-                    return sid
-                }
-                return self.currentSessionId
+        // Get session ID - use provided sessionId or get from active workspace
+        let effectiveSessionId = await MainActor.run { () -> String? in
+            if let sid = sessionId, !sid.isEmpty {
+                return sid
             }
-
-            if let sid = effectiveSessionId {
-                AppLogger.log("[AgentRepository] Using session/send API with session: \(sid)")
-                try await WorkspaceManagerService.shared.sendPrompt(
-                    sessionId: sid,
-                    prompt: prompt,
-                    mode: mode == .new ? "new" : "continue"
-                )
-                return
-            }
-
-            // If no session exists, try to start one
-            let workspaceId = await MainActor.run { self.currentWorkspaceId }
-            if let wsId = workspaceId {
-                AppLogger.log("[AgentRepository] Starting new session for workspace: \(wsId)")
-                let session = try await WorkspaceManagerService.shared.startSession(workspaceId: wsId)
-                try await WorkspaceManagerService.shared.sendPrompt(
-                    sessionId: session.id,
-                    prompt: prompt,
-                    mode: "new"
-                )
-                return
-            }
-
-            // Fall through to legacy API if no workspace context
-            AppLogger.log("[AgentRepository] No session context, falling back to legacy agent/run API")
+            return self.currentSessionId
         }
 
-        // Legacy API (for backward compatibility)
-        let params = AgentRunParams(
-            prompt: prompt,
-            mode: mode.rawValue,
-            sessionId: mode != .new ? sessionId : nil,
-            agentType: nil  // Use default (claude)
-        )
-        let _: AgentRunResult = try await rpcClient.request(
-            method: JSONRPCMethod.agentRun,
-            params: params
-        )
+        if let sid = effectiveSessionId {
+            AppLogger.log("[AgentRepository] Using session/send API with session: \(sid)")
+            try await WorkspaceManagerService.shared.sendPrompt(
+                sessionId: sid,
+                prompt: prompt,
+                mode: mode == .new ? "new" : "continue"
+            )
+            return
+        }
+
+        // If no session exists, try to start one
+        let workspaceId = await MainActor.run { self.currentWorkspaceId }
+        if let wsId = workspaceId {
+            AppLogger.log("[AgentRepository] Starting new session for workspace: \(wsId)")
+            let session = try await WorkspaceManagerService.shared.startSession(workspaceId: wsId)
+            try await WorkspaceManagerService.shared.sendPrompt(
+                sessionId: session.id,
+                prompt: prompt,
+                mode: "new"
+            )
+            return
+        }
+
+        // No workspace context - throw error
+        throw AgentRepositoryError.noWorkspaceContext
     }
 
     func stopClaude() async throws {
-        // Try to use new session/* APIs for multi-workspace support
-        if useSessionAPIs {
-            let sessionId = await MainActor.run { self.currentSessionId }
-            if let sid = sessionId {
-                AppLogger.log("[AgentRepository] Using session/stop API with session: \(sid)")
-                try await WorkspaceManagerService.shared.stopSession(sessionId: sid)
-                return
-            }
-            // Fall through to legacy API if no session context
-            AppLogger.log("[AgentRepository] No session context, falling back to legacy agent/stop API")
+        let sessionId = await MainActor.run { self.currentSessionId }
+        guard let sid = sessionId else {
+            AppLogger.log("[AgentRepository] No session context for stop", type: .warning)
+            throw AgentRepositoryError.noSessionContext
         }
 
-        // Legacy API (for backward compatibility)
-        let _: AgentStopResult = try await rpcClient.request(
-            method: JSONRPCMethod.agentStop,
-            params: nil as EmptyParams?
-        )
+        AppLogger.log("[AgentRepository] Using session/stop API with session: \(sid)")
+        try await WorkspaceManagerService.shared.stopSession(sessionId: sid)
     }
 
     func respondToClaude(response: String, requestId: String?, approved: Bool?) async throws {
-        // Try to use new session/* APIs for multi-workspace support
-        if useSessionAPIs {
-            let sessionId = await MainActor.run { self.currentSessionId }
-            if let sid = sessionId {
-                // Determine response type and value
-                let responseType: String
-                let responseValue: String
-
-                if approved != nil {
-                    // Permission response
-                    responseType = "permission"
-                    responseValue = approved! ? "yes" : "no"
-                } else {
-                    // Question response (free text)
-                    responseType = "question"
-                    responseValue = response
-                }
-
-                AppLogger.log("[AgentRepository] Using session/respond API with session: \(sid), type: \(responseType)")
-                try await WorkspaceManagerService.shared.respond(
-                    sessionId: sid,
-                    type: responseType,
-                    response: responseValue
-                )
-                return
-            }
-            // Fall through to legacy API if no session context
-            AppLogger.log("[AgentRepository] No session context, falling back to legacy agent/respond API")
+        let sessionId = await MainActor.run { self.currentSessionId }
+        guard let sid = sessionId else {
+            AppLogger.log("[AgentRepository] No session context for respond", type: .warning)
+            throw AgentRepositoryError.noSessionContext
         }
 
-        // Legacy API (for backward compatibility)
-        let params = AgentRespondParams(
-            toolUseId: requestId ?? "",
-            response: approved != nil ? (approved! ? "yes" : "no") : response,
-            isError: false
-        )
-        let _: AgentRespondResult = try await rpcClient.request(
-            method: JSONRPCMethod.agentRespond,
-            params: params
+        // Determine response type and value
+        let responseType: String
+        let responseValue: String
+
+        if approved != nil {
+            // Permission response
+            responseType = "permission"
+            responseValue = approved! ? "yes" : "no"
+        } else {
+            // Question response (free text)
+            responseType = "question"
+            responseValue = response
+        }
+
+        AppLogger.log("[AgentRepository] Using session/respond API with session: \(sid), type: \(responseType)")
+        try await WorkspaceManagerService.shared.respond(
+            sessionId: sid,
+            type: responseType,
+            response: responseValue
         )
     }
 
@@ -214,9 +167,16 @@ final class AgentRepository: AgentRepositoryProtocol {
     // MARK: - File Operations
 
     func getFile(path: String) async throws -> FileContentPayload {
-        let params = FileGetParams(path: path)
+        // Get workspace ID from active workspace
+        let workspaceId = await MainActor.run { self.currentWorkspaceId }
+        guard let wsId = workspaceId else {
+            AppLogger.log("[AgentRepository] No workspace ID available for file get", type: .warning)
+            throw AgentRepositoryError.noWorkspaceContext
+        }
+
+        let params = WorkspaceFileGetParams(workspaceId: wsId, path: path)
         let result: FileGetResult = try await rpcClient.request(
-            method: JSONRPCMethod.fileGet,
+            method: JSONRPCMethod.workspaceFileGet,
             params: params
         )
         return FileContentPayload(
@@ -477,21 +437,6 @@ final class AgentRepository: AgentRepositoryProtocol {
         offset: Int = 0,
         order: String = "desc"
     ) async throws -> SessionMessagesResponse {
-        // Use HTTP fallback for testing
-        if useHTTPForMessages, let httpService = httpService {
-            AppLogger.network("[Sessions] Using HTTP fallback for session/messages")
-            let queryItems = [
-                URLQueryItem(name: "session_id", value: sessionId),
-                URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(name: "offset", value: String(offset)),
-                URLQueryItem(name: "order", value: order)
-            ]
-            return try await httpService.get(
-                path: "/api/claude/sessions/messages",
-                queryItems: queryItems
-            )
-        }
-
         // Workspace ID is required for workspace/session/messages API
         guard let workspaceId = workspaceId else {
             AppLogger.network("[Sessions] Error: workspaceId required for workspace/session/messages", type: .error)
@@ -623,11 +568,17 @@ final class AgentRepository: AgentRepositoryProtocol {
 
 enum AgentRepositoryError: LocalizedError {
     case workspaceIdRequired
+    case noWorkspaceContext
+    case noSessionContext
 
     var errorDescription: String? {
         switch self {
         case .workspaceIdRequired:
             return "Workspace ID is required for this operation. Please ensure a workspace is selected."
+        case .noWorkspaceContext:
+            return "No workspace context available. Please select a workspace first."
+        case .noSessionContext:
+            return "No session context available. Please start or resume a session first."
         }
     }
 }

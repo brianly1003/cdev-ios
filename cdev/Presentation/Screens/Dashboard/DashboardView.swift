@@ -171,31 +171,22 @@ struct DashboardView: View {
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
 
-                            ZStack(alignment: .bottomTrailing) {
-                                ActionBarView(
-                                    claudeState: viewModel.claudeState,
-                                    promptText: $viewModel.promptText,
-                                    isBashMode: $viewModel.isBashMode,
-                                    isLoading: viewModel.isLoading,
-                                    isFocused: $isInputFocused,
-                                    isEditing: $isTextFieldEditing,  // Actual editing state from UITextView
-                                    hasPTYPermission: viewModel.pendingInteraction?.isPTYMode ?? false,
-                                    onSend: { Task { await viewModel.sendPrompt() } },
-                                    onStop: { Task { await viewModel.stopClaude() } },
-                                    onToggleBashMode: { viewModel.toggleBashMode() },
-                                    onFocusChange: { focused in
-                                        // Update the editing state (for command suggestions)
-                                        isTextFieldEditing = focused
-                                    }
-                                )
-
-                                // Keyboard dismiss button - positioned relative to input bar (bottom)
-                                // Using bottomTrailing alignment so it stays anchored to input bar,
-                                // not affected by command suggestions appearing above
-                                FloatingKeyboardDismissButton()
-                                    .padding(.bottom, 52)  // Position above the input bar
-                                    .padding(.trailing, Spacing.md)
-                            }
+                            ActionBarView(
+                                claudeState: viewModel.claudeState,
+                                promptText: $viewModel.promptText,
+                                isBashMode: $viewModel.isBashMode,
+                                isLoading: viewModel.isLoading,
+                                isFocused: $isInputFocused,
+                                isEditing: $isTextFieldEditing,  // Actual editing state from UITextView
+                                hasPTYPermission: viewModel.pendingInteraction?.isPTYMode ?? false,
+                                onSend: { Task { await viewModel.sendPrompt() } },
+                                onStop: { Task { await viewModel.stopClaude() } },
+                                onToggleBashMode: { viewModel.toggleBashMode() },
+                                onFocusChange: { focused in
+                                    // Update the editing state (for command suggestions)
+                                    isTextFieldEditing = focused
+                                }
+                            )
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -204,6 +195,11 @@ struct DashboardView: View {
                 // When search bar is focused, let SwiftUI handle keyboard avoidance normally
                 .ignoresSafeArea(.keyboard, edges: isInputFocused ? .bottom : [])
                 .background(ColorSystem.terminalBg)
+                // Floating keyboard dismiss button - tracks keyboard and positions itself
+                .overlay(alignment: .trailing) {
+                    FloatingKeyboardDismissButton()
+                        .padding(.trailing, Spacing.md)
+                }
                 .animation(Animations.stateChange, value: viewModel.selectedTab)
                 // Dismiss keyboard and reset search when switching tabs
                 .onChange(of: viewModel.selectedTab) { oldTab, newTab in
@@ -964,8 +960,8 @@ struct ActionBarView: View {
         }
         // Only add keyboard padding when THIS input is focused (not search bar)
         .padding(.bottom, isFocused.wrappedValue ? keyboardHeight : 0)
-        // Note: No background here - suggestions area should be transparent
-        // The input bar (HStack above) has its own background
+        // Background for keyboard padding area (prevents black gap)
+        .background(ColorSystem.terminalBg)
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
         .animation(.easeOut(duration: 0.25), value: keyboardHeight)

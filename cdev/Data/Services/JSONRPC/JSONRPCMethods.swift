@@ -9,13 +9,7 @@ enum JSONRPCMethod {
     static let initialized = "initialized"  // Notification after init
     static let shutdown = "shutdown"
 
-    // Agent operations (DEPRECATED - use session/* methods for multi-workspace)
-    static let agentRun = "agent/run"
-    static let agentStop = "agent/stop"
-    static let agentRespond = "agent/respond"
-    static let agentStatus = "agent/status"
-
-    // Session control (NEW - multi-workspace aware)
+    // Session control (multi-workspace aware)
     static let sessionStart = "session/start"
     static let sessionSend = "session/send"
     static let sessionStop = "session/stop"
@@ -62,9 +56,12 @@ enum JSONRPCMethod {
     static let gitBranches = "git/branches"
     static let gitCheckout = "git/checkout"
 
-    // File operations
+    // File operations (single-repo mode)
     static let fileGet = "file/get"
     static let fileList = "file/list"
+
+    // File operations (multi-workspace mode)
+    static let workspaceFileGet = "workspace/file/get"
 
     // Session operations (legacy - single workspace)
     static let sessionList = "session/list"
@@ -91,7 +88,7 @@ enum JSONRPCMethod {
     // Repository operations (file indexing and search)
     static let repositoryIndexStatus = "repository/index/status"
     static let repositorySearch = "repository/search"
-    static let repositoryFilesList = "repository/files/list"
+    static let workspaceFilesList = "workspace/files/list"
     static let repositoryFilesTree = "repository/files/tree"
     static let repositoryStats = "repository/stats"
     static let repositoryIndexRebuild = "repository/index/rebuild"
@@ -146,96 +143,6 @@ struct InitializeResult: Codable, Sendable {
         case serverInfo = "server_info"
         case capabilities
         case clientId
-    }
-}
-
-// MARK: - Agent Run
-
-/// Agent run request parameters
-struct AgentRunParams: Codable, Sendable {
-    let prompt: String
-    let mode: String?
-    let sessionId: String?
-    let agentType: String?
-
-    enum CodingKeys: String, CodingKey {
-        case prompt, mode
-        case sessionId = "session_id"
-        case agentType = "agent_type"
-    }
-
-    init(prompt: String, mode: String? = "new", sessionId: String? = nil, agentType: String? = nil) {
-        self.prompt = prompt
-        self.mode = mode
-        self.sessionId = sessionId
-        self.agentType = agentType
-    }
-}
-
-/// Agent run response result
-struct AgentRunResult: Codable, Sendable {
-    let status: String
-    let sessionId: String?
-    let agentType: String?
-
-    enum CodingKeys: String, CodingKey {
-        case status
-        case sessionId = "session_id"
-        case agentType = "agent_type"
-    }
-}
-
-// MARK: - Agent Stop
-
-/// Agent stop response result
-struct AgentStopResult: Codable, Sendable {
-    let status: String
-}
-
-// MARK: - Agent Respond
-
-/// Agent respond request parameters
-struct AgentRespondParams: Codable, Sendable {
-    let toolUseId: String
-    let response: String
-    let isError: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case response
-        case toolUseId = "tool_use_id"
-        case isError = "is_error"
-    }
-
-    init(toolUseId: String, response: String, isError: Bool = false) {
-        self.toolUseId = toolUseId
-        self.response = response
-        self.isError = isError
-    }
-}
-
-/// Agent respond response result
-struct AgentRespondResult: Codable, Sendable {
-    let status: String
-    let toolUseId: String?
-
-    enum CodingKeys: String, CodingKey {
-        case status
-        case toolUseId = "tool_use_id"
-    }
-}
-
-/// Agent status response result
-struct AgentStatusResult: Codable, Sendable {
-    let state: String?
-    let sessionId: String?
-    let agentType: String?
-    let isRunning: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case state
-        case sessionId = "session_id"
-        case agentType = "agent_type"
-        case isRunning = "is_running"
     }
 }
 
@@ -341,6 +248,25 @@ struct FileGetResult: Codable, Sendable {
     let encoding: String?
     let size: Int?
     let truncated: Bool?
+}
+
+/// Workspace file get request parameters (multi-workspace mode)
+struct WorkspaceFileGetParams: Codable, Sendable {
+    let workspaceId: String
+    let path: String
+    let maxSizeKb: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+        case path
+        case maxSizeKb = "max_size_kb"
+    }
+
+    init(workspaceId: String, path: String, maxSizeKb: Int? = nil) {
+        self.workspaceId = workspaceId
+        self.path = path
+        self.maxSizeKb = maxSizeKb
+    }
 }
 
 // MARK: - Session
@@ -1515,15 +1441,15 @@ struct RepositorySearchResult: Codable, Sendable {
     }
 }
 
-// MARK: - Repository Files List
+// MARK: - Workspace Files List
 
-/// Repository files list request parameters
-struct RepositoryFilesListParams: Codable, Sendable {
-    let workspaceId: String?
-    let directory: String?         // Directory path (empty/nil for root)
+/// Workspace files list request parameters
+struct WorkspaceFilesListParams: Codable, Sendable {
+    let workspaceId: String         // Required workspace ID
+    let directory: String?          // Directory path (empty/nil for root)
     let limit: Int?
     let offset: Int?
-    let includeHidden: Bool?       // Include .dotfiles
+    let includeHidden: Bool?        // Include .dotfiles
 
     enum CodingKeys: String, CodingKey {
         case directory, limit, offset
@@ -1532,7 +1458,7 @@ struct RepositoryFilesListParams: Codable, Sendable {
     }
 
     init(
-        workspaceId: String? = nil,
+        workspaceId: String,
         directory: String? = nil,
         limit: Int? = 500,
         offset: Int? = nil,
@@ -1581,15 +1507,21 @@ struct RepositoryFileInfo: Codable, Sendable {
 struct RepositoryDirectoryInfo: Codable, Sendable {
     let path: String
     let name: String
-    let fileCount: Int?
+    let folderCount: Int?          // Number of subdirectories (direct children)
+    let fileCount: Int?            // Number of files (recursive)
     let totalSizeBytes: Int64?
+    let totalSizeDisplay: String?  // Pre-formatted size like "38.8 KB"
     let lastModified: String?
+    let modifiedDisplay: String?   // Pre-formatted like "2 hours ago"
 
     enum CodingKeys: String, CodingKey {
         case path, name
+        case folderCount = "folder_count"
         case fileCount = "file_count"
         case totalSizeBytes = "total_size_bytes"
+        case totalSizeDisplay = "total_size_display"
         case lastModified = "last_modified"
+        case modifiedDisplay = "modified_display"
     }
 }
 

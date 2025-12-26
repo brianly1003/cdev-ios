@@ -119,26 +119,38 @@ struct ParentDirectoryRow: View {
 /// Empty directory state view
 struct EmptyDirectoryView: View {
     let isRoot: Bool
+    var onBack: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: Spacing.md) {
-            Image(systemName: isRoot ? "folder.badge.questionmark" : "folder")
-                .font(.system(size: 48))
-                .foregroundStyle(ColorSystem.textTertiary)
+        ScrollView {
+            VStack(spacing: 0) {
+                // Parent directory row (if not at root)
+                if !isRoot, let onBack = onBack {
+                    ParentDirectoryRow(onTap: onBack)
+                }
 
-            Text(isRoot ? "No Repository Connected" : "Empty Directory")
-                .font(Typography.bodyBold)
-                .foregroundStyle(ColorSystem.textSecondary)
+                // Empty state content (with top padding)
+                VStack(spacing: Spacing.md) {
+                    Image(systemName: isRoot ? "folder.badge.questionmark" : "folder")
+                        .font(.system(size: 48))
+                        .foregroundStyle(ColorSystem.textTertiary)
 
-            Text(isRoot
-                 ? "Connect to a workspace to browse files"
-                 : "This directory contains no files")
-                .font(Typography.terminalSmall)
-                .foregroundStyle(ColorSystem.textTertiary)
-                .multilineTextAlignment(.center)
+                    Text(isRoot ? "No Repository Connected" : "Empty Directory")
+                        .font(Typography.bodyBold)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    Text(isRoot
+                         ? "Connect to a workspace to browse files"
+                         : "This directory contains no files")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, Spacing.xxl)
+                .padding(.horizontal, Spacing.lg)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(Spacing.lg)
     }
 }
 
