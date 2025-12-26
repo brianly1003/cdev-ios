@@ -763,50 +763,67 @@ struct CommandSuggestionsView: View {
     let commands: [BuiltInCommand]
     let onSelect: (String) -> Void
 
+    /// Height per row (content + padding + divider)
+    private let rowHeight: CGFloat = 50
+    /// Maximum visible items before scrolling
+    private let maxVisibleItems: Int = 4
+
+    /// Calculate the view height based on command count
+    private var viewHeight: CGFloat {
+        let itemCount = min(commands.count, maxVisibleItems)
+        return CGFloat(itemCount) * rowHeight
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(commands) { cmd in
-                Button {
-                    onSelect(cmd.command)
-                    Haptics.selection()
-                } label: {
-                    HStack(spacing: Spacing.sm) {
-                        Image(systemName: cmd.icon)
-                            .font(.system(size: 14))
-                            .foregroundStyle(ColorSystem.primary)
-                            .frame(width: 20)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(commands) { cmd in
+                    Button {
+                        onSelect(cmd.command)
+                        Haptics.selection()
+                    } label: {
+                        HStack(spacing: Spacing.sm) {
+                            Image(systemName: cmd.icon)
+                                .font(.system(size: 14))
+                                .foregroundStyle(ColorSystem.primary)
+                                .frame(width: 20)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(cmd.command)
-                                .font(Typography.terminal)
-                                .foregroundStyle(ColorSystem.textPrimary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(cmd.command)
+                                    .font(Typography.terminal)
+                                    .foregroundStyle(ColorSystem.textPrimary)
 
-                            Text(cmd.description)
-                                .font(Typography.caption1)
-                                .foregroundStyle(ColorSystem.textTertiary)
+                                Text(cmd.description)
+                                    .font(Typography.caption1)
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                            }
+
+                            Spacer()
                         }
-
-                        Spacer()
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, Spacing.sm)
-                    .padding(.vertical, Spacing.xs)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                    .buttonStyle(.plain)
 
-                if cmd.id != commands.last?.id {
-                    Divider()
-                        .background(ColorSystem.terminalBgHighlight)
+                    if cmd.id != commands.last?.id {
+                        Divider()
+                            .background(ColorSystem.terminalBgHighlight)
+                    }
                 }
             }
         }
-        .background(ColorSystem.terminalBgElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(height: viewHeight)
+        .scrollIndicators(commands.count > maxVisibleItems ? .visible : .hidden)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.7))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(ColorSystem.terminalBgHighlight, lineWidth: 1)
+                .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.3), radius: 8, y: -4)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -888,18 +905,6 @@ struct ActionBarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Command suggestions (above the input)
-            // Leave space on right for floating toolkit button
-            if showSuggestions {
-                CommandSuggestionsView(commands: suggestedCommands) { command in
-                    promptText = command
-                }
-                .padding(.leading, containerPadding)
-                .padding(.trailing, 70)  // Space for floating toolkit
-                .padding(.bottom, Spacing.xs)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-
             HStack(spacing: elementSpacing) {
                 // Bash mode toggle button - compact on iPhone
                 Button {
@@ -1009,6 +1014,19 @@ struct ActionBarView: View {
         .padding(.bottom, isFocused.wrappedValue ? keyboardHeight : 0)
         // Background for keyboard padding area (prevents black gap)
         .background(ColorSystem.terminalBg)
+        // Command suggestions floating above (no background interference)
+        .overlay(alignment: .bottom) {
+            if showSuggestions {
+                CommandSuggestionsView(commands: suggestedCommands) { command in
+                    promptText = command
+                }
+                .padding(.horizontal, containerPadding)
+                .padding(.trailing, 58)  // Space for floating toolkit
+                // Position just above input bar (input bar height ~56pt + small gap)
+                .offset(y: -64)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
         .animation(.easeOut(duration: 0.25), value: keyboardHeight)
