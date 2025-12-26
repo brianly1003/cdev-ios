@@ -293,8 +293,10 @@ struct WorkspaceManagerView: View {
                                     AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Dismissing first before connection")
                                     dismiss()
 
-                                    // Small delay to let dismiss animation start
-                                    try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
+                                    // Wait for fullScreenCover dismiss animation to complete
+                                    // The animation takes ~400ms, so we wait 500ms to be safe
+                                    // This prevents "presentation in progress" errors when presenting other sheets
+                                    try? await Task.sleep(nanoseconds: 500_000_000)  // 500ms
                                     AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: After dismiss delay, calling connectToWorkspace")
 
                                     let running = await viewModel.connectToWorkspace(workspace)

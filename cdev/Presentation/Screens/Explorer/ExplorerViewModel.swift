@@ -257,53 +257,56 @@ final class ExplorerViewModel: ObservableObject {
 
     /// Open a file for viewing
     func openFile(_ file: FileEntry) async {
-        guard !file.isDirectory else { return }
+        AppLogger.log("[ExplorerViewModel] openFile called: '\(file.name)' (path='\(file.path)') | currentSelectedFile='\(selectedFile?.path ?? "nil")', isLoadingFile=\(isLoadingFile)")
 
-        // If same file is already selected and has content, just re-trigger the sheet
+        guard !file.isDirectory else {
+            AppLogger.log("[ExplorerViewModel] Ignoring directory tap: '\(file.name)'")
+            return
+        }
+
+        // If same file is already selected, do nothing - the sheet is already showing it
+        // Note: When the sheet is dismissed, closeFile() clears selectedFile,
+        // so tapping the same file again will be treated as a fresh selection.
+        // This avoids race conditions with sheet presentation animations.
         if selectedFile?.path == file.path {
-            if fileContent != nil {
-                AppLogger.log("[ExplorerViewModel] Re-opening same file: '\(file.name)'")
-                // Force onChange to trigger by clearing and re-setting
-                let savedFile = selectedFile
-                let savedContent = fileContent
-                selectedFile = nil
-                // Small delay to ensure onChange detects the change
-                try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
-                selectedFile = savedFile
-                fileContent = savedContent
-                return
-            }
-            // If still loading, ignore additional taps
-            if isLoadingFile {
-                AppLogger.log("[ExplorerViewModel] File still loading: '\(file.name)'")
-                return
-            }
+            AppLogger.log("[ExplorerViewModel] File already selected, ignoring tap: '\(file.name)'")
+            return
         }
 
         // Cancel any existing file loading task
-        fileLoadingTask?.cancel()
+        if fileLoadingTask != nil {
+            AppLogger.log("[ExplorerViewModel] Cancelling previous file loading task")
+            fileLoadingTask?.cancel()
+        }
 
         // Clear any existing error to prevent sheet conflict
-        error = nil
+        if error != nil {
+            AppLogger.log("[ExplorerViewModel] Clearing existing error before opening file")
+            error = nil
+        }
 
         // Clear previous content before setting new file
+        AppLogger.log("[ExplorerViewModel] Setting selectedFile to '\(file.path)', isLoadingFile=true")
         fileContent = nil
         isLoadingFile = true
         selectedFile = file
 
-        AppLogger.log("[ExplorerViewModel] Opening file: '\(file.name)'")
+        AppLogger.log("[ExplorerViewModel] Opening file: '\(file.name)' - starting load task")
 
         let filePath = file.path
         fileLoadingTask = Task {
             do {
                 try Task.checkCancellation()
+                AppLogger.log("[ExplorerViewModel] Starting file read for '\(filePath)'")
                 let response = try await fileRepository.readFile(path: filePath)
                 try Task.checkCancellation()
 
                 // Only update if this file is still selected
                 if self.selectedFile?.path == filePath {
                     fileContent = response.content
-                    AppLogger.log("[ExplorerViewModel] Loaded file '\(filePath)' (\(response.size) bytes)")
+                    AppLogger.log("[ExplorerViewModel] Loaded file '\(filePath)' (\(response.size) bytes) - setting fileContent, currentSelectedFile='\(self.selectedFile?.path ?? "nil")'")
+                } else {
+                    AppLogger.log("[ExplorerViewModel] File loaded but selectedFile changed - ignoring result for '\(filePath)', currentSelectedFile='\(self.selectedFile?.path ?? "nil")'")
                 }
             } catch is CancellationError {
                 AppLogger.log("[ExplorerViewModel] File load cancelled for '\(filePath)'")
@@ -312,21 +315,43 @@ final class ExplorerViewModel: ObservableObject {
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
                     AppLogger.log("[ExplorerViewModel] HTTP request cancelled for file '\(filePath)'")
                 } else if self.selectedFile?.path == filePath {
-                    self.error = error as? AppError ?? .unknown(underlying: error)
+                    // Don't set self.error here - FileViewerView has its own error state (errorView)
+                    // Setting error would trigger .errorAlert on ExplorerView while sheet is showing,
+                    // causing "Attempt to present while a presentation is in progress" error
                     AppLogger.error(error, context: "Reading file '\(filePath)'")
+                    AppLogger.log("[ExplorerViewModel] File load error for '\(filePath)' - FileViewerView will show errorView")
+                } else {
+                    AppLogger.log("[ExplorerViewModel] File load error but selectedFile changed - ignoring error for '\(filePath)'")
                 }
             }
 
             if self.selectedFile?.path == filePath {
+                AppLogger.log("[ExplorerViewModel] Setting isLoadingFile=false for '\(filePath)'")
                 isLoadingFile = false
+            } else {
+                AppLogger.log("[ExplorerViewModel] Not updating isLoadingFile - selectedFile changed from '\(filePath)' to '\(self.selectedFile?.path ?? "nil")'")
             }
         }
 
         await fileLoadingTask?.value
+        AppLogger.log("[ExplorerViewModel] openFile completed for '\(file.name)'")
     }
 
     /// Close the file viewer
-    func closeFile() {
+    /// - Parameter path: Optional path of the file being closed. If provided, only clears state if it matches
+    ///   the currently selected file. This prevents clearing a newly selected file when the previous sheet
+    ///   is still dismissing.
+    func closeFile(path: String? = nil) {
+        AppLogger.log("[ExplorerViewModel] closeFile called with path='\(path ?? "nil")' | currentSelectedFile='\(selectedFile?.path ?? "nil")'")
+
+        // If a path is provided, only close if it matches the currently selected file
+        // This handles the case where user selected a new file while the previous sheet was dismissing
+        if let path = path, selectedFile?.path != path {
+            AppLogger.log("[ExplorerViewModel] Not closing - a different file is now selected (closing '\(path)', selected '\(selectedFile?.path ?? "nil")')")
+            return
+        }
+
+        AppLogger.log("[ExplorerViewModel] Closing file - clearing selectedFile, fileContent, cancelling task")
         fileLoadingTask?.cancel()
         fileLoadingTask = nil
         selectedFile = nil
@@ -335,6 +360,7 @@ final class ExplorerViewModel: ObservableObject {
 
     /// Handle entry selection (file or directory)
     func selectEntry(_ entry: FileEntry) async {
+        AppLogger.log("[ExplorerViewModel] selectEntry: '\(entry.name)' (isDirectory=\(entry.isDirectory), path='\(entry.path)')")
         if entry.isDirectory {
             await navigateTo(path: entry.path)
         } else {

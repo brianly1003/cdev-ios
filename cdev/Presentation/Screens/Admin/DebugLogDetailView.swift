@@ -72,6 +72,19 @@ private struct HeaderSection: View {
         return subtitle.range(of: uuidPattern, options: .regularExpression) != nil
     }
 
+    /// Format the header content for copying
+    private var copyableContent: String {
+        var text = "[\(entry.fullTimeString)] [\(entry.category.rawValue.uppercased())]"
+        if entry.level != .info {
+            text += " [\(entry.level.rawValue.uppercased())]"
+        }
+        text += "\n\(entry.title)"
+        if let subtitle = entry.subtitle {
+            text += "\n\(subtitle)"
+        }
+        return text
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             // Category and level badge
@@ -118,25 +131,41 @@ private struct HeaderSection: View {
                 .foregroundStyle(ColorSystem.textPrimary)
                 .textSelection(.enabled)
 
-            // Subtitle with copy button if it's a session ID
-            if let subtitle = entry.subtitle {
-                HStack(spacing: Spacing.xs) {
-                    Text(subtitle)
-                        .font(Typography.terminal)
-                        .foregroundStyle(ColorSystem.textSecondary)
-                        .textSelection(.enabled)
+            // Subtitle row with copy button at bottom right
+            HStack(alignment: .bottom, spacing: Spacing.xs) {
+                if let subtitle = entry.subtitle {
+                    HStack(spacing: Spacing.xs) {
+                        Text(subtitle)
+                            .font(Typography.terminal)
+                            .foregroundStyle(ColorSystem.textSecondary)
+                            .textSelection(.enabled)
 
-                    // Copy button for session IDs
-                    if isSessionId, let onCopy = onCopy {
-                        Button {
-                            onCopy(subtitle)
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 10))
-                                .foregroundStyle(ColorSystem.textTertiary)
+                        // Copy button for session IDs
+                        if isSessionId, let onCopy = onCopy {
+                            Button {
+                                onCopy(subtitle)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                }
+
+                Spacer()
+
+                // Copy header button at bottom right
+                if let onCopy = onCopy {
+                    Button {
+                        onCopy(copyableContent)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                            .foregroundStyle(ColorSystem.primary)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

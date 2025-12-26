@@ -11,7 +11,9 @@ struct SourceControlView: View {
     // Scroll request (from floating toolkit long-press)
     var scrollRequest: ScrollDirection?
 
-    @State private var selectedFile: GitFileEntry?
+    // Callback to present diff viewer (hoisted to DashboardView to avoid TabView recreation issues)
+    var onPresentDiff: ((GitFileEntry) -> Void)?
+
     @State private var showCommitSheet = false
     @State private var showDiscardAlert = false
     @State private var fileToDiscard: GitFileEntry?
@@ -40,9 +42,7 @@ struct SourceControlView: View {
             await onRefresh()
             AppLogger.log("[SourceControlView] onRefresh completed, state.totalCount=\(viewModel.state.totalCount)")
         }
-        .sheet(item: $selectedFile) { file in
-            DiffDetailSheet(file: file)
-        }
+        // Note: Diff sheet is hoisted to DashboardView to avoid TabView recreation issues
         .alert("Discard Changes?", isPresented: $showDiscardAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Discard", role: .destructive) {
@@ -106,7 +106,7 @@ struct SourceControlView: View {
                             handleFileAction(file: file, action: action)
                         },
                         onFileTap: { file in
-                            selectedFile = file
+                            onPresentDiff?(file)
                             Haptics.selection()
                         }
                     )
@@ -123,7 +123,7 @@ struct SourceControlView: View {
                             handleFileAction(file: file, action: action)
                         },
                         onFileTap: { file in
-                            selectedFile = file
+                            onPresentDiff?(file)
                             Haptics.selection()
                         }
                     )
@@ -142,7 +142,7 @@ struct SourceControlView: View {
                                 handleFileAction(file: file, action: action)
                             },
                             onFileTap: { file in
-                                selectedFile = file
+                                onPresentDiff?(file)
                                 Haptics.selection()
                             }
                         )
@@ -273,7 +273,7 @@ struct SourceControlView: View {
                 fileToDiscard = file
                 showDiscardAlert = true
             case .viewDiff:
-                selectedFile = file
+                onPresentDiff?(file)
             }
         }
     }

@@ -92,7 +92,8 @@ struct FileViewerView: View {
         .presentationBackground(ColorSystem.Editor.background)
         .presentationDetents(isFullscreen ? [.fraction(0.99)] : [.medium, .large])
         .presentationDragIndicator(isFullscreen ? .hidden : .visible)
-        .interactiveDismissDisabled(isFullscreen)
+        // Disable interactive dismiss while loading or in fullscreen to prevent accidental swipes
+        .interactiveDismissDisabled(isFullscreen || isLoading)
         .onChange(of: searchQuery) { _, newValue in
             // Debounce search input to reduce CPU usage
             debouncedSearch(query: newValue)
@@ -116,12 +117,6 @@ struct FileViewerView: View {
             // Cancel any pending search task to prevent memory leaks
             searchTask?.cancel()
             searchTask = nil
-        }
-        .task {
-            // Pre-compute lines on appear
-            if cachedLines == nil, let content = content {
-                cachedLines = content.components(separatedBy: "\n")
-            }
         }
     }
 
@@ -570,7 +565,8 @@ struct FileViewerView: View {
                 .font(Typography.terminalSmall)
                 .foregroundStyle(ColorSystem.textTertiary)
         }
-        .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: isLoading)
+        // Note: Don't use .animation(.repeatForever()) here - it causes SwiftUI issues
+        // when the view is removed from hierarchy (switching from loading to content)
     }
 
     private var errorView: some View {

@@ -8,9 +8,8 @@ struct ExplorerView: View {
     // Scroll request (from floating toolkit long-press)
     var scrollRequest: ScrollDirection?
 
-    // Sheet presentation state - use isPresented instead of item to avoid race conditions
-    @State private var isShowingFileViewer = false
-    @State private var isDismissing = false
+    // Callback to present file viewer (hoisted to DashboardView to avoid TabView recreation issues)
+    var onPresentFile: ((FileEntry) -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,30 +49,6 @@ struct ExplorerView: View {
         .refreshable {
             await viewModel.refresh()
         }
-        .sheet(isPresented: $isShowingFileViewer, onDismiss: {
-            // Called when sheet is fully dismissed
-            isDismissing = false
-            viewModel.closeFile()
-        }) {
-            if let file = viewModel.selectedFile {
-                FileViewerView(
-                    file: file,
-                    content: viewModel.fileContent,
-                    isLoading: viewModel.isLoadingFile,
-                    onDismiss: {
-                        isDismissing = true
-                        isShowingFileViewer = false
-                    }
-                )
-                .responsiveSheet()
-            }
-        }
-        .onChange(of: viewModel.selectedFile) { _, newFile in
-            // Only show sheet if file selected and not currently dismissing
-            if newFile != nil && !isDismissing && !isShowingFileViewer {
-                isShowingFileViewer = true
-            }
-        }
         .errorAlert($viewModel.error)
         .task {
             // Load initial directory if empty
@@ -84,6 +59,12 @@ struct ExplorerView: View {
         .onDisappear {
             // Clean up tasks when view disappears
             viewModel.cancelAllTasks()
+        }
+        .onChange(of: viewModel.selectedFile) { _, newFile in
+            // Notify parent to present file viewer
+            if let file = newFile {
+                onPresentFile?(file)
+            }
         }
     }
 

@@ -7,6 +7,9 @@ struct DashboardView: View {
     @StateObject private var workspaceStore = WorkspaceStore.shared
     @StateObject private var workspaceStateManager = WorkspaceStateManager.shared
     @StateObject private var quickSwitcherViewModel: QuickSwitcherViewModel
+
+    // Observe explorerViewModel directly for file content updates (nested ObservableObject workaround)
+    @ObservedObject private var explorerViewModel: ExplorerViewModel
     @State private var showSettings = false
     @State private var showDebugLogs = false
     @State private var showWorkspaceSwitcher = false
@@ -15,9 +18,18 @@ struct DashboardView: View {
     @FocusState private var isInputFocused: Bool
     @State private var isTextFieldEditing: Bool = false  // Tracks actual editing state from UITextView
 
+    // File viewer presentation (hoisted from ExplorerView to avoid TabView recreation issues)
+    @State private var fileToDisplay: FileEntry?
+    @State private var isFileDismissing = false
+
+    // Diff viewer presentation (hoisted from SourceControlView to avoid TabView recreation issues)
+    @State private var diffFileToDisplay: GitFileEntry?
+
     init(viewModel: DashboardViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
         _quickSwitcherViewModel = StateObject(wrappedValue: QuickSwitcherViewModel(workspaceStore: WorkspaceStore.shared))
+        // Initialize ObservedObject for nested explorerViewModel to observe its @Published properties
+        _explorerViewModel = ObservedObject(wrappedValue: viewModel.explorerViewModel)
     }
 
     /// Toolkit items - Easy to extend! Just add more .add() calls
@@ -136,14 +148,28 @@ struct DashboardView: View {
                             onRefresh: {
                                 await viewModel.sourceControlViewModel.refresh()
                             },
-                            scrollRequest: viewModel.scrollRequest
+                            scrollRequest: viewModel.scrollRequest,
+                            onPresentDiff: { file in
+                                // Present diff viewer (hoisted here to avoid TabView recreation issues)
+                                AppLogger.log("[DashboardView] Presenting diff viewer for '\(file.path)'")
+                                diffFileToDisplay = file
+                            }
                         )
                         .tag(DashboardTab.diffs)
 
                         // File Explorer
                         ExplorerView(
                             viewModel: viewModel.explorerViewModel,
-                            scrollRequest: viewModel.scrollRequest
+                            scrollRequest: viewModel.scrollRequest,
+                            onPresentFile: { file in
+                                // Present file viewer (hoisted here to avoid TabView recreation issues)
+                                guard !isFileDismissing && fileToDisplay == nil else {
+                                    AppLogger.log("[DashboardView] Skipping file presentation - dismissing or already showing")
+                                    return
+                                }
+                                AppLogger.log("[DashboardView] Presenting file viewer for '\(file.path)'")
+                                fileToDisplay = file
+                            }
                         )
                         .tag(DashboardTab.explorer)
                     }
@@ -276,6 +302,27 @@ struct DashboardView: View {
                         },
                         showDismissButton: true
                     )
+                }
+                // File Viewer (hoisted from ExplorerView to avoid TabView recreation issues)
+                .sheet(item: $fileToDisplay, onDismiss: {
+                    AppLogger.log("[DashboardView] FileViewer onDismiss called")
+                    isFileDismissing = false
+                    explorerViewModel.closeFile()
+                }) { file in
+                    FileViewerView(
+                        file: file,
+                        content: explorerViewModel.fileContent,
+                        isLoading: explorerViewModel.isLoadingFile,
+                        onDismiss: {
+                            AppLogger.log("[DashboardView] FileViewerView onDismiss - dismissing cover")
+                            isFileDismissing = true
+                            fileToDisplay = nil
+                        }
+                    )
+                }
+                // Diff Viewer (hoisted from SourceControlView to avoid TabView recreation issues)
+                .sheet(item: $diffFileToDisplay) { file in
+                    DiffDetailSheet(file: file)
                 }
             }
 
