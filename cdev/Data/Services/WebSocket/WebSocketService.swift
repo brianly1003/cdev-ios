@@ -597,6 +597,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         AppLogger.webSocket("Disconnecting")
         shouldAutoReconnect = false
         stopTimers()
+        stopNetworkMonitor()
 
         // Clear watched session state (both session and workspace IDs)
         _watchedSessionId = nil
@@ -607,10 +608,27 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             pendingRequestMethods.removeAll()
         }
 
+        // Cancel pending RPC requests and clear client
+        if let client = rpcClient {
+            Task {
+                await client.cancelAllPending()
+            }
+        }
+        rpcClient = nil
+        useJSONRPC = false
+        _clientId = nil
+
+        // Clear connection info to prevent reconnection to old server
+        connectionInfo = nil
+
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         session?.invalidateAndCancel()
         session = nil
+
+        // Finish all stream continuations to release subscribers
+        finishAllContinuations()
+
         updateState(.disconnected)
     }
 
