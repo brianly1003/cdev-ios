@@ -191,6 +191,26 @@ final class AgentRepository: AgentRepositoryProtocol {
         )
     }
 
+    // MARK: - PTY Mode (Interactive Terminal)
+
+    func sendInput(sessionId: String, input: String) async throws {
+        AppLogger.log("[AgentRepository] Sending PTY input to session: \(sessionId), input: \(input)")
+        let params = SessionInputParams(sessionId: sessionId, input: input)
+        let _: SessionInputResult = try await rpcClient.request(
+            method: JSONRPCMethod.sessionInput,
+            params: params
+        )
+    }
+
+    func sendKey(sessionId: String, key: SessionInputKey) async throws {
+        AppLogger.log("[AgentRepository] Sending PTY key to session: \(sessionId), key: \(key.rawValue)")
+        let params = SessionInputParams(sessionId: sessionId, key: key)
+        let _: SessionInputResult = try await rpcClient.request(
+            method: JSONRPCMethod.sessionInput,
+            params: params
+        )
+    }
+
     // MARK: - File Operations
 
     func getFile(path: String) async throws -> FileContentPayload {

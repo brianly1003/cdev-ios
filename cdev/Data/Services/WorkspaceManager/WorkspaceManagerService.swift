@@ -324,6 +324,7 @@ final class WorkspaceManagerService: ObservableObject {
     }
 
     /// Send a prompt to a session
+    /// Uses permission_mode: "interactive" to enable PTY mode for terminal-like permission prompts
     func sendPrompt(sessionId: String, prompt: String, mode: String = "new") async throws {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
@@ -332,10 +333,15 @@ final class WorkspaceManagerService: ObservableObject {
         let client = ws.getJSONRPCClient()
         let _: SessionSendResponse = try await client.request(
             method: "session/send",
-            params: WMSessionSendParams(sessionId: sessionId, prompt: prompt, mode: mode)
+            params: WMSessionSendParams(
+                sessionId: sessionId,
+                prompt: prompt,
+                mode: mode,
+                permissionMode: "interactive"
+            )
         )
 
-        AppLogger.log("[WorkspaceManager] Sent prompt to session: \(sessionId)")
+        AppLogger.log("[WorkspaceManager] Sent prompt to session: \(sessionId) (interactive mode)")
     }
 
     /// Respond to a permission request or question
@@ -770,11 +776,13 @@ private struct WMSessionSendParams: Encodable {
     let sessionId: String
     let prompt: String
     let mode: String
+    let permissionMode: String
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case prompt
         case mode
+        case permissionMode = "permission_mode"
     }
 }
 

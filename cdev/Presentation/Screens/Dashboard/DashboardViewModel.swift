@@ -53,6 +53,10 @@ final class DashboardViewModel: ObservableObject {
     @Published var isWatchingSession: Bool = false
     @Published var watchingSessionId: String?
 
+    // Interactive PTY Mode (always true since we use permission_mode: "interactive")
+    // When in interactive mode, skip claude_log processing and use pty_* events instead
+    @Published var isInteractiveMode: Bool = true
+
     // Force new session flag (set by /new command)
     private var forceNewSession: Bool = false
 
@@ -1032,8 +1036,20 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Claude stopped via stopClaude()")
             Haptics.success()
         } catch {
-            self.error = error as? AppError ?? .unknown(underlying: error)
-            Haptics.error()
+            // Check if this is a "session not found" error
+            // If so, the session is already gone - reset state instead of showing error
+            let errorMessage = String(describing: error).lowercased()
+            if errorMessage.contains("session not found") || errorMessage.contains("session_not_found") {
+                AppLogger.log("[Dashboard] Session not found during stop - resetting state")
+                claudeState = .idle
+                isStreaming = false
+                streamingStartTime = nil
+                hasActiveConversation = false
+                Haptics.light()
+            } else {
+                self.error = error as? AppError ?? .unknown(underlying: error)
+                Haptics.error()
+            }
         }
 
         isLoading = false
@@ -1085,6 +1101,127 @@ final class DashboardViewModel: ObservableObject {
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
         }
+    }
+
+    /// Dismiss the pending interaction by sending escape key
+    /// Used when user closes the permission panel via X button
+    func dismissPendingInteraction() {
+        Task {
+            await dismissPTYPermission()
+        }
+    }
+
+    /// Send escape key to dismiss PTY permission and clear local state
+    private func dismissPTYPermission() async {
+        guard pendingInteraction?.isPTYMode == true else {
+            pendingInteraction = nil
+            return
+        }
+
+        // Get current session ID
+        let sessionId = userSelectedSessionId ?? agentStatus.sessionId
+        guard let sessionId = sessionId, !sessionId.isEmpty else {
+            AppLogger.log("[Dashboard] No session ID for PTY dismiss", type: .error)
+            pendingInteraction = nil
+            return
+        }
+
+        do {
+            // Send escape key to server to cancel the permission prompt
+            try await _agentRepository.sendInput(sessionId: sessionId, input: "escape")
+            pendingInteraction = nil
+            AppLogger.log("[Dashboard] PTY permission dismissed with escape key")
+            Haptics.light()
+        } catch {
+            // Still clear local state even if server request fails
+            pendingInteraction = nil
+            AppLogger.log("[Dashboard] PTY dismiss failed: \(error)", type: .error)
+        }
+    }
+
+    // MARK: - PTY Mode Helpers
+
+    /// Validate that a PTY option key is a valid keyboard shortcut
+    /// Valid keys: numbers (1-9), letters (n, y, etc.), special keys (esc, enter, tab)
+    private func isValidPTYOptionKey(_ key: String) -> Bool {
+        let validKeys = Set(["1", "2", "3", "4", "5", "6", "7", "8", "9",
+                             "n", "y", "esc", "escape", "enter", "return", "tab"])
+        return validKeys.contains(key.lowercased()) || key.count == 1
+    }
+
+    // MARK: - PTY Mode Permission Responses
+
+    /// Respond to PTY permission by navigating to the selected option and pressing enter.
+    /// The PTY terminal uses arrow key navigation:
+    /// - Find the currently selected option (selected == true)
+    /// - Navigate "down" to reach the target option
+    /// - Send "enter" to confirm
+    func respondToPTYPermission(key: String) async {
+        guard let interaction = pendingInteraction, interaction.isPTYMode else { return }
+        Haptics.light()
+
+        // Get current session ID from userSelectedSessionId or agentStatus
+        let sessionId = userSelectedSessionId ?? agentStatus.sessionId
+        guard let sessionId = sessionId, !sessionId.isEmpty else {
+            AppLogger.log("[Dashboard] No session ID for PTY response", type: .error)
+            return
+        }
+
+        // Get options from the interaction
+        guard let options = interaction.ptyOptions, !options.isEmpty else {
+            AppLogger.log("[Dashboard] No PTY options available", type: .error)
+            return
+        }
+
+        // Find the currently selected option index (default to 0 if none marked)
+        let currentIndex = options.firstIndex { $0.selected == true } ?? 0
+
+        // Find the target option index by key
+        guard let targetIndex = options.firstIndex(where: { $0.key == key }) else {
+            AppLogger.log("[Dashboard] PTY option with key '\(key)' not found", type: .error)
+            return
+        }
+
+        // Calculate how many "down" key presses needed
+        let downPresses = targetIndex - currentIndex
+
+        AppLogger.log("[Dashboard] PTY navigation: current=\(currentIndex), target=\(targetIndex), downs=\(downPresses)")
+
+        do {
+            // Send "down" keys to navigate to target option
+            for i in 0..<downPresses {
+                try await _agentRepository.sendInput(sessionId: sessionId, input: "down")
+                AppLogger.log("[Dashboard] PTY sent 'down' (\(i + 1)/\(downPresses))")
+                // Small delay between key presses to ensure they're processed in order
+                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+            }
+
+            // Send "enter" to confirm selection
+            try await _agentRepository.sendInput(sessionId: sessionId, input: "enter")
+            pendingInteraction = nil
+            AppLogger.log("[Dashboard] PTY permission responded: navigated to option '\(key)' and pressed enter")
+        } catch {
+            self.error = error as? AppError ?? .unknown(underlying: error)
+            AppLogger.log("[Dashboard] PTY response failed: \(error)", type: .error)
+        }
+    }
+
+    /// Approve PTY permission (sends "1" for Yes)
+    func approvePTYPermission() async {
+        await respondToPTYPermission(key: "1")
+        Haptics.success()
+    }
+
+    /// Approve all PTY permissions (sends "2" for Yes All)
+    func approveAllPTYPermissions() async {
+        await respondToPTYPermission(key: "2")
+        Haptics.success()
+    }
+
+    /// Deny PTY permission (sends "n" for No)
+    func denyPTYPermission() async {
+        await respondToPTYPermission(key: "n")
+        Haptics.warning()
     }
 
     /// Refresh status using workspace/status API
@@ -1549,9 +1686,37 @@ final class DashboardViewModel: ObservableObject {
                     }
                     streamingStartTime = nil
                 }
+
+                // In interactive mode, update isLoading based on claude_message
+                // Note: claudeState is managed by pty_state events in interactive mode
+                if isInteractiveMode {
+                    // Reset isLoading when we receive any assistant message (Claude is responding)
+                    if payload.effectiveRole == "assistant" && isLoading {
+                        isLoading = false
+                        AppLogger.log("[Dashboard] Interactive mode: Reset isLoading (received assistant message)")
+                    }
+
+                    // Only use stop_reason as a fallback if pty_state isn't working
+                    if let stopReason = payload.stopReason, !stopReason.isEmpty {
+                        // Claude finished - set to idle
+                        if claudeState == .running {
+                            claudeState = .idle
+                            AppLogger.log("[Dashboard] Interactive mode: Claude finished (stop_reason: \(stopReason))")
+                        }
+                    }
+                    // Don't set claudeState = .running here - pty_state handles state transitions
+                }
             }
 
         case .claudeLog:
+            // In interactive PTY mode, skip claude_log processing entirely
+            // PTY mode uses pty_output/pty_permission events instead
+            // claude_message events are still used for UI display
+            guard !isInteractiveMode else {
+                AppLogger.log("[Dashboard] Skipping claude_log in interactive mode")
+                return
+            }
+
             // claude_log is used ONLY for extracting session_id from system/init events
             // Content display uses claude_message events (structured format)
             if case .claudeLog(let payload) = event.payload {
@@ -1616,6 +1781,55 @@ final class DashboardViewModel: ObservableObject {
         case .claudePermission:
             pendingInteraction = PendingInteraction.fromPermission(event: event)
             Haptics.warning()
+
+        case .ptyPermission:
+            // PTY mode permission prompt with options
+            // Validate that options have proper keys before updating UI
+            // This prevents flickering from intermediate/malformed events
+            if case .ptyPermission(let payload) = event.payload,
+               let options = payload.options,
+               !options.isEmpty,
+               options.allSatisfy({ isValidPTYOptionKey($0.key) }) {
+                pendingInteraction = PendingInteraction.fromPTYPermission(event: event)
+                claudeState = .waiting  // Update state to show waiting indicator
+                Haptics.warning()
+                AppLogger.log("[Dashboard] PTY permission received with \(options.count) valid options")
+            } else {
+                AppLogger.log("[Dashboard] PTY permission skipped - invalid or missing options")
+            }
+
+        case .ptyOutput:
+            // PTY mode terminal output - logged for debugging
+            // Note: Display content uses claude_message events for now
+            if case .ptyOutput(let payload) = event.payload,
+               let cleanText = payload.cleanText, !cleanText.isEmpty {
+                AppLogger.log("[Dashboard] PTY output: \(cleanText.prefix(100))")
+            }
+
+        case .ptyState:
+            // PTY state change (idle, thinking, permission, question, error)
+            if case .ptyState(let payload) = event.payload {
+                if let state = payload.state {
+                    let previousClaudeState = claudeState
+                    // Map PTY state to Claude state
+                    switch state {
+                    case .idle:
+                        claudeState = .idle
+                        isLoading = false  // Also reset loading when idle
+                    case .thinking:
+                        claudeState = .running
+                    case .permission, .question:
+                        claudeState = .waiting
+                    case .error:
+                        claudeState = .error
+                    }
+                    AppLogger.log("[Dashboard] PTY state: \(state) → claudeState: \(previousClaudeState) → \(claudeState)")
+                } else {
+                    AppLogger.log("[Dashboard] PTY state event received but state was nil")
+                }
+            } else {
+                AppLogger.log("[Dashboard] PTY state event payload decode failed")
+            }
 
         case .gitDiff:
             if let entry = DiffEntry.from(event: event) {

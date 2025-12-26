@@ -20,6 +20,7 @@ enum JSONRPCMethod {
     static let sessionSend = "session/send"
     static let sessionStop = "session/stop"
     static let sessionRespond = "session/respond"
+    static let sessionInput = "session/input"  // PTY mode: send input/key to interactive session
     static let sessionState = "session/state"
     static let sessionActive = "session/active"
 
@@ -668,21 +669,34 @@ struct SessionStartResult: Codable, Sendable {
     }
 }
 
+/// Permission mode for session/send
+/// Controls how Claude handles permission requests
+enum SessionPermissionMode: String, Codable, Sendable {
+    case `default` = "default"           // Normal permission prompts
+    case acceptEdits = "acceptEdits"     // Auto-accept file edits
+    case bypassPermissions = "bypassPermissions"  // Skip all permission checks
+    case plan = "plan"                   // Plan mode
+    case interactive = "interactive"     // PTY mode for terminal-like interaction
+}
+
 /// Session send request parameters (send prompt to Claude)
 struct SessionSendParams: Codable, Sendable {
     let sessionId: String
     let prompt: String
     let mode: String?  // "new" or "continue"
+    let permissionMode: SessionPermissionMode?  // Permission handling mode
 
     enum CodingKeys: String, CodingKey {
         case prompt, mode
         case sessionId = "session_id"
+        case permissionMode = "permission_mode"
     }
 
-    init(sessionId: String, prompt: String, mode: String? = "continue") {
+    init(sessionId: String, prompt: String, mode: String? = "continue", permissionMode: SessionPermissionMode? = nil) {
         self.sessionId = sessionId
         self.prompt = prompt
         self.mode = mode
+        self.permissionMode = permissionMode
     }
 }
 
@@ -726,6 +740,67 @@ struct SessionRespondParams: Codable, Sendable {
 /// Session respond response result
 struct SessionRespondResult: Codable, Sendable {
     let status: String?
+}
+
+// MARK: - Session Input (PTY Mode)
+
+/// Special key names for session/input
+/// Used for PTY mode keyboard input
+enum SessionInputKey: String, Codable, Sendable {
+    case enter
+    case `return` = "return"
+    case escape
+    case esc
+    case up
+    case down
+    case left
+    case right
+    case tab
+    case backspace
+    case delete
+    case home
+    case end
+    case pageup
+    case pagedown
+    case space
+}
+
+/// Session input request parameters (for PTY mode interactive input)
+/// Used to send keyboard input to a session running in interactive mode
+/// Either `input` (text) or `key` (special key) must be provided
+struct SessionInputParams: Codable, Sendable {
+    let sessionId: String
+    let input: String?  // Raw text input (e.g., "1" for Yes, "2" for Yes all)
+    let key: String?    // Special key name (e.g., "enter", "escape")
+
+    enum CodingKeys: String, CodingKey {
+        case input, key
+        case sessionId = "session_id"
+    }
+
+    /// Create input params with text input
+    init(sessionId: String, input: String) {
+        self.sessionId = sessionId
+        self.input = input
+        self.key = nil
+    }
+
+    /// Create input params with special key
+    init(sessionId: String, key: SessionInputKey) {
+        self.sessionId = sessionId
+        self.input = nil
+        self.key = key.rawValue
+    }
+}
+
+/// Session input response result
+struct SessionInputResult: Codable, Sendable {
+    let status: String?
+    let key: String?  // Echoed back if key was sent
+
+    var isSuccess: Bool {
+        status == "sent"
+    }
 }
 
 /// Session state request parameters (for reconnection sync)

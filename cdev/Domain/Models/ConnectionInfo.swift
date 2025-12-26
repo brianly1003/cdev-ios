@@ -94,6 +94,11 @@ enum ConnectionState: Equatable {
         return false
     }
 
+    var isReconnecting: Bool {
+        if case .reconnecting = self { return true }
+        return false
+    }
+
     var statusText: String {
         switch self {
         case .disconnected:

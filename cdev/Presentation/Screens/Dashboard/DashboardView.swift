@@ -65,13 +65,16 @@ struct DashboardView: View {
                         }
                     )
 
-                    // Pending interaction banner (if any)
-                    if let interaction = viewModel.pendingInteraction {
+                    // Pending interaction banner (if any) - NOT for PTY permissions
+                    // PTY permissions are shown at the bottom via PTYPermissionPanel
+                    if let interaction = viewModel.pendingInteraction,
+                       !interaction.isPTYMode {
                         InteractionBanner(
                             interaction: interaction,
                             onApprove: { Task { await viewModel.approvePermission() } },
                             onDeny: { Task { await viewModel.denyPermission() } },
-                            onAnswer: { response in Task { await viewModel.answerQuestion(response) } }
+                            onAnswer: { response in Task { await viewModel.answerQuestion(response) } },
+                            onPTYResponse: { key in Task { await viewModel.respondToPTYPermission(key: key) } }
                         )
                     }
 
@@ -151,29 +154,48 @@ struct DashboardView: View {
                     // Action bar - only show on logs tab
                     // Uses manual keyboard handling, so ignore SwiftUI's automatic keyboard avoidance
                     if viewModel.selectedTab == .logs {
-                        ZStack(alignment: .bottomTrailing) {
-                            ActionBarView(
-                                claudeState: viewModel.claudeState,
-                                promptText: $viewModel.promptText,
-                                isBashMode: $viewModel.isBashMode,
-                                isLoading: viewModel.isLoading,
-                                isFocused: $isInputFocused,
-                                isEditing: $isTextFieldEditing,  // Actual editing state from UITextView
-                                onSend: { Task { await viewModel.sendPrompt() } },
-                                onStop: { Task { await viewModel.stopClaude() } },
-                                onToggleBashMode: { viewModel.toggleBashMode() },
-                                onFocusChange: { focused in
-                                    // Update the editing state (for command suggestions)
-                                    isTextFieldEditing = focused
-                                }
-                            )
+                        VStack(spacing: 0) {
+                            // PTY Permission Panel - shown above input for PTY mode permissions
+                            // Positioned here for easy access while typing
+                            if let interaction = viewModel.pendingInteraction,
+                               interaction.isPTYMode {
+                                PTYPermissionPanel(
+                                    interaction: interaction,
+                                    onResponse: { key in
+                                        Task { await viewModel.respondToPTYPermission(key: key) }
+                                    },
+                                    onDismiss: {
+                                        viewModel.dismissPendingInteraction()
+                                    }
+                                )
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
 
-                            // Keyboard dismiss button - positioned relative to input bar (bottom)
-                            // Using bottomTrailing alignment so it stays anchored to input bar,
-                            // not affected by command suggestions appearing above
-                            FloatingKeyboardDismissButton()
-                                .padding(.bottom, 52)  // Position above the input bar
-                                .padding(.trailing, Spacing.md)
+                            ZStack(alignment: .bottomTrailing) {
+                                ActionBarView(
+                                    claudeState: viewModel.claudeState,
+                                    promptText: $viewModel.promptText,
+                                    isBashMode: $viewModel.isBashMode,
+                                    isLoading: viewModel.isLoading,
+                                    isFocused: $isInputFocused,
+                                    isEditing: $isTextFieldEditing,  // Actual editing state from UITextView
+                                    hasPTYPermission: viewModel.pendingInteraction?.isPTYMode ?? false,
+                                    onSend: { Task { await viewModel.sendPrompt() } },
+                                    onStop: { Task { await viewModel.stopClaude() } },
+                                    onToggleBashMode: { viewModel.toggleBashMode() },
+                                    onFocusChange: { focused in
+                                        // Update the editing state (for command suggestions)
+                                        isTextFieldEditing = focused
+                                    }
+                                )
+
+                                // Keyboard dismiss button - positioned relative to input bar (bottom)
+                                // Using bottomTrailing alignment so it stays anchored to input bar,
+                                // not affected by command suggestions appearing above
+                                FloatingKeyboardDismissButton()
+                                    .padding(.bottom, 52)  // Position above the input bar
+                                    .padding(.trailing, Spacing.md)
+                            }
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -441,7 +463,7 @@ struct StatusBarView: View {
                         .frame(width: 6, height: 6)
                         .shadow(
                             color: ColorSystem.Status.glow(for: claudeState),
-                            radius: isPulsing ? 4 : 1
+                            radius: (isPulsing && claudeState == .running) ? 2.0 : 1.0
                         )
                         .scaleEffect(isPulsing && claudeState == .running ? 1.2 : 1.0)
 
@@ -754,6 +776,7 @@ struct ActionBarView: View {
     let isLoading: Bool
     var isFocused: FocusState<Bool>.Binding
     @Binding var isEditing: Bool  // Actual editing state from UITextView (more reliable than FocusState)
+    var hasPTYPermission: Bool = false  // Hide stop button when PTY permission panel is showing
     let onSend: () -> Void
     let onStop: () -> Void
     let onToggleBashMode: () -> Void
@@ -858,7 +881,8 @@ struct ActionBarView: View {
                 .transition(Animations.fadeScale)
 
                 // Stop button with loading animation when active
-                if claudeState == .running || claudeState == .waiting {
+                // Hidden when PTY permission panel is showing (user needs to respond first)
+                if (claudeState == .running || claudeState == .waiting) && !hasPTYPermission {
                     StopButtonWithAnimation(onStop: onStop)
                         .transition(Animations.fadeScale)
                 }

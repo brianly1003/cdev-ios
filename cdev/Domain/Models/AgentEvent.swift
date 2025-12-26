@@ -24,6 +24,11 @@ enum AgentEventType: String, Codable {
     case heartbeat = "heartbeat"
     case error = "error"
     case deprecationWarning = "deprecation_warning"  // Server deprecation notices
+
+    // PTY Mode events (Terminal/Interactive mode)
+    case ptyOutput = "pty_output"          // Terminal output from PTY mode
+    case ptyPermission = "pty_permission"  // Permission prompt from PTY mode
+    case ptyState = "pty_state"            // PTY state change (idle, thinking, permission, etc.)
 }
 
 /// Base event structure from agent
@@ -121,14 +126,33 @@ enum AgentEventPayload: Codable {
     case heartbeat(HeartbeatPayload)
     case error(ErrorPayload)
     case deprecationWarning(DeprecationWarningPayload)  // Server deprecation notices
+
+    // PTY Mode payloads (Terminal/Interactive mode)
+    case ptyOutput(PTYOutputPayload)          // Terminal output
+    case ptyPermission(PTYPermissionPayload)  // Permission prompt with options
+    case ptyState(PTYStatePayload)            // PTY state change
+
     case unknown
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
-        // Try each payload type - claude_message first (new structured format)
+        // Try each payload type in order of specificity
+        // PTY Mode payloads FIRST - they have unique fields (options, preview, target)
+        // that won't match other payload types
+        if let payload = try? container.decode(PTYPermissionPayload.self),
+           payload.type != nil, payload.options != nil {
+            self = .ptyPermission(payload)
+        } else if let payload = try? container.decode(PTYOutputPayload.self),
+                  payload.cleanText != nil {
+            self = .ptyOutput(payload)
+        } else if let payload = try? container.decode(PTYStatePayload.self),
+                  payload.state != nil {
+            // Note: pty_state should be checked by event type, not just payload
+            self = .ptyState(payload)
+        // claude_message next (new structured format)
         // Check for message OR content field (cdev-agent sends content at payload level)
-        if let payload = try? container.decode(ClaudeMessagePayload.self),
+        } else if let payload = try? container.decode(ClaudeMessagePayload.self),
            (payload.message != nil || payload.content != nil) {
             self = .claudeMessage(payload)
         } else if let payload = try? container.decode(ClaudeLogPayload.self), payload.line != nil {
@@ -149,7 +173,9 @@ enum AgentEventPayload: Codable {
             self = .gitStatusChanged(payload)
         } else if let payload = try? container.decode(GitOperationCompletedPayload.self), payload.operation != nil {
             self = .gitOperationCompleted(payload)
-        } else if let payload = try? container.decode(SessionWatchPayload.self), payload.sessionId != nil {
+        } else if let payload = try? container.decode(SessionWatchPayload.self),
+                  payload.sessionId != nil, payload.watching != nil {
+            // Require watching field to distinguish from other payloads with session_id
             self = .sessionWatch(payload)
         } else if let payload = try? container.decode(SessionJoinedPayload.self), payload.joiningClientId != nil {
             self = .sessionJoined(payload)
@@ -210,6 +236,12 @@ enum AgentEventPayload: Codable {
         case .error(let payload):
             try container.encode(payload)
         case .deprecationWarning(let payload):
+            try container.encode(payload)
+        case .ptyOutput(let payload):
+            try container.encode(payload)
+        case .ptyPermission(let payload):
+            try container.encode(payload)
+        case .ptyState(let payload):
             try container.encode(payload)
         case .unknown:
             try container.encodeNil()
@@ -741,4 +773,147 @@ enum ClaudeState: String, Codable {
     case waiting
     case error
     case stopped
+}
+
+// MARK: - PTY Mode Types
+
+/// PTY state for terminal/interactive mode
+enum PTYState: String, Codable {
+    case idle           // Waiting for input at prompt
+    case thinking       // Claude is processing
+    case permission     // Waiting for permission response
+    case question       // Waiting for question response
+    case error          // Error state
+}
+
+/// Permission type for PTY mode permission prompts
+enum PTYPermissionType: String, Codable {
+    case writeFile = "write_file"
+    case editFile = "edit_file"
+    case deleteFile = "delete_file"
+    case bashCommand = "bash_command"
+    case mcpTool = "mcp_tool"
+    case trustFolder = "trust_folder"
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        self = PTYPermissionType(rawValue: value) ?? .unknown
+    }
+}
+
+/// Option for PTY permission prompts
+/// Each option has a key (keyboard shortcut), label, and description
+struct PTYPromptOption: Codable, Identifiable, Equatable {
+    var id: String { key }
+
+    let key: String           // Keyboard shortcut (e.g., "1", "2", "n", "Esc")
+    let label: String         // Display label (e.g., "Yes", "Yes all", "No")
+    let description: String?  // Optional description
+    let selected: Bool?       // Whether this option is currently selected (for navigation)
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case label
+        case description
+        case selected
+    }
+}
+
+/// Payload for pty_output events
+/// Terminal output from PTY mode with clean and raw text
+struct PTYOutputPayload: Codable {
+    let cleanText: String?    // ANSI-stripped clean text
+    let rawText: String?      // Raw terminal output with escape codes
+    let state: String?        // Current PTY state as string
+    let sessionId: String?    // Session ID for event context
+
+    enum CodingKeys: String, CodingKey {
+        case cleanText = "clean_text"
+        case rawText = "raw_text"
+        case state
+        case sessionId = "session_id"
+    }
+
+    /// Parsed PTY state enum
+    var ptyState: PTYState {
+        guard let stateString = state else { return .idle }
+        return PTYState(rawValue: stateString) ?? .idle
+    }
+}
+
+/// Payload for pty_permission events
+/// Permission prompt from PTY mode with structured options
+struct PTYPermissionPayload: Codable {
+    let type: PTYPermissionType?   // Type of permission being requested
+    let target: String?            // Target of the operation (file path, command, etc.)
+    let description: String?       // Description of what the tool wants to do
+    let preview: String?           // Code preview for file operations
+    let options: [PTYPromptOption]? // Available options for user to choose
+    let sessionId: String?         // Session ID for event context
+
+    // Legacy fields (may be sent by older server versions)
+    let toolName: String?          // Name of the tool requesting permission
+    let filePath: String?          // File path (for file operations)
+    let command: String?           // Command (for bash operations)
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case target
+        case description
+        case preview
+        case options
+        case sessionId = "session_id"
+        case toolName = "tool_name"
+        case filePath = "file_path"
+        case command
+    }
+
+    /// Get the primary target for display (supports new and legacy fields)
+    var displayTarget: String {
+        if let t = target, !t.isEmpty {
+            return t
+        }
+        if let path = filePath, !path.isEmpty {
+            return path
+        }
+        if let cmd = command, !cmd.isEmpty {
+            return cmd
+        }
+        return toolName ?? "Unknown"
+    }
+
+    /// Get the primary description for display
+    var displayDescription: String {
+        if let desc = description, !desc.isEmpty {
+            return desc
+        }
+        return "Claude wants to perform an operation"
+    }
+
+    /// Get a compact title for the permission prompt
+    var title: String {
+        switch type {
+        case .writeFile: return "Write File"
+        case .editFile: return "Edit File"
+        case .deleteFile: return "Delete File"
+        case .bashCommand: return "Run Command"
+        case .mcpTool: return "MCP Tool"
+        case .trustFolder: return "Trust Folder"
+        case .unknown, .none: return "Permission Request"
+        }
+    }
+}
+
+/// Payload for pty_state events
+/// PTY state change notifications
+struct PTYStatePayload: Codable {
+    let state: PTYState?
+    let previousState: PTYState?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case previousState = "previous_state"
+    }
 }

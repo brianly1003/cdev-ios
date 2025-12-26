@@ -17,6 +17,20 @@ protocol AgentRepositoryProtocol {
     /// Respond to Claude (answer question or approve/deny permission)
     func respondToClaude(response: String, requestId: String?, approved: Bool?) async throws
 
+    // MARK: - PTY Mode (Interactive Terminal)
+
+    /// Send input to an interactive (PTY mode) session
+    /// - Parameters:
+    ///   - sessionId: Session ID to send input to
+    ///   - input: Raw text input (e.g., "1" for Yes, "2" for Yes all, "n" for No)
+    func sendInput(sessionId: String, input: String) async throws
+
+    /// Send a special key to an interactive (PTY mode) session
+    /// - Parameters:
+    ///   - sessionId: Session ID to send key to
+    ///   - key: Special key (e.g., .enter, .escape)
+    func sendKey(sessionId: String, key: SessionInputKey) async throws
+
     /// Get file content
     func getFile(path: String) async throws -> FileContentPayload
 

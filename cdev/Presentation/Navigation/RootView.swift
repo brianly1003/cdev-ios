@@ -14,9 +14,12 @@ struct RootView: View {
     var body: some View {
         Group {
             // New architecture: Show WorkspaceManager first to let user choose
-            // Only show Dashboard after user selects a workspace AND connected
-            let showDashboard = hasSelectedWorkspace && workspaceStore.activeWorkspace != nil && appState.connectionState.isConnected
-            let _ = AppLogger.log("[RootView] Check: hasSelectedWorkspace=\(hasSelectedWorkspace), activeWorkspace=\(workspaceStore.activeWorkspace?.name ?? "nil"), isConnected=\(appState.connectionState.isConnected), showDashboard=\(showDashboard)")
+            // Show Dashboard after user selects a workspace
+            // IMPORTANT: Keep dashboard visible during reconnection (isReconnecting)
+            // Only require isConnected for initial connection, not for staying on dashboard
+            let isReconnecting = appState.connectionState.isReconnecting
+            let showDashboard = hasSelectedWorkspace && workspaceStore.activeWorkspace != nil && (appState.connectionState.isConnected || isReconnecting)
+            let _ = AppLogger.log("[RootView] Check: hasSelectedWorkspace=\(hasSelectedWorkspace), activeWorkspace=\(workspaceStore.activeWorkspace?.name ?? "nil"), isConnected=\(appState.connectionState.isConnected), isReconnecting=\(isReconnecting), showDashboard=\(showDashboard)")
 
             if showDashboard {
                 DashboardView(viewModel: appState.makeDashboardViewModel())
@@ -44,17 +47,20 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.3), value: hasSelectedWorkspace)
         .animation(.easeInOut(duration: 0.3), value: appState.connectionState.isConnected)
         .onChange(of: appState.connectionState) { oldState, newState in
-            // Handle connection failures - return to workspace manager
+            // Handle connection failures - only return to workspace manager after max retries
             // Note: No popup alert - the WorkspaceManagerView banner shows status
             if case .failed(let reason) = newState {
+                // Only navigate away if it's a final failure (not during reconnection)
+                // The reconnect loop will set .failed after max attempts
                 AppLogger.log("[RootView] Connection failed: \(reason), returning to workspace manager")
                 hasSelectedWorkspace = false
                 // Clear active workspace on failure
                 WorkspaceStore.shared.clearActive()
             }
-            // Also handle disconnection while viewing dashboard
-            if case .disconnected = newState, oldState.isConnected {
-                AppLogger.log("[RootView] Disconnected, returning to workspace manager")
+            // Don't navigate away during reconnection - keep dashboard visible
+            // Only navigate away on explicit disconnection (e.g., user cancelled)
+            if case .disconnected = newState, oldState.isConnected, !oldState.isReconnecting {
+                AppLogger.log("[RootView] Disconnected (not reconnecting), returning to workspace manager")
                 hasSelectedWorkspace = false
             }
         }
