@@ -612,16 +612,14 @@ struct FloatingToolkitButton: View {
                         size: buttonSize
                     )
                     .opacity(isIdle && !isExpanded && !isDragging && !isForceTouchActive ? idleOpacity : 1.0)
-                    .animation(.easeInOut(duration: 0.3), value: isIdle)
                     .position(currentPosition(in: geometry))
                     .gesture(longPressScrollGesture())
                     .simultaneousGesture(tapAndDragGesture(in: geometry))
                     .zIndex(2)
                     .transition(.scale.combined(with: .opacity))
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isExpanded)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isForceTouchActive)
-            .animation(.easeInOut(duration: 0.15), value: hoveredScrollDirection)
+            // Note: Removed implicit .animation() modifiers to prevent timing conflicts
+            // All animations are now handled explicitly via withAnimation in handlers
             .onAppear {
                 AppLogger.log("[FloatingToolkit] onAppear called")
                 initializePosition(in: geometry)
@@ -729,7 +727,9 @@ struct FloatingToolkitButton: View {
 
     /// Reset idle state on user interaction
     private func resetIdleState() {
-        isIdle = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isIdle = false
+        }
         startIdleTimer()
     }
 
@@ -1000,7 +1000,9 @@ struct FloatingToolkitButton: View {
     // MARK: - Drag Handlers (called by UIKit wrapper)
 
     private func handleDragStart() {
-        isDragging = true
+        withAnimation(.easeOut(duration: 0.1)) {
+            isDragging = true
+        }
         resetIdleState()
         if isExpanded {
             withAnimation(.easeOut(duration: 0.15)) {
@@ -1019,7 +1021,9 @@ struct FloatingToolkitButton: View {
     }
 
     private func handleDragEnd(translation: CGSize, in geometry: GeometryProxy) {
-        isDragging = false
+        withAnimation(.easeOut(duration: 0.15)) {
+            isDragging = false
+        }
         dragOffset = .zero
         finalizeDrag(with: translation, in: geometry)
         AppLogger.log("[FloatingToolkit] Drag ended: \(translation)")
@@ -1354,9 +1358,7 @@ private struct MainButtonView: View {
                 .opacity(showGradientBackground ? 1 : 0)
         }
         .scaleEffect(isForceTouchActive ? 1.1 : (isDragging ? 1.15 : 1.0))
-        .animation(.spring(response: 0.2), value: isDragging)
-        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isForceTouchActive)
-        .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isExpanded)
+        // Note: Animations are handled by withAnimation in parent's state change handlers
         .contentShape(Circle()) // Ensure the entire circle is tappable
     }
 }
