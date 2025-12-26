@@ -21,8 +21,6 @@ struct AdminToolsView: View {
     @State private var searchText = ""
     @State private var selectedLog: DebugLogEntry?
     @State private var loadingLogId: UUID?
-    @State private var showingShareSheet = false
-    @State private var reportMarkdown = ""
 
     /// Filtered logs based on category and search
     private var filteredLogs: [DebugLogEntry] {
@@ -144,9 +142,6 @@ struct AdminToolsView: View {
                     loadingLogId = nil
                 }
             }
-            .sheet(isPresented: $showingShareSheet) {
-                ShareSheet(text: reportMarkdown)
-            }
         }
     }
 
@@ -169,9 +164,36 @@ struct AdminToolsView: View {
 
     /// Generate issue report and show share sheet
     private func generateIssueReport() {
-        reportMarkdown = IssueReportGenerator.shared.generateMarkdownReport()
-        showingShareSheet = true
+        let markdown = IssueReportGenerator.shared.generateMarkdownReport()
         Haptics.success()
+
+        // Present share sheet directly from root view controller
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = windowScene.windows.first?.rootViewController else {
+            // Fallback: copy to clipboard if can't present
+            UIPasteboard.general.string = markdown
+            return
+        }
+
+        // Find the topmost presented controller
+        var topVC = rootVC
+        while let presented = topVC.presentedViewController {
+            topVC = presented
+        }
+
+        let activityVC = UIActivityViewController(
+            activityItems: [markdown],
+            applicationActivities: nil
+        )
+
+        // iPad popover configuration
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = topVC.view
+            popover.sourceRect = CGRect(x: topVC.view.bounds.midX, y: topVC.view.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+
+        topVC.present(activityVC, animated: true)
     }
 }
 
@@ -697,22 +719,6 @@ private struct DetailPlaceholderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ColorSystem.terminalBg)
     }
-}
-
-// MARK: - Share Sheet
-
-/// UIKit share sheet wrapper for sharing text content
-private struct ShareSheet: UIViewControllerRepresentable {
-    let text: String
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(
-            activityItems: [text],
-            applicationActivities: nil
-        )
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Preview

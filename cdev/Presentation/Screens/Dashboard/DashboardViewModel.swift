@@ -2381,8 +2381,20 @@ final class DashboardViewModel: ObservableObject {
     func switchWorkspace(_ workspace: Workspace) async {
         AppLogger.log("[Dashboard] Switching to workspace: \(workspace.name)")
 
-        // Stop watching and disconnect
+        // Stop watching session first (while workspace subscription is still valid)
         await stopWatchingSession()
+
+        // Then unsubscribe from previous workspace events
+        if let previousWorkspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId {
+            AppLogger.log("[Dashboard] Unsubscribing from previous workspace: \(previousWorkspaceId)")
+            do {
+                try await workspaceManager.unsubscribe(workspaceId: previousWorkspaceId)
+            } catch {
+                AppLogger.log("[Dashboard] Failed to unsubscribe from previous workspace: \(error.localizedDescription)", type: .warning)
+            }
+        }
+
+        // Disconnect WebSocket
         webSocketService.disconnect()
 
         // Don't clear data immediately - let new session data replace it
@@ -2418,8 +2430,20 @@ final class DashboardViewModel: ObservableObject {
     func disconnect() async {
         AppLogger.log("[Dashboard] Disconnecting from workspace")
 
-        // Stop watching and disconnect
+        // Stop watching session first (while workspace subscription is still valid)
         await stopWatchingSession()
+
+        // Then unsubscribe from workspace events
+        if let workspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId {
+            AppLogger.log("[Dashboard] Unsubscribing from workspace: \(workspaceId)")
+            do {
+                try await workspaceManager.unsubscribe(workspaceId: workspaceId)
+            } catch {
+                AppLogger.log("[Dashboard] Failed to unsubscribe: \(error.localizedDescription)", type: .warning)
+            }
+        }
+
+        // Disconnect WebSocket
         webSocketService.disconnect()
 
         // Clear workspace store active
@@ -2517,10 +2541,21 @@ final class DashboardViewModel: ObservableObject {
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: host=\(host), hasActiveSession=\(workspace.hasActiveSession)")
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: sessions=\(workspace.sessions.map { $0.id })")
 
-        // Stop watching current session (don't disconnect - single-port architecture shares WebSocket)
+        // Stop watching current session first (while workspace subscription is still valid)
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Stopping current session watch...")
         await stopWatchingSession()
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Session watch stopped, isConnected=\(webSocketService.isConnected)")
+
+        // Then unsubscribe from previous workspace events
+        if let previousWorkspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId,
+           previousWorkspaceId != workspace.id {
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Unsubscribing from previous workspace: \(previousWorkspaceId)")
+            do {
+                try await workspaceManager.unsubscribe(workspaceId: previousWorkspaceId)
+            } catch {
+                AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Failed to unsubscribe: \(error.localizedDescription)", type: .warning)
+            }
+        }
 
         // Clear session tracking for new workspace
         userSelectedSessionId = nil
