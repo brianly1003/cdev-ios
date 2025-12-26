@@ -901,7 +901,7 @@ struct FileViewerView: View {
 
     /// Beautify Markdown with normalized formatting
     private func beautifyMarkdown(_ content: String) -> String {
-        var lines = content.components(separatedBy: "\n")
+        let lines = content.components(separatedBy: "\n")
         var formatted: [String] = []
 
         for line in lines {

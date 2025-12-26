@@ -40,19 +40,18 @@ final class WorkspaceManagerService: ObservableObject {
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         // Use custom date decoding to handle ISO8601 with fractional seconds
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let dateString = try container.decode(String.self)
             // Try with fractional seconds first
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             if let date = formatter.date(from: dateString) {
                 return date
             }
             // Fall back to standard ISO8601 without fractional seconds
-            let standardFormatter = ISO8601DateFormatter()
-            standardFormatter.formatOptions = [.withInternetDateTime]
-            if let date = standardFormatter.date(from: dateString) {
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: dateString) {
                 return date
             }
             throw DecodingError.dataCorruptedError(

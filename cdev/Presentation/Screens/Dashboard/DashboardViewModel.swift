@@ -289,7 +289,7 @@ final class DashboardViewModel: ObservableObject {
             seenElementIds.insert(element.id)
 
             // Handle task tracking
-            if case .task(var taskContent) = element.content {
+            if case .task(let taskContent) = element.content {
                 // Track this task
                 activeTasks[taskContent.id] = taskContent
 
@@ -1271,7 +1271,7 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] Git tracker state: \(wsStatus.gitTrackerState ?? "unknown"), error: \(wsStatus.gitLastError ?? "none")")
             }
 
-            AppLogger.log("[Dashboard] refreshStatus (workspace): repoName=\(agentStatus.repoName), sessionId=\(agentStatus.sessionId ?? "nil"), gitTrackerState=\(wsStatus.gitTrackerState ?? "nil"), hasActiveSession=\(wsStatus.hasActiveSession ?? false)")
+            AppLogger.log("[Dashboard] refreshStatus (workspace): repoName=\(agentStatus.repoName ?? "nil"), sessionId=\(agentStatus.sessionId ?? "nil"), gitTrackerState=\(wsStatus.gitTrackerState ?? "nil"), hasActiveSession=\(wsStatus.hasActiveSession ?? false)")
         } catch {
             AppLogger.error(error, context: "Refresh status")
         }
@@ -1906,10 +1906,16 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .gitStatusChanged:
-            // Log git status changed event (for debugging)
-            // Note: Don't refresh here - file_changed events already trigger refresh
+            // Real-time git status update from server's git watcher
+            // Triggers when files are staged/unstaged, commits made, branches switched, etc.
+            AppLogger.log("[Dashboard] Received gitStatusChanged event, payload=\(event.payload)")
             if case .gitStatusChanged(let payload) = event.payload {
                 AppLogger.log("[Dashboard] Git status changed - branch: \(payload.branch ?? "?"), staged: \(payload.stagedCount ?? 0), unstaged: \(payload.unstagedCount ?? 0)")
+                // Refresh source control UI to show latest git state
+                AppLogger.log("[Dashboard] Triggering sourceControlViewModel.refresh()")
+                Task { await sourceControlViewModel.refresh() }
+            } else {
+                AppLogger.log("[Dashboard] gitStatusChanged payload extraction failed - actual payload type: \(type(of: event.payload))", type: .warning)
             }
 
         case .gitOperationCompleted:
@@ -2441,7 +2447,7 @@ final class DashboardViewModel: ObservableObject {
         hasActiveConversation = false
         hasCompletedInitialLoad = false
 
-        AppLogger.log("[Dashboard] Workspace context updated: repoName=\(agentStatus.repoName), sessionId=\(effectiveSessionId ?? "nil")")
+        AppLogger.log("[Dashboard] Workspace context updated: repoName=\(agentStatus.repoName ?? "nil"), sessionId=\(effectiveSessionId ?? "nil")")
     }
 
     /// Connect to a remote workspace from workspace manager

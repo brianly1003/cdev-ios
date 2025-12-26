@@ -194,7 +194,7 @@ final class WorkspaceStore: ObservableObject {
             if let index = workspaces.firstIndex(where: { localWorkspace in
                 // Match by path (removing trailing slashes for comparison)
                 let localPath = localWorkspace.name  // Local workspace uses name as identifier
-                let remotePath = remote.path
+                let _ = remote.path
                 let remoteName = remote.name
 
                 // Match if name matches OR if this is the active workspace

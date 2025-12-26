@@ -45,6 +45,8 @@ final class SourceControlViewModel: ObservableObject {
     /// Uses workspace-aware API when a workspace is selected
     /// Debounced to prevent rapid successive calls
     func refresh() async {
+        AppLogger.log("[SourceControl] refresh() called")
+
         // Skip if refresh in progress
         guard !isRefreshing else {
             AppLogger.log("[SourceControl] Skipping refresh - already in progress")
@@ -54,10 +56,11 @@ final class SourceControlViewModel: ObservableObject {
         // Debounce: skip if refreshed recently
         if let lastTime = lastRefreshTime,
            Date().timeIntervalSince(lastTime) < refreshDebounceInterval {
-            AppLogger.log("[SourceControl] Skipping refresh - debounced")
+            AppLogger.log("[SourceControl] Skipping refresh - debounced (interval: \(Date().timeIntervalSince(lastTime))s)")
             return
         }
 
+        AppLogger.log("[SourceControl] Starting refresh...")
         isRefreshing = true
         lastRefreshTime = Date()
         defer { isRefreshing = false }
@@ -72,22 +75,39 @@ final class SourceControlViewModel: ObservableObject {
             return
         }
 
-        do {
-            AppLogger.log("[SourceControl] Using workspace git/status: \(workspaceId)")
-            let response = try await workspaceManager.getGitStatus(workspaceId: workspaceId)
-            AppLogger.log("[SourceControl] Got git status response for workspace: \(workspaceId)")
+        AppLogger.log("[SourceControl] Using workspace git/status: \(workspaceId)")
+
+        // Use a detached task to prevent SwiftUI from cancelling the request
+        // when view state changes (e.g., switching between contentView/emptyStateView)
+        let result: Result<GitStatusExtendedResponse, Error> = await Task.detached { [workspaceManager] in
+            do {
+                let response = try await workspaceManager.getGitStatus(workspaceId: workspaceId)
+                return .success(response)
+            } catch {
+                return .failure(error)
+            }
+        }.value
+
+        switch result {
+        case .success(let response):
+            AppLogger.log("[SourceControl] Got git status response - branch=\(response.branch ?? "nil"), staged=\(response.staged?.count ?? 0), unstaged=\(response.unstaged?.count ?? 0), untracked=\(response.untracked?.count ?? 0)")
 
             // Convert response to repository state
             var newState = response.toRepositoryState()
             newState.commitMessage = state.commitMessage
-            newState.isLoading = true
+            newState.isLoading = false
+
+            AppLogger.log("[SourceControl] Setting new state - totalCount=\(newState.totalCount), staged=\(newState.stagedCount), changes=\(newState.changesCount)")
             state = newState
-        } catch is CancellationError {
-            // Task was cancelled (e.g., view dismissed, new refresh started) - ignore silently
-            AppLogger.log("[SourceControl] Git status refresh cancelled")
-        } catch {
-            state.lastError = error.localizedDescription
-            AppLogger.error(error, context: "Refresh git status")
+            AppLogger.log("[SourceControl] State updated - viewModel.state.totalCount=\(state.totalCount)")
+
+        case .failure(let error):
+            if error is CancellationError {
+                AppLogger.log("[SourceControl] Git status refresh cancelled")
+            } else {
+                state.lastError = error.localizedDescription
+                AppLogger.error(error, context: "Refresh git status")
+            }
         }
 
         state.isLoading = false

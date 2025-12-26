@@ -91,18 +91,18 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         let id = UUID()
         return AsyncStream { continuation in
             // Register this continuation
-            self.continuationsLock.lock()
-            self.stateStreamContinuations[id] = continuation
-            self.continuationsLock.unlock()
+            self.continuationsLock.withLock {
+                self.stateStreamContinuations[id] = continuation
+            }
 
             // Yield current state immediately to new subscriber
             continuation.yield(self.connectionState)
 
             // Clean up when stream terminates
             continuation.onTermination = { [weak self] _ in
-                self?.continuationsLock.lock()
-                self?.stateStreamContinuations.removeValue(forKey: id)
-                self?.continuationsLock.unlock()
+                self?.continuationsLock.withLock {
+                    _ = self?.stateStreamContinuations.removeValue(forKey: id)
+                }
             }
         }
     }
@@ -116,15 +116,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         let id = UUID()
         return AsyncStream { continuation in
             // Register this continuation
-            self.eventContinuationsLock.lock()
-            self.eventStreamContinuations[id] = continuation
-            self.eventContinuationsLock.unlock()
+            self.eventContinuationsLock.withLock {
+                self.eventStreamContinuations[id] = continuation
+            }
 
             // Clean up when stream terminates
             continuation.onTermination = { [weak self] _ in
-                self?.eventContinuationsLock.lock()
-                self?.eventStreamContinuations.removeValue(forKey: id)
-                self?.eventContinuationsLock.unlock()
+                self?.eventContinuationsLock.withLock {
+                    _ = self?.eventStreamContinuations.removeValue(forKey: id)
+                }
             }
         }
     }
@@ -178,20 +178,20 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Finish all async stream continuations to allow subscribers to be released
     private func finishAllContinuations() {
         // Finish state stream continuations
-        continuationsLock.lock()
-        for continuation in stateStreamContinuations.values {
-            continuation.finish()
+        continuationsLock.withLock {
+            for continuation in stateStreamContinuations.values {
+                continuation.finish()
+            }
+            stateStreamContinuations.removeAll()
         }
-        stateStreamContinuations.removeAll()
-        continuationsLock.unlock()
 
         // Finish event stream continuations
-        eventContinuationsLock.lock()
-        for continuation in eventStreamContinuations.values {
-            continuation.finish()
+        eventContinuationsLock.withLock {
+            for continuation in eventStreamContinuations.values {
+                continuation.finish()
+            }
+            eventStreamContinuations.removeAll()
         }
-        eventStreamContinuations.removeAll()
-        eventContinuationsLock.unlock()
     }
 
     // MARK: - Network Monitoring
@@ -490,18 +490,20 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 init(_ c: CheckedContinuation<Void, Error>) { continuation = c }
 
                 func resume() {
-                    lock.lock()
-                    let c = continuation
-                    continuation = nil
-                    lock.unlock()
+                    let c = lock.withLock {
+                        let temp = continuation
+                        continuation = nil
+                        return temp
+                    }
                     c?.resume()
                 }
 
                 func resume(throwing error: Error) {
-                    lock.lock()
-                    let c = continuation
-                    continuation = nil
-                    lock.unlock()
+                    let c = lock.withLock {
+                        let temp = continuation
+                        continuation = nil
+                        return temp
+                    }
                     c?.resume(throwing: error)
                 }
             }
@@ -595,9 +597,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         _watchedWorkspaceId = nil
 
         // Clear pending request tracking to prevent memory buildup
-        pendingRequestMethodsLock.lock()
-        pendingRequestMethods.removeAll()
-        pendingRequestMethodsLock.unlock()
+        pendingRequestMethodsLock.withLock {
+            pendingRequestMethods.removeAll()
+        }
 
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
@@ -700,10 +702,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 init(_ c: CheckedContinuation<Bool, Never>) { continuation = c }
 
                 func resume(returning value: Bool) {
-                    lock.lock()
-                    let c = continuation
-                    continuation = nil  // Clear to prevent reuse
-                    lock.unlock()
+                    let c = lock.withLock {
+                        let temp = continuation
+                        continuation = nil  // Clear to prevent reuse
+                        return temp
+                    }
                     c?.resume(returning: value)
                 }
             }
@@ -740,13 +743,13 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Track request ID -> method for response correlation
         if let requestId = requestId, let method = method {
-            pendingRequestMethodsLock.lock()
-            pendingRequestMethods[requestId] = (method: method, timestamp: Date())
-            // Periodic cleanup of stale entries (only if dictionary is getting large)
-            if pendingRequestMethods.count > 50 {
-                cleanupStaleRequests()
+            pendingRequestMethodsLock.withLock {
+                pendingRequestMethods[requestId] = (method: method, timestamp: Date())
+                // Periodic cleanup of stale entries (only if dictionary is getting large)
+                if pendingRequestMethods.count > 50 {
+                    cleanupStaleRequests()
+                }
             }
-            pendingRequestMethodsLock.unlock()
         }
 
         AppLogger.webSocket("Sending JSON-RPC \(displayMethod)")
@@ -843,9 +846,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         // Broadcast to ALL subscribers (copy to Array to avoid holding lock during yield)
-        continuationsLock.lock()
-        let continuations = Array(stateStreamContinuations.values)
-        continuationsLock.unlock()
+        let continuations = continuationsLock.withLock {
+            Array(stateStreamContinuations.values)
+        }
 
         for continuation in continuations {
             continuation.yield(state)
@@ -966,9 +969,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 }
 
                 // Broadcast to ALL event stream subscribers (copy to Array for thread safety)
-                eventContinuationsLock.lock()
-                let eventContinuations = Array(eventStreamContinuations.values)
-                eventContinuationsLock.unlock()
+                let eventContinuations = eventContinuationsLock.withLock {
+                    Array(eventStreamContinuations.values)
+                }
 
                 for continuation in eventContinuations {
                     continuation.yield(event)
@@ -1021,9 +1024,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             // Look up the method name from tracked requests
             var methodName: String?
             if let responseId = responseInfo.id {
-                pendingRequestMethodsLock.lock()
-                methodName = pendingRequestMethods.removeValue(forKey: responseId)?.method
-                pendingRequestMethodsLock.unlock()
+                methodName = pendingRequestMethodsLock.withLock {
+                    pendingRequestMethods.removeValue(forKey: responseId)?.method
+                }
             }
             let displayMethod = methodName ?? "response"
 
@@ -1092,14 +1095,18 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                     return
                 }
 
+                AppLogger.log("[WS] Broadcasting event: \(event.type.rawValue) to \(eventStreamContinuations.count) subscribers")
+
                 // Broadcast to event stream subscribers
-                eventContinuationsLock.lock()
-                let eventContinuations = Array(eventStreamContinuations.values)
-                eventContinuationsLock.unlock()
+                let eventContinuations = eventContinuationsLock.withLock {
+                    Array(eventStreamContinuations.values)
+                }
 
                 for continuation in eventContinuations {
                     continuation.yield(event)
                 }
+            } else {
+                AppLogger.log("[WS] Failed to convert notification: \(method)", type: .warning)
             }
         } catch {
             AppLogger.webSocket("JSON-RPC notification parse error: \(error)", type: .warning)
@@ -1111,11 +1118,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private func convertNotificationToEvent(method: String, params: AnyCodable?) -> AgentEvent? {
         // Map notification methods to event types
         // This bridges the JSON-RPC format to existing event handling
-        guard let paramsDict = params?.dictionaryValue else { return nil }
+        guard let paramsDict = params?.dictionaryValue else {
+            AppLogger.log("[WS] convertNotification: params?.dictionaryValue is nil for method=\(method)", type: .warning)
+            return nil
+        }
 
         // Strip "event/" prefix from method name if present
         // JSON-RPC uses "event/claude_message" but AgentEventType expects "claude_message"
         let eventType = method.hasPrefix("event/") ? String(method.dropFirst(6)) : method
+        AppLogger.log("[WS] convertNotification: eventType=\(eventType), paramsKeys=\(paramsDict.keys.sorted())")
 
         // Extract workspace_id and session_id from params for event filtering
         // Server sends these at the top level of the event for multi-device filtering
@@ -1149,7 +1160,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             }
 
             let eventData = try JSONSerialization.data(withJSONObject: eventDict)
-            return try jsonDecoder.decode(AgentEvent.self, from: eventData)
+            let event = try jsonDecoder.decode(AgentEvent.self, from: eventData)
+            AppLogger.log("[WS] convertNotification: decoded event type=\(event.type.rawValue), payload=\(type(of: event.payload))")
+            return event
         } catch {
             // Only log to console - avoid DebugLogStore for high-frequency errors
             AppLogger.webSocket("Failed to convert notification '\(eventType)': \(error)", type: .warning)

@@ -36,7 +36,9 @@ struct SourceControlView: View {
         }
         .background(ColorSystem.terminalBg)
         .refreshable {
+            AppLogger.log("[SourceControlView] Pull-to-refresh triggered, calling onRefresh...")
             await onRefresh()
+            AppLogger.log("[SourceControlView] onRefresh completed, state.totalCount=\(viewModel.state.totalCount)")
         }
         .sheet(item: $selectedFile) { file in
             DiffDetailSheet(file: file)
@@ -248,9 +250,8 @@ struct SourceControlView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 300)
                 }
-                .refreshable {
-                    await onRefresh()
-                }
+                // Note: Don't add .refreshable here - use the outer Group's refreshable
+                // Having two refreshable modifiers can cause race conditions
                 .onChange(of: scrollRequest) { _, direction in
                     guard let direction = direction else { return }
                     handleScrollRequest(direction: direction, proxy: proxy)
