@@ -2437,19 +2437,22 @@ final class DashboardViewModel: ObservableObject {
         seenElementIds.removeAll()
         pendingInteraction = nil
 
-        // Determine which session ID to use:
-        // - If loadRecentSessionHistory already set a valid session (from API), keep it
-        // - Otherwise, use the passed sessionId from workspace model
-        // This prevents overwriting a fresh session ID from the API with a stale one
+        // IMPORTANT: When connecting to a workspace, always use the passed sessionId
+        // The passed sessionId is the ACTIVE session for the workspace we're connecting to
+        // The stored userSelectedSessionId might be from a different workspace or an old session
+        // that no longer exists (e.g., from a previous app run)
         let effectiveSessionId: String?
-        if let currentSession = userSelectedSessionId, !currentSession.isEmpty {
-            // Keep the session that was already loaded (e.g., from loadRecentSessionHistory)
+        if let passedSessionId = sessionId, !passedSessionId.isEmpty {
+            // Use the session ID from the workspace (this is the active session)
+            effectiveSessionId = passedSessionId
+            AppLogger.log("[Dashboard] setWorkspaceContext: using passed session \(passedSessionId)")
+        } else if let currentSession = userSelectedSessionId, !currentSession.isEmpty {
+            // Fallback to stored session only if no session was passed
             effectiveSessionId = currentSession
-            AppLogger.log("[Dashboard] setWorkspaceContext: keeping existing session \(currentSession)")
+            AppLogger.log("[Dashboard] setWorkspaceContext: no session passed, keeping stored session \(currentSession)")
         } else {
-            // No session loaded yet, use the one from workspace model
-            effectiveSessionId = sessionId
-            AppLogger.log("[Dashboard] setWorkspaceContext: using passed session \(sessionId ?? "nil")")
+            effectiveSessionId = nil
+            AppLogger.log("[Dashboard] setWorkspaceContext: no session available")
         }
 
         // Update agentStatus with new workspace info
@@ -2462,13 +2465,10 @@ final class DashboardViewModel: ObservableObject {
             uptime: agentStatus.uptime
         )
 
-        // Update session tracking only if we're using the passed sessionId
-        // (not if we're keeping an existing one from loadRecentSessionHistory)
-        if effectiveSessionId == sessionId {
-            userSelectedSessionId = sessionId
-            if let sessionId = sessionId {
-                sessionRepository.selectedSessionId = sessionId
-            }
+        // Always update session tracking with the effective session ID
+        userSelectedSessionId = effectiveSessionId
+        if let sid = effectiveSessionId {
+            sessionRepository.selectedSessionId = sid
         }
 
         // Reset conversation state
