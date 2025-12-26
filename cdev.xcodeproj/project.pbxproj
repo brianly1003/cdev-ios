@@ -53,6 +53,7 @@
 		81F69ECF3D1840D38DA0C29E /* PairingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45882D15B447F594CF96D3CE /* PairingViewModel.swift */; };
 		82C8F1C877109C0A2F99F6D1 /* Spacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE343FFBE0149E0355635D8 /* Spacing.swift */; };
 		8307BF71BF15CB91BBCDD040 /* DebugLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6161838FAA4AF761A99BD329 /* DebugLogStore.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* IssueReportGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2D3C4B5A6978869706152 /* IssueReportGenerator.swift */; };
 		83B21CEABB25D8074CE5364B /* GitModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3879C3885AB44CA1A914DC7 /* GitModels.swift */; };
 		896924A412D400C8DDEE6E61 /* Atomic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BC2B655ED24284B28813991 /* Atomic.swift */; };
 		8A5E9E41AEC55B56733F53D7 /* FileRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5191A017882EFCC44D809A17 /* FileRowView.swift */; };
@@ -184,6 +185,7 @@
 		5F12FAB8F50F3909047844B7 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
 		5F56AF3E06A7A6CFE5EF36A2 /* Typography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typography.swift; sourceTree = "<group>"; };
 		6161838FAA4AF761A99BD329 /* DebugLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogStore.swift; sourceTree = "<group>"; };
+		F1E2D3C4B5A6978869706152 /* IssueReportGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueReportGenerator.swift; sourceTree = "<group>"; };
 		624A07A99501D68A8E6C516B /* SessionPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPickerView.swift; sourceTree = "<group>"; };
 		6A8C4D8842CD324E7E0199BF /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		6FE343FFBE0149E0355635D8 /* Spacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spacing.swift; sourceTree = "<group>"; };
@@ -491,6 +493,7 @@
 				6161838FAA4AF761A99BD329 /* DebugLogStore.swift */,
 				24095590A3C79755616E8E39 /* DebugLogTypes.swift */,
 				2DEEDA73290D219852F86879 /* Haptics.swift */,
+				F1E2D3C4B5A6978869706152 /* IssueReportGenerator.swift */,
 				6FE343FFBE0149E0355635D8 /* Spacing.swift */,
 				D5B08DD1153C235C6628A231 /* SyntaxHighlighter.swift */,
 			);
@@ -967,6 +970,7 @@
 				8D2AF2575042FE3549B1AB57 /* HTTPService.swift in Sources */,
 				39652C25BDCADB1BE3843A37 /* Haptics.swift in Sources */,
 				03F2F253EA8796EC71F75CE3 /* Icons.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* IssueReportGenerator.swift in Sources */,
 				0FC5AC4304A66A044DE3D665 /* InteractionBanner.swift in Sources */,
 				C05E58CF6376471ECAFE0D46 /* KeychainService.swift in Sources */,
 				37AA4A5CBACDCEE87222B25B /* LogCache.swift in Sources */,

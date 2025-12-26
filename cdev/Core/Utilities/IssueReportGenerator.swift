@@ -1,0 +1,246 @@
+import Foundation
+import UIKit
+
+// MARK: - App State Snapshot
+
+/// Captures current app state for issue reporting
+struct AppStateSnapshot: Codable {
+    let timestamp: Date
+    let connectionState: String
+    let workspaceId: String?
+    let workspaceName: String?
+    let sessionId: String?
+    let claudeState: String
+    let activeTab: String?
+    let isStreaming: Bool
+    let hasPendingInteraction: Bool
+
+    /// Create snapshot from current app state
+    @MainActor
+    static func capture() -> AppStateSnapshot {
+        // Access shared state
+        let workspaceStore = WorkspaceStore.shared
+
+        // Try to get DashboardViewModel state if available
+        // We'll use a simpler approach - capture what we can access statically
+        let workspace = workspaceStore.activeWorkspace
+
+        return AppStateSnapshot(
+            timestamp: Date(),
+            connectionState: "unknown", // Will be filled by caller if available
+            workspaceId: workspace?.remoteWorkspaceId,
+            workspaceName: workspace?.name,
+            sessionId: nil, // Will be filled by caller if available
+            claudeState: "unknown", // Will be filled by caller if available
+            activeTab: nil,
+            isStreaming: false,
+            hasPendingInteraction: false
+        )
+    }
+}
+
+// MARK: - Device Info
+
+/// Device and app information for issue reporting
+struct DeviceInfo: Codable {
+    let deviceModel: String
+    let systemName: String
+    let systemVersion: String
+    let appVersion: String
+    let appBuild: String
+    let locale: String
+    let timezone: String
+
+    static func capture() -> DeviceInfo {
+        let device = UIDevice.current
+        let bundle = Bundle.main
+
+        return DeviceInfo(
+            deviceModel: deviceModelIdentifier(),
+            systemName: device.systemName,
+            systemVersion: device.systemVersion,
+            appVersion: bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown",
+            appBuild: bundle.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown",
+            locale: Locale.current.identifier,
+            timezone: TimeZone.current.identifier
+        )
+    }
+
+    /// Get the device model identifier (e.g., "iPhone14,5")
+    private static func deviceModelIdentifier() -> String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let machineMirror = Mirror(reflecting: systemInfo.machine)
+        let identifier = machineMirror.children.reduce("") { identifier, element in
+            guard let value = element.value as? Int8, value != 0 else { return identifier }
+            return identifier + String(UnicodeScalar(UInt8(value)))
+        }
+        return identifier
+    }
+}
+
+// MARK: - Issue Report
+
+/// Complete issue report ready for export
+struct IssueReport {
+    let description: String
+    let stateSnapshot: AppStateSnapshot
+    let deviceInfo: DeviceInfo
+    let recentLogs: [DebugLogEntry]
+    let timestamp: Date
+
+    /// Generate markdown report for GitHub issue
+    func toMarkdown() -> String {
+        var md = """
+        ## Issue Report
+
+        **Generated:** \(formattedTimestamp)
+        **Description:** \(description.isEmpty ? "_No description provided_" : description)
+
+        ---
+
+        ## App State
+
+        | Property | Value |
+        |----------|-------|
+        | Connection | \(stateSnapshot.connectionState) |
+        | Claude State | \(stateSnapshot.claudeState) |
+        | Workspace | \(stateSnapshot.workspaceName ?? stateSnapshot.workspaceId ?? "None") |
+        | Session ID | \(stateSnapshot.sessionId ?? "None") |
+        | Streaming | \(stateSnapshot.isStreaming ? "Yes" : "No") |
+        | Pending Interaction | \(stateSnapshot.hasPendingInteraction ? "Yes" : "No") |
+
+        ---
+
+        ## Device Info
+
+        | Property | Value |
+        |----------|-------|
+        | Device | \(deviceInfo.deviceModel) |
+        | OS | \(deviceInfo.systemName) \(deviceInfo.systemVersion) |
+        | App Version | \(deviceInfo.appVersion) (\(deviceInfo.appBuild)) |
+        | Locale | \(deviceInfo.locale) |
+        | Timezone | \(deviceInfo.timezone) |
+
+        ---
+
+        ## Recent Logs (Last \(recentLogs.count))
+
+        ```
+        """
+
+        // Add logs
+        if recentLogs.isEmpty {
+            md += "\nNo logs captured\n"
+        } else {
+            for log in recentLogs {
+                let level = log.level != .info ? " [\(log.level.rawValue.uppercased())]" : ""
+                var line = "[\(log.fullTimeString)] [\(log.category.rawValue.uppercased())]\(level) \(log.title)"
+                if let subtitle = log.subtitle {
+                    line += " - \(subtitle)"
+                }
+                md += "\n\(line)"
+            }
+            md += "\n"
+        }
+
+        md += """
+        ```
+
+        ---
+
+        _Report generated by cdev iOS app_
+        """
+
+        return md
+    }
+
+    private var formattedTimestamp: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        return formatter.string(from: timestamp)
+    }
+}
+
+// MARK: - Issue Report Generator
+
+/// Generates issue reports with app state and logs
+@MainActor
+final class IssueReportGenerator {
+    static let shared = IssueReportGenerator()
+
+    private init() {}
+
+    /// Number of recent logs to include in report
+    private let maxLogsToInclude = 100
+
+    /// Generate a complete issue report
+    /// - Parameters:
+    ///   - description: Optional user description of the issue
+    ///   - connectionState: Current connection state string
+    ///   - claudeState: Current Claude state string
+    ///   - sessionId: Current session ID if available
+    ///   - activeTab: Current active tab name
+    ///   - isStreaming: Whether streaming is active
+    ///   - hasPendingInteraction: Whether there's a pending interaction
+    func generateReport(
+        description: String = "",
+        connectionState: String = "unknown",
+        claudeState: String = "unknown",
+        sessionId: String? = nil,
+        activeTab: String? = nil,
+        isStreaming: Bool = false,
+        hasPendingInteraction: Bool = false
+    ) -> IssueReport {
+        // Capture device info
+        let deviceInfo = DeviceInfo.capture()
+
+        // Capture app state
+        let workspace = WorkspaceStore.shared.activeWorkspace
+        let stateSnapshot = AppStateSnapshot(
+            timestamp: Date(),
+            connectionState: connectionState,
+            workspaceId: workspace?.remoteWorkspaceId,
+            workspaceName: workspace?.name,
+            sessionId: sessionId,
+            claudeState: claudeState,
+            activeTab: activeTab,
+            isStreaming: isStreaming,
+            hasPendingInteraction: hasPendingInteraction
+        )
+
+        // Get recent logs
+        let allLogs = DebugLogStore.shared.logs
+        let recentLogs = Array(allLogs.suffix(maxLogsToInclude))
+
+        return IssueReport(
+            description: description,
+            stateSnapshot: stateSnapshot,
+            deviceInfo: deviceInfo,
+            recentLogs: recentLogs,
+            timestamp: Date()
+        )
+    }
+
+    /// Generate markdown report string directly
+    func generateMarkdownReport(
+        description: String = "",
+        connectionState: String = "unknown",
+        claudeState: String = "unknown",
+        sessionId: String? = nil,
+        activeTab: String? = nil,
+        isStreaming: Bool = false,
+        hasPendingInteraction: Bool = false
+    ) -> String {
+        let report = generateReport(
+            description: description,
+            connectionState: connectionState,
+            claudeState: claudeState,
+            sessionId: sessionId,
+            activeTab: activeTab,
+            isStreaming: isStreaming,
+            hasPendingInteraction: hasPendingInteraction
+        )
+        return report.toMarkdown()
+    }
+}

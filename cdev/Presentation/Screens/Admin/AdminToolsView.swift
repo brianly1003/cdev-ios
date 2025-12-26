@@ -21,6 +21,8 @@ struct AdminToolsView: View {
     @State private var searchText = ""
     @State private var selectedLog: DebugLogEntry?
     @State private var loadingLogId: UUID?
+    @State private var showingShareSheet = false
+    @State private var reportMarkdown = ""
 
     /// Filtered logs based on category and search
     private var filteredLogs: [DebugLogEntry] {
@@ -59,7 +61,8 @@ struct AdminToolsView: View {
                     isPaused: $logStore.isPaused,
                     autoScroll: $logStore.autoScroll,
                     onClear: { logStore.clear(category: selectedCategory) },
-                    onExport: exportLogs
+                    onExport: exportLogs,
+                    onReportIssue: generateIssueReport
                 )
 
                 // Main content
@@ -141,6 +144,9 @@ struct AdminToolsView: View {
                     loadingLogId = nil
                 }
             }
+            .sheet(isPresented: $showingShareSheet) {
+                ShareSheet(text: reportMarkdown)
+            }
         }
     }
 
@@ -158,6 +164,13 @@ struct AdminToolsView: View {
     private func exportLogs() {
         let text = logStore.exportLogs(category: selectedCategory)
         UIPasteboard.general.string = text
+        Haptics.success()
+    }
+
+    /// Generate issue report and show share sheet
+    private func generateIssueReport() {
+        reportMarkdown = IssueReportGenerator.shared.generateMarkdownReport()
+        showingShareSheet = true
         Haptics.success()
     }
 }
@@ -245,6 +258,7 @@ private struct ControlBar: View {
     @Binding var autoScroll: Bool
     let onClear: () -> Void
     let onExport: () -> Void
+    let onReportIssue: () -> Void
 
     @FocusState private var isSearchFocused: Bool
 
@@ -305,6 +319,15 @@ private struct ControlBar: View {
                     isActive: false
                 ) {
                     onExport()
+                }
+
+                // Report Issue
+                ControlButton(
+                    icon: "ladybug",
+                    color: ColorSystem.warning,
+                    isActive: false
+                ) {
+                    onReportIssue()
                 }
 
                 // Clear
@@ -674,6 +697,22 @@ private struct DetailPlaceholderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ColorSystem.terminalBg)
     }
+}
+
+// MARK: - Share Sheet
+
+/// UIKit share sheet wrapper for sharing text content
+private struct ShareSheet: UIViewControllerRepresentable {
+    let text: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(
+            activityItems: [text],
+            applicationActivities: nil
+        )
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Preview
