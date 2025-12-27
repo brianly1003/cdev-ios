@@ -159,8 +159,9 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Disconnect", role: .destructive) {
+                    // Call disconnect - RootView will handle navigation
+                    // Don't call dismiss() here - the view hierarchy change will dismiss this sheet
                     onDisconnect?()
-                    dismiss()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -180,7 +181,11 @@ struct SettingsView: View {
                 Text("This will remove all saved workspace connections. You'll need to scan QR codes again.")
             }
             .sheet(isPresented: $showWorkspaceManager) {
-                WorkspaceManagerView()
+                WorkspaceManagerView(
+                    onDisconnect: onDisconnect != nil ? {
+                        onDisconnect?()
+                    } : nil
+                )
                     .responsiveSheet()
             }
         }

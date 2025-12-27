@@ -56,11 +56,12 @@ struct DashboardView: View {
             NavigationStack {
                 VStack(spacing: 0) {
                     // Compact status bar with workspace switcher
+                    // Hide session ID when pending temp session (waiting for session_id_resolved)
                     StatusBarView(
                         connectionState: viewModel.connectionState,
                         claudeState: viewModel.claudeState,
                         repoName: viewModel.agentStatus.repoName,
-                        sessionId: viewModel.agentStatus.sessionId,
+                        sessionId: viewModel.isPendingTempSession ? nil : viewModel.agentStatus.sessionId,
                         isWatchingSession: viewModel.isWatchingSession,
                         onWorkspaceTap: { showWorkspaceSwitcher = true }
                     )
@@ -132,6 +133,7 @@ struct DashboardView: View {
                             isInputFocused: isInputFocused,
                             isStreaming: viewModel.isStreaming,
                             streamingStartTime: viewModel.streamingStartTime,
+                            spinnerMessage: viewModel.spinnerMessage,
                             hasMoreMessages: viewModel.messagesHasMore,
                             isLoadingMore: viewModel.isLoadingMoreMessages,
                             onLoadMore: { await viewModel.loadMoreMessages() },
@@ -300,6 +302,9 @@ struct DashboardView: View {
                             AppLogger.log("[DashboardView] onConnectToWorkspace: connectToRemoteWorkspace returned \(result)")
                             return result
                         },
+                        onDisconnect: {
+                            await viewModel.disconnect()
+                        },
                         showDismissButton: true
                     )
                 }
@@ -385,6 +390,15 @@ struct DashboardView: View {
                     showReconnectedToast = true
                 }
                 Haptics.success()
+            }
+        }
+        // Navigate to workspace list when session fails (e.g., user declined trust_folder)
+        .onChange(of: viewModel.shouldShowWorkspaceList) { _, shouldShow in
+            if shouldShow {
+                // Reset the flag immediately to prevent re-triggering
+                viewModel.shouldShowWorkspaceList = false
+                // Show the workspace switcher
+                showWorkspaceSwitcher = true
             }
         }
         .task(priority: .utility) {

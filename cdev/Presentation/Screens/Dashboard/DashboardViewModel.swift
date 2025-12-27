@@ -72,6 +72,7 @@ final class DashboardViewModel: ObservableObject {
     // Streaming Indicator State
     @Published var isStreaming: Bool = false
     @Published var streamingStartTime: Date?
+    @Published var spinnerMessage: String?  // Message from pty_spinner events (e.g., "Vibing…")
 
     // Session Watching State
     @Published var isWatchingSession: Bool = false
@@ -80,6 +81,18 @@ final class DashboardViewModel: ObservableObject {
     // Interactive PTY Mode (always true since we use permission_mode: "interactive")
     // When in interactive mode, skip claude_log processing and use pty_* events instead
     @Published var isInteractiveMode: Bool = true
+
+    // Trust folder pending state - when true, session APIs (watch/messages) should be skipped
+    // because the session doesn't exist in .claude/projects/ until user approves trust
+    @Published var isPendingTrustFolder: Bool = false
+
+    // Pending temp session state - when true, we have a temporary session ID from session/start
+    // but haven't received session_id_resolved yet. Don't show temp ID in UI until resolved.
+    @Published var isPendingTempSession: Bool = false
+
+    // Navigation signal - when true, the view should show the workspace list
+    // Set when session_id_failed is received to allow user to pick a different workspace
+    @Published var shouldShowWorkspaceList: Bool = false
 
     // Force new session flag (set by /new command)
     private var forceNewSession: Bool = false
@@ -255,6 +268,12 @@ final class DashboardViewModel: ObservableObject {
                 // Sync workspace IDs first - this enables workspace-aware APIs
                 AppLogger.log("[DashboardViewModel] init Task - syncing workspace IDs")
                 _ = try? await WorkspaceManagerService.shared.listWorkspaces()
+
+                // Check for pending trust_folder permission that arrived before Dashboard was ready
+                if let pendingEvent = webSocketService.consumePendingTrustFolderPermission() {
+                    AppLogger.log("[DashboardViewModel] init Task - found pending trust_folder permission")
+                    await handleEvent(pendingEvent)
+                }
 
                 AppLogger.log("[DashboardViewModel] init Task - starting loadRecentSessionHistory")
                 await loadRecentSessionHistory()
@@ -1184,8 +1203,9 @@ final class DashboardViewModel: ObservableObject {
         guard let interaction = pendingInteraction, interaction.isPTYMode else { return }
         Haptics.light()
 
-        // Get current session ID from userSelectedSessionId or agentStatus
-        let sessionId = userSelectedSessionId ?? agentStatus.sessionId
+        // Get session ID: prefer interaction's sessionId (for PTY after session_id_failed),
+        // then userSelectedSessionId, then agentStatus
+        let sessionId = interaction.sessionId ?? userSelectedSessionId ?? agentStatus.sessionId
         guard let sessionId = sessionId, !sessionId.isEmpty else {
             AppLogger.log("[Dashboard] No session ID for PTY response", type: .error)
             return
@@ -1206,16 +1226,32 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        // Calculate how many "down" key presses needed
-        let downPresses = targetIndex - currentIndex
+        // Calculate navigation direction and count
+        let distance = targetIndex - currentIndex
+        let direction: String
+        let keyPresses: Int
 
-        AppLogger.log("[Dashboard] PTY navigation: current=\(currentIndex), target=\(targetIndex), downs=\(downPresses)")
+        if distance > 0 {
+            // Target is below current - need to go down
+            direction = "down"
+            keyPresses = distance
+        } else if distance < 0 {
+            // Target is above current - need to go up
+            direction = "up"
+            keyPresses = -distance  // Make positive
+        } else {
+            // Already at target - just press enter
+            direction = ""
+            keyPresses = 0
+        }
+
+        AppLogger.log("[Dashboard] PTY navigation: current=\(currentIndex), target=\(targetIndex), direction=\(direction.isEmpty ? "none" : direction), presses=\(keyPresses)")
 
         do {
-            // Send "down" keys to navigate to target option
-            for i in 0..<downPresses {
-                try await _agentRepository.sendInput(sessionId: sessionId, input: "down")
-                AppLogger.log("[Dashboard] PTY sent 'down' (\(i + 1)/\(downPresses))")
+            // Send navigation keys to reach target option
+            for i in 0..<keyPresses {
+                try await _agentRepository.sendInput(sessionId: sessionId, input: direction)
+                AppLogger.log("[Dashboard] PTY sent '\(direction)' (\(i + 1)/\(keyPresses))")
                 // Small delay between key presses to ensure they're processed in order
                 try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
             }
@@ -1354,6 +1390,12 @@ final class DashboardViewModel: ObservableObject {
     /// Load history from most recent session
     /// - Parameter isReconnection: If true, forces reload even if data exists (to catch up on new messages)
     private func loadRecentSessionHistory(isReconnection: Bool = false) async {
+        // Skip if pending trust_folder approval - session doesn't exist yet
+        guard !isPendingTrustFolder else {
+            AppLogger.log("[Dashboard] loadRecentSessionHistory skipped - pending trust_folder approval")
+            return
+        }
+
         // Prevent duplicate loads
         guard !isInitialLoadInProgress else {
             AppLogger.log("[Dashboard] loadRecentSessionHistory skipped - already in progress")
@@ -1717,6 +1759,7 @@ final class DashboardViewModel: ObservableObject {
                 } else if !isStillStreaming && isStreaming {
                     // Stopped streaming
                     isStreaming = false
+                    spinnerMessage = nil
                     if let startTime = streamingStartTime {
                         let duration = Date().timeIntervalSince(startTime)
                         AppLogger.log("[Dashboard] Streaming stopped after \(String(format: "%.1f", duration))s")
@@ -1789,11 +1832,12 @@ final class DashboardViewModel: ObservableObject {
                 // When Claude finishes (running -> idle/stopped):
                 // 1. Reset hasActiveConversation so next prompt will use resume mode
                 // 2. Refresh git status
-                // 3. Clear streaming indicator
+                // 3. Clear streaming indicator and spinner message
                 if previousState == .running && (state == .idle || state == .stopped) {
                     hasActiveConversation = false
                     isStreaming = false
                     streamingStartTime = nil
+                    spinnerMessage = nil
                     AppLogger.log("[Dashboard] Claude stopped - reset hasActiveConversation and streaming")
                     // Note: Don't refresh git status here - file_changed events will handle it
                 }
@@ -1830,9 +1874,54 @@ final class DashboardViewModel: ObservableObject {
                 pendingInteraction = PendingInteraction.fromPTYPermission(event: event)
                 claudeState = .waiting  // Update state to show waiting indicator
                 Haptics.warning()
-                AppLogger.log("[Dashboard] PTY permission received with \(options.count) valid options")
+
+                // Check if this is a trust_folder permission - session APIs won't work until approved
+                // Also mark as pending temp session since session_id_resolved will provide real ID
+                if payload.type == .trustFolder {
+                    isPendingTrustFolder = true
+                    isPendingTempSession = true
+                    AppLogger.log("[Dashboard] PTY trust_folder permission - session APIs delayed, waiting for real session ID")
+                }
+
+                // Send local notification if app is in background
+                // This alerts the user that Claude needs permission approval
+                Task {
+                    await NotificationService.shared.sendPermissionNotification(
+                        toolName: payload.toolName,
+                        description: payload.displayDescription,
+                        workspaceName: agentStatus.repoName
+                    )
+                }
+
+                AppLogger.log("[Dashboard] PTY permission received with \(options.count) valid options, type=\(payload.type?.rawValue ?? "unknown")")
             } else {
                 AppLogger.log("[Dashboard] PTY permission skipped - invalid or missing options")
+            }
+
+        case .ptyPermissionResolved:
+            // Permission was resolved by another device - dismiss our permission UI
+            if case .ptyPermissionResolved(let payload) = event.payload {
+                let resolvedBy = payload.resolvedBy ?? "unknown"
+                let input = payload.input ?? "unknown"
+                AppLogger.log("[Dashboard] PTY permission resolved by another device: resolvedBy=\(resolvedBy), input=\(input)")
+
+                // Clear the pending permission UI if we have one
+                if pendingInteraction?.isPTYMode == true {
+                    pendingInteraction = nil
+                    Haptics.light()
+                    AppLogger.log("[Dashboard] Dismissed local permission popup - resolved by another device")
+
+                    // Clear the badge since permission was handled
+                    // NotificationService.shared.clearPermissionNotification()
+                }
+
+                // Update claude state based on the resolution
+                if payload.wasApproved {
+                    claudeState = .running
+                } else if payload.wasDenied {
+                    // Permission was denied, Claude may still be waiting or idle
+                    claudeState = .idle
+                }
             }
 
         case .ptyOutput:
@@ -1848,11 +1937,14 @@ final class DashboardViewModel: ObservableObject {
             if case .ptyState(let payload) = event.payload {
                 if let state = payload.state {
                     let previousClaudeState = claudeState
+                    let wasPendingTrust = isPendingTrustFolder
+
                     // Map PTY state to Claude state
                     switch state {
                     case .idle:
                         claudeState = .idle
                         isLoading = false  // Also reset loading when idle
+                        spinnerMessage = nil  // Clear spinner message when idle
                     case .thinking:
                         claudeState = .running
                     case .permission, .question:
@@ -1861,11 +1953,48 @@ final class DashboardViewModel: ObservableObject {
                         claudeState = .error
                     }
                     AppLogger.log("[Dashboard] PTY state: \(state) → claudeState: \(previousClaudeState) → \(claudeState)")
+
+                    // Check if trust_folder was just approved
+                    // When state changes from permission to idle/thinking, trust was granted
+                    if wasPendingTrust && (state == .idle || state == .thinking) {
+                        isPendingTrustFolder = false
+                        AppLogger.log("[Dashboard] Trust folder approved - initializing session APIs")
+
+                        // Now that trust is granted, the session exists in .claude/projects/
+                        // Initialize session watching and load history
+                        Task {
+                            await loadRecentSessionHistory(isReconnection: false)
+                            await startWatchingCurrentSession(force: true)
+                            AppLogger.log("[Dashboard] Post-trust session initialization complete")
+                        }
+                    }
                 } else {
                     AppLogger.log("[Dashboard] PTY state event received but state was nil")
                 }
             } else {
                 AppLogger.log("[Dashboard] PTY state event payload decode failed")
+            }
+
+        case .ptySpinner:
+            // PTY spinner event - update spinner message and claude state
+            if case .ptySpinner(let payload) = event.payload {
+                // Use the full text with symbol (e.g., "· Percolating…")
+                // Replace "esc to interrupt" with mobile-friendly text (no escape key on mobile)
+                var message = payload.text ?? payload.message
+                message = message?.replacingOccurrences(of: "esc to interrupt", with: "press ⏹ to stop")
+                spinnerMessage = message
+
+                // pty_spinner indicates Claude is actively working - set to running
+                if claudeState != .running {
+                    claudeState = .running
+                }
+
+                // If not already streaming, start streaming when we receive spinner events
+                if !isStreaming {
+                    isStreaming = true
+                    streamingStartTime = Date()
+                }
+                AppLogger.log("[Dashboard] PTY spinner: \(payload.message ?? "nil")")
             }
 
         case .gitDiff:
@@ -2007,9 +2136,141 @@ final class DashboardViewModel: ObservableObject {
                     if eventSessionId == nil || eventSessionId == currentSessionId {
                         AppLogger.log("[Dashboard] Another device left (eventSessionId=\(eventSessionId ?? "nil")), re-establishing watch for session \(currentSessionId)")
                         Task {
-                            await startWatchingCurrentSession()
+                            // Use force: true to bypass "already watching" check - server may have
+                            // incorrectly dropped our subscription when the other client unwatched
+                            await startWatchingCurrentSession(force: true)
                         }
                     }
+                }
+            }
+
+        case .sessionIdResolved:
+            // Temporary session ID resolved to real Claude session ID
+            // This happens after user accepts trust_folder for a new workspace
+            if case .sessionIdResolved(let payload) = event.payload,
+               let tempId = payload.temporaryId,
+               let realId = payload.realId {
+                AppLogger.log("[Dashboard] Session ID resolved: temp=\(tempId) → real=\(realId)")
+
+                // Check if this resolution is for our current session
+                if userSelectedSessionId == tempId {
+                    AppLogger.log("[Dashboard] Updating session tracking from temp to real ID")
+
+                    // Clear pending temp session flag - we now have real ID
+                    isPendingTempSession = false
+
+                    // Update session tracking to use real ID
+                    setSelectedSession(realId)
+
+                    // Re-watch the session with the real ID to receive claude_message events
+                    // from the actual session file
+                    Task {
+                        AppLogger.log("[Dashboard] Re-watching session with real ID: \(realId)")
+                        await stopWatchingSession()
+                        await startWatchingCurrentSession(force: true)
+                        AppLogger.log("[Dashboard] Session re-watch complete with real ID")
+                    }
+                } else {
+                    AppLogger.log("[Dashboard] Session ID resolution for different session (current=\(userSelectedSessionId ?? "nil"), temp=\(tempId))")
+                }
+            }
+
+        case .sessionIdFailed:
+            // Session ID resolution failed (e.g., user declined trust_folder)
+            AppLogger.log("[Dashboard] Received session_id_failed event - payload type: \(type(of: event.payload))")
+
+            // Extract payload details if available
+            var tempId = "unknown"
+            var reason = "unknown"
+            var message = "Session failed to start"
+
+            if case .sessionIdFailed(let payload) = event.payload {
+                tempId = payload.temporaryId ?? "unknown"
+                reason = payload.reason ?? "unknown"
+                message = payload.message ?? "Session failed to start"
+            }
+
+            AppLogger.log("[Dashboard] Session ID failed: temp=\(tempId), reason=\(reason), message=\(message)")
+
+            // Clear pending states since session failed
+            isPendingTempSession = false
+            isPendingTrustFolder = false  // Reset so user can start a new session
+
+            // Clear the permission dialog
+            pendingInteraction = nil
+
+            // Clear the failed session to prevent further session API calls
+            setSelectedSession(nil)
+
+            // Clear any displayed session ID
+            updateSessionId("")
+
+            // Force new session on next prompt - this ensures session/start is called
+            // (instead of trying to continue an existing session)
+            forceNewSession = true
+            AppLogger.log("[Dashboard] Cleared failed session - forceNewSession=true for next prompt")
+
+            // Reset claude state to idle (ready for new input)
+            claudeState = .idle
+
+            // Stay on Dashboard - user can send a new message to start a fresh session
+            AppLogger.log("[Dashboard] Session failed - staying on Dashboard, ready for new session")
+
+        case .streamReadComplete:
+            // JSONL reader caught up to end of file - signal that Claude is done
+            AppLogger.log("[Dashboard] Received stream_read_complete event, payload type: \(type(of: event.payload))")
+            if case .streamReadComplete(let payload) = event.payload {
+                let messagesEmitted = payload.messagesEmitted ?? 0
+                let fileOffset = payload.fileOffset ?? 0
+                let fileSize = payload.fileSize ?? 0
+                AppLogger.log("[Dashboard] Stream read complete - messages: \(messagesEmitted), offset: \(fileOffset), size: \(fileSize), claudeState: \(claudeState)")
+
+                // When file_offset == file_size, we've read the entire file - Claude is done
+                if fileOffset == fileSize && fileSize > 0 {
+                    AppLogger.log("[Dashboard] Setting claudeState to .idle (was: \(claudeState))")
+                    claudeState = .idle
+                    isStreaming = false
+                    streamingStartTime = nil
+                    spinnerMessage = nil
+                    AppLogger.log("[Dashboard] Claude finished - stream read complete (offset == size), claudeState: \(claudeState)")
+                } else {
+                    AppLogger.log("[Dashboard] NOT setting idle: offset=\(fileOffset), size=\(fileSize)")
+                }
+            } else {
+                AppLogger.log("[Dashboard] stream_read_complete payload extraction FAILED - actual: \(event.payload)")
+            }
+
+        case .workspaceRemoved:
+            // Workspace was removed from server - check if it's our current workspace
+            if case .workspaceRemoved(let payload) = event.payload {
+                let removedId = payload.id ?? ""
+                let removedName = payload.name ?? "Unknown"
+                AppLogger.log("[Dashboard] Workspace removed: id=\(removedId), name=\(removedName), currentWorkspaceId=\(currentWorkspaceId ?? "nil")")
+
+                // Always update the workspace list
+                WorkspaceManagerService.shared.handleWorkspaceRemoved(workspaceId: removedId)
+
+                // Check if the removed workspace is the one we're currently viewing
+                if let currentId = currentWorkspaceId, currentId == removedId {
+                    AppLogger.log("[Dashboard] Current workspace was removed - navigating to workspace list")
+
+                    // Clear session and workspace state
+                    setSelectedSession(nil)
+                    claudeState = .idle
+                    isStreaming = false
+                    streamingStartTime = nil
+                    spinnerMessage = nil
+                    pendingInteraction = nil
+                    hasActiveConversation = false
+
+                    // Clear the active workspace in WorkspaceStore
+                    WorkspaceStore.shared.clearActive()
+
+                    // Show info message (not really an error, more of a notification)
+                    error = .commandFailed(reason: "Workspace '\(removedName)' was removed from server")
+
+                    // Trigger navigation to workspace list
+                    shouldShowWorkspaceList = true
                 }
             }
 
@@ -2271,6 +2532,12 @@ final class DashboardViewModel: ObservableObject {
     func startWatchingCurrentSession(force: Bool = false) async {
         AppLogger.log("[Dashboard] startWatchingCurrentSession(force=\(force)) - userSelectedSessionId=\(userSelectedSessionId ?? "nil"), isWatchingSession=\(isWatchingSession), watchingSessionId=\(watchingSessionId ?? "nil"), isConnected=\(connectionState.isConnected)")
 
+        // Skip if pending trust_folder approval - session doesn't exist yet
+        guard !isPendingTrustFolder else {
+            AppLogger.log("[Dashboard] startWatchingCurrentSession skipped - pending trust_folder approval")
+            return
+        }
+
         guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else {
             AppLogger.log("[Dashboard] No session to watch - userSelectedSessionId is nil or empty")
             return
@@ -2430,6 +2697,10 @@ final class DashboardViewModel: ObservableObject {
     func disconnect() async {
         AppLogger.log("[Dashboard] Disconnecting from workspace")
 
+        // Mark as explicit disconnect BEFORE WebSocket disconnect
+        // This tells RootView to navigate away instead of trying to reconnect
+        appState?.markExplicitDisconnect()
+
         // Stop watching session first (while workspace subscription is still valid)
         await stopWatchingSession()
 
@@ -2444,17 +2715,41 @@ final class DashboardViewModel: ObservableObject {
         }
 
         // Disconnect WebSocket
+        AppLogger.log("[Dashboard] Calling webSocketService.disconnect()")
         webSocketService.disconnect()
+        AppLogger.log("[Dashboard] webSocketService.disconnect() completed")
 
         // Clear workspace store active
+        AppLogger.log("[Dashboard] Clearing workspace store")
         WorkspaceStore.shared.clearActive()
+        AppLogger.log("[Dashboard] Workspace store cleared")
+
+        // Clear manager store to prevent auto-reconnection
+        AppLogger.log("[Dashboard] Clearing manager store")
+        ManagerStore.shared.clear()
+        WorkspaceManagerService.shared.reset()
+        AppLogger.log("[Dashboard] Manager store cleared")
 
         // Clear HTTP base URL to stop any pending/cached requests
+        AppLogger.log("[Dashboard] Clearing HTTP state")
         appState?.clearHTTPState()
+        AppLogger.log("[Dashboard] HTTP state cleared")
 
-        // Clear all state to default
-        await clearLogsAndDiffs()
+        // Clear all state to default - do this synchronously to avoid blocking
+        AppLogger.log("[Dashboard] Clearing logs and diffs")
+        logs = []
+        diffs = []
+        chatMessages = []
+        chatElements = []
         seenElementIds.removeAll()
+        AppLogger.log("[Dashboard] Logs and diffs cleared")
+
+        // Clear caches in background (don't await)
+        Task.detached { [logCache, diffCache] in
+            await logCache.clear()
+            await diffCache.clear()
+        }
+
         userSelectedSessionId = nil
         hasActiveConversation = false
         connectionState = .disconnected
@@ -2466,6 +2761,8 @@ final class DashboardViewModel: ObservableObject {
         error = nil
         isStreaming = false
         streamingStartTime = nil
+        isPendingTrustFolder = false
+        isPendingTempSession = false
 
         // Also clear from session repository
         sessionRepository.selectedSessionId = nil
@@ -2484,6 +2781,8 @@ final class DashboardViewModel: ObservableObject {
         diffs.removeAll()
         seenElementIds.removeAll()
         pendingInteraction = nil
+        isPendingTrustFolder = false  // Reset trust state for new workspace
+        isPendingTempSession = false  // Reset temp session state for new workspace
 
         // IMPORTANT: When connecting to a workspace, always use the passed sessionId
         // The passed sessionId is the ACTIVE session for the workspace we're connecting to
@@ -2526,6 +2825,18 @@ final class DashboardViewModel: ObservableObject {
         // Reset Explorer for new workspace (async - fire and forget)
         Task {
             await explorerViewModel.resetForNewWorkspace()
+        }
+
+        // Check for pending trust_folder permission that arrived before Dashboard was ready
+        // This handles the case where pty_permission arrives after session/start but before navigation
+        if let pendingEvent = webSocketService.consumePendingTrustFolderPermission() {
+            AppLogger.log("[Dashboard] Found pending trust_folder permission - applying")
+            // CRITICAL: Set flags synchronously BEFORE async task to prevent session APIs from running
+            isPendingTrustFolder = true
+            isPendingTempSession = true  // Also pending temp session since we don't have real ID yet
+            Task {
+                await handleEvent(pendingEvent)
+            }
         }
 
         AppLogger.log("[Dashboard] Workspace context updated: repoName=\(agentStatus.repoName ?? "nil"), sessionId=\(effectiveSessionId ?? "nil")")

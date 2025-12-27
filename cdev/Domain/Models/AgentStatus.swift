@@ -102,6 +102,7 @@ struct PendingInteraction: Identifiable, Equatable {
     let requestId: String?
     let options: [QuestionOption]?
     let ptyOptions: [PTYPromptOption]?  // PTY mode options with key shortcuts
+    let sessionId: String?  // Session ID from the event (for PTY responses after session_id_failed)
     let timestamp: Date
 
     enum InteractionType: Equatable {
@@ -117,6 +118,7 @@ struct PendingInteraction: Identifiable, Equatable {
         requestId: String? = nil,
         options: [QuestionOption]? = nil,
         ptyOptions: [PTYPromptOption]? = nil,
+        sessionId: String? = nil,
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -125,6 +127,7 @@ struct PendingInteraction: Identifiable, Equatable {
         self.requestId = requestId
         self.options = options
         self.ptyOptions = ptyOptions
+        self.sessionId = sessionId
         self.timestamp = timestamp
     }
 
@@ -170,6 +173,10 @@ struct PendingInteraction: Identifiable, Equatable {
         let permissionType = payload.type ?? .unknown
         let toolName = payload.toolName
 
+        // Extract sessionId from event or payload for PTY response
+        // This is crucial for responding after session_id_failed clears userSelectedSessionId
+        let sessionId = event.sessionId ?? payload.sessionId
+
         return PendingInteraction(
             id: event.id,
             type: .ptyPermission(type: permissionType, toolName: toolName),
@@ -177,6 +184,7 @@ struct PendingInteraction: Identifiable, Equatable {
             requestId: nil,  // PTY mode doesn't use request IDs
             options: nil,
             ptyOptions: payload.options,
+            sessionId: sessionId,
             timestamp: event.timestamp
         )
     }

@@ -39,6 +39,11 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     /// - Parameter preserveWatch: If true, keeps session watch active for Dashboard persistence
     func handleAppWillResignActive(preserveWatch: Bool)
 
+    // MARK: - Multi-Device Awareness
+
+    /// Client ID assigned by server (nil if not connected or not assigned)
+    var clientId: String? { get }
+
     // MARK: - JSON-RPC
 
     /// Get JSON-RPC client for making requests
@@ -59,6 +64,13 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     /// Stop watching the current session
     /// Sends unwatch_session command
     func unwatchSession() async throws
+
+    // MARK: - Pending Trust Folder Permission
+
+    /// Get and clear pending trust_folder permission (atomic operation)
+    /// Returns the event if one was pending, nil otherwise
+    /// Used by Dashboard to pick up permissions that arrived before it was ready
+    func consumePendingTrustFolderPermission() -> AgentEvent?
 }
 
 /// Protocol for HTTP API operations

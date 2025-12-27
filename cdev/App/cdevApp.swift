@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 /// Main app entry point
 @main
@@ -16,6 +17,11 @@ struct cdevApp: App {
         WorkspaceManagerService.shared.configure(
             webSocketService: DependencyContainer.shared.webSocketService
         )
+
+        // Request notification permissions for permission alerts
+        Task {
+            await NotificationService.shared.requestAuthorization()
+        }
     }
 
     var body: some Scene {

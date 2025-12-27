@@ -148,6 +148,19 @@ final class WorkspaceManagerService: ObservableObject {
         AppLogger.log("[WorkspaceManager] Session not found for removal: \(sessionId)", type: .warning)
     }
 
+    /// Remove a workspace from local list (called when workspace_removed event is received)
+    /// This is for handling server-side removals broadcast to all clients
+    func handleWorkspaceRemoved(workspaceId: String) {
+        if let index = workspaces.firstIndex(where: { $0.id == workspaceId }) {
+            let workspace = workspaces[index]
+            workspaces.remove(at: index)
+            subscribedWorkspaceIds.remove(workspaceId)
+            AppLogger.log("[WorkspaceManager] Workspace removed from list: \(workspace.name) (\(workspaceId))")
+        } else {
+            AppLogger.log("[WorkspaceManager] Workspace not in list for removal: \(workspaceId)", type: .warning)
+        }
+    }
+
     // MARK: - Workspace Operations
 
     /// List all workspaces from the server
@@ -412,6 +425,81 @@ final class WorkspaceManagerService: ObservableObject {
 
         AppLogger.log("[WorkspaceManager] Got session history: \(response.sessions?.count ?? 0) sessions for workspace \(workspaceId)")
         return response
+    }
+
+    /// Get workspace removal state (for multi-device aware removal flow)
+    /// Uses workspace/get to check active sessions and viewers
+    func getWorkspaceRemovalInfo(workspace: RemoteWorkspace, myClientId: String?) async throws -> WorkspaceRemovalInfo {
+        // Get fresh workspace data with sessions and viewers
+        let freshWorkspace = try await getWorkspace(workspace.id)
+
+        // Find running sessions and check for other viewers
+        var hasActiveSession = false
+        var activeSessionId: String?
+        var hasOtherViewers = false
+        var totalViewerCount = 0
+        var otherViewerIds: [String] = []
+
+        for session in freshWorkspace.sessions {
+            if session.status == .running {
+                hasActiveSession = true
+                activeSessionId = session.id
+            }
+
+            // Check viewers for this session
+            if let viewers = session.viewers, !viewers.isEmpty {
+                totalViewerCount += viewers.count
+                // Check if any viewer is NOT our client
+                for viewerId in viewers {
+                    if viewerId != myClientId {
+                        hasOtherViewers = true
+                        if !otherViewerIds.contains(viewerId) {
+                            otherViewerIds.append(viewerId)
+                        }
+                    }
+                }
+            }
+        }
+
+        AppLogger.log("[WorkspaceManager] Removal info for \(freshWorkspace.name): hasActiveSession=\(hasActiveSession), hasOtherViewers=\(hasOtherViewers), viewerCount=\(totalViewerCount)")
+
+        return WorkspaceRemovalInfo(
+            workspace: freshWorkspace,
+            hasActiveSession: hasActiveSession,
+            activeSessionId: activeSessionId,
+            hasOtherViewers: hasOtherViewers,
+            viewerCount: totalViewerCount,
+            otherViewerIds: otherViewerIds
+        )
+    }
+
+    /// Leave a workspace without removing it (for multi-device scenarios)
+    /// Unwatches session, unsubscribes from events, and hides from local UI
+    func leaveWorkspace(_ workspaceId: String) async throws {
+        // Unwatch any active session first
+        if let ws = webSocketService {
+            let client = ws.getJSONRPCClient()
+            do {
+                let _: SessionUnwatchResult = try await client.request(
+                    method: JSONRPCMethod.workspaceSessionUnwatch,
+                    params: EmptyParams()
+                )
+                AppLogger.log("[WorkspaceManager] Unwatched session for workspace: \(workspaceId)")
+            } catch {
+                // Non-fatal - might not be watching anything
+                AppLogger.log("[WorkspaceManager] Unwatch failed (might not be watching): \(error.localizedDescription)", type: .warning)
+            }
+        }
+
+        // Unsubscribe from workspace events
+        try await unsubscribe(workspaceId: workspaceId)
+
+        // Remove from local state only (don't call workspace/remove)
+        workspaces.removeAll { $0.id == workspaceId }
+        unreachableWorkspaceIds.remove(workspaceId)
+
+        Haptics.light()
+        AppLogger.log("[WorkspaceManager] Left workspace (local only): \(workspaceId)")
     }
 
     // MARK: - Subscription Operations
@@ -854,6 +942,32 @@ struct GitDiffResponse: Codable {
             return [GitDiffItem(path: path, diff: diff, isNew: isNew, isStaged: isStaged)]
         }
         return []
+    }
+}
+
+// MARK: - Workspace Removal Info
+
+/// Information about a workspace for multi-device aware removal
+struct WorkspaceRemovalInfo {
+    let workspace: RemoteWorkspace
+    let hasActiveSession: Bool
+    let activeSessionId: String?
+    let hasOtherViewers: Bool
+    let viewerCount: Int
+    let otherViewerIds: [String]
+
+    /// Message describing the current state for UI
+    var stateDescription: String {
+        if hasActiveSession {
+            return "A Claude session is currently running."
+        } else if hasOtherViewers {
+            let count = otherViewerIds.count
+            return count == 1
+                ? "1 other device is viewing this workspace."
+                : "\(count) other devices are viewing this workspace."
+        } else {
+            return "No active sessions or viewers."
+        }
     }
 }
 

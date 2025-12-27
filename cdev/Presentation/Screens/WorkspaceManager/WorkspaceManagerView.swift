@@ -13,6 +13,11 @@ struct WorkspaceManagerView: View {
     /// Returns true if connection succeeded (dismisses view), false otherwise (stays on page)
     var onConnectToWorkspace: ((RemoteWorkspace, String) async -> Bool)?
 
+    /// Callback when user wants to disconnect from server
+    /// If provided, this will be called instead of direct WebSocket disconnect
+    /// to allow parent views to handle the full disconnect flow
+    var onDisconnect: (() async -> Void)?
+
     /// Whether to show the Done/dismiss button (false when used as root view)
     var showDismissButton: Bool = true
 
@@ -21,9 +26,6 @@ struct WorkspaceManagerView: View {
 
     /// Scroll request (from floating toolkit force touch)
     @State private var scrollRequest: ScrollDirection?
-
-    /// Workspace pending removal (for confirmation alert)
-    @State private var workspaceToRemove: RemoteWorkspace?
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
@@ -109,7 +111,16 @@ struct WorkspaceManagerView: View {
                             }
 
                             Button(role: .destructive) {
-                                viewModel.resetManager()
+                                Task {
+                                    // If callback provided, use it for full disconnect flow
+                                    // Otherwise fall back to direct disconnect
+                                    if let onDisconnect = onDisconnect {
+                                        await onDisconnect()
+                                        viewModel.resetManagerState()
+                                    } else {
+                                        viewModel.resetManager()
+                                    }
+                                }
                             } label: {
                                 Label("Disconnect", systemImage: "wifi.slash")
                             }
@@ -174,25 +185,27 @@ struct WorkspaceManagerView: View {
                 AdminToolsView()
                     .responsiveSheet()
             }
-            .alert(
-                "Remove Workspace",
-                isPresented: Binding(
-                    get: { workspaceToRemove != nil },
-                    set: { if !$0 { workspaceToRemove = nil } }
-                ),
-                presenting: workspaceToRemove
-            ) { workspace in
-                Button("Cancel", role: .cancel) {
-                    workspaceToRemove = nil
+            .sheet(isPresented: $viewModel.showRemovalSheet) {
+                if let info = viewModel.removalInfo {
+                    WorkspaceRemovalSheet(
+                        info: info,
+                        onStopSession: {
+                            await viewModel.stopSessionThenRemove()
+                        },
+                        onLeaveOnly: {
+                            await viewModel.leaveWorkspaceOnly()
+                        },
+                        onRemoveForEveryone: {
+                            await viewModel.removeWorkspaceForEveryone()
+                        },
+                        onCancel: {
+                            viewModel.cancelRemoval()
+                        }
+                    )
+                    .presentationDetents([.height(info.hasOtherViewers ? 320 : 260)])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(20)
                 }
-                Button("Remove", role: .destructive) {
-                    Task {
-                        await viewModel.removeWorkspace(workspace)
-                        workspaceToRemove = nil
-                    }
-                }
-            } message: { workspace in
-                Text("Remove \"\(workspace.name)\" from your workspaces?\n\nThis will stop any active sessions. Your files will not be deleted.")
             }
             } // End NavigationStack
 
@@ -339,8 +352,8 @@ struct WorkspaceManagerView: View {
                             Task { await viewModel.stopWorkspace(workspace) }
                         },
                         onRemove: {
-                            // Show confirmation alert before removing
-                            workspaceToRemove = workspace
+                            // Prepare removal with multi-device awareness
+                            Task { await viewModel.prepareWorkspaceRemoval(workspace) }
                         }
                     )
                     .listRowBackground(Color.clear)
@@ -671,6 +684,224 @@ struct ServerConnectionBanner: View {
         case .unreachable:
             return ColorSystem.error.opacity(0.08)
         }
+    }
+}
+
+// MARK: - Workspace Removal Sheet
+
+/// Sheet for multi-device aware workspace removal
+/// Shows different options based on session state and viewers
+struct WorkspaceRemovalSheet: View {
+    let info: WorkspaceRemovalInfo
+    let onStopSession: () async -> Void
+    let onLeaveOnly: () async -> Void
+    let onRemoveForEveryone: () async -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Drag indicator
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(ColorSystem.textQuaternary)
+                .frame(width: 36, height: 5)
+                .padding(.top, Spacing.sm)
+                .padding(.bottom, Spacing.md)
+
+            // Header - compact
+            VStack(spacing: Spacing.xxs) {
+                Image(systemName: headerIcon)
+                    .font(.system(size: 28))
+                    .foregroundStyle(headerColor)
+
+                Text(headerTitle)
+                    .font(Typography.bodyBold)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text(info.workspace.name)
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
+                    .lineLimit(1)
+
+                Text(info.stateDescription)
+                    .font(Typography.caption2)
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.bottom, Spacing.md)
+
+            Divider()
+                .background(ColorSystem.terminalBgHighlight)
+
+            // Action buttons based on state
+            // Only show "Session Running" warning if there are >= 2 viewers
+            // If only current device is viewing, no need for warning popup
+            VStack(spacing: 0) {
+                if showSessionRunningWarning {
+                    // Session running with other viewers - primary action is Stop Session
+                    actionButton(
+                        title: "Stop Session",
+                        subtitle: "Stop the running Claude session first",
+                        icon: "stop.circle.fill",
+                        color: ColorSystem.warning,
+                        action: { Task { await onStopSession() } }
+                    )
+
+                    Divider()
+                        .background(ColorSystem.terminalBgHighlight)
+                        .padding(.leading, 48)
+
+                    actionButton(
+                        title: "Cancel",
+                        subtitle: nil,
+                        icon: "xmark.circle",
+                        color: ColorSystem.textSecondary,
+                        action: onCancel
+                    )
+
+                } else if info.hasOtherViewers {
+                    // Other viewers - show Leave Only / Remove Anyway options
+                    actionButton(
+                        title: "Leave Only",
+                        subtitle: "Remove from this device only",
+                        icon: "rectangle.portrait.and.arrow.right",
+                        color: ColorSystem.primary,
+                        action: { Task { await onLeaveOnly() } }
+                    )
+
+                    Divider()
+                        .background(ColorSystem.terminalBgHighlight)
+                        .padding(.leading, 48)
+
+                    actionButton(
+                        title: "Remove for Everyone",
+                        subtitle: "Remove workspace from all devices",
+                        icon: "trash.fill",
+                        color: ColorSystem.error,
+                        action: { Task { await onRemoveForEveryone() } }
+                    )
+
+                    Divider()
+                        .background(ColorSystem.terminalBgHighlight)
+                        .padding(.leading, 48)
+
+                    actionButton(
+                        title: "Cancel",
+                        subtitle: nil,
+                        icon: "xmark.circle",
+                        color: ColorSystem.textSecondary,
+                        action: onCancel
+                    )
+
+                } else {
+                    // No conflicts - simple remove confirmation
+                    actionButton(
+                        title: "Remove Workspace",
+                        subtitle: "Remove from manager (files not deleted)",
+                        icon: "trash.fill",
+                        color: ColorSystem.error,
+                        action: { Task { await onRemoveForEveryone() } }
+                    )
+
+                    Divider()
+                        .background(ColorSystem.terminalBgHighlight)
+                        .padding(.leading, 48)
+
+                    actionButton(
+                        title: "Cancel",
+                        subtitle: nil,
+                        icon: "xmark.circle",
+                        color: ColorSystem.textSecondary,
+                        action: onCancel
+                    )
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .background(ColorSystem.terminalBgElevated)
+    }
+
+    // MARK: - Header Properties
+
+    // Only show "Session Running" warning if there are >= 2 viewers
+    private var showSessionRunningWarning: Bool {
+        info.hasActiveSession && info.viewerCount >= 2
+    }
+
+    private var headerIcon: String {
+        if showSessionRunningWarning {
+            return "exclamationmark.triangle.fill"
+        } else if info.hasOtherViewers {
+            return "person.2.fill"
+        } else {
+            return "trash.circle"
+        }
+    }
+
+    private var headerColor: Color {
+        if showSessionRunningWarning {
+            return ColorSystem.warning
+        } else if info.hasOtherViewers {
+            return ColorSystem.primary
+        } else {
+            return ColorSystem.error
+        }
+    }
+
+    private var headerTitle: String {
+        if showSessionRunningWarning {
+            return "Session Running"
+        } else if info.hasOtherViewers {
+            return "Other Devices Viewing"
+        } else {
+            return "Remove Workspace?"
+        }
+    }
+
+    // MARK: - Action Button
+
+    @ViewBuilder
+    private func actionButton(
+        title: String,
+        subtitle: String?,
+        icon: String,
+        color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: icon)
+                    .font(.system(size: layout.iconMedium))
+                    .foregroundStyle(color)
+                    .frame(width: 32)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(Typography.body)
+                        .foregroundStyle(color == ColorSystem.textSecondary ? ColorSystem.textPrimary : color)
+
+                    if let subtitle = subtitle {
+                        Text(subtitle)
+                            .font(Typography.caption2)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, Spacing.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

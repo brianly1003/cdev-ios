@@ -29,6 +29,18 @@ enum AgentEventType: String, Codable {
     case ptyOutput = "pty_output"          // Terminal output from PTY mode
     case ptyPermission = "pty_permission"  // Permission prompt from PTY mode
     case ptyState = "pty_state"            // PTY state change (idle, thinking, permission, etc.)
+    case ptySpinner = "pty_spinner"        // Spinner/thinking status with message
+    case ptyPermissionResolved = "pty_permission_resolved"  // Permission resolved by another device
+
+    // Session lifecycle events
+    case sessionIdResolved = "session_id_resolved"  // Temp session ID resolved to real ID
+    case sessionIdFailed = "session_id_failed"      // Session ID resolution failed (e.g., user declined trust)
+
+    // Stream events
+    case streamReadComplete = "stream_read_complete"  // JSONL reader caught up to end of file
+
+    // Workspace events
+    case workspaceRemoved = "workspace_removed"  // Workspace removed from server (broadcast to subscribers)
 }
 
 /// Base event structure from agent
@@ -131,6 +143,18 @@ enum AgentEventPayload: Codable {
     case ptyOutput(PTYOutputPayload)          // Terminal output
     case ptyPermission(PTYPermissionPayload)  // Permission prompt with options
     case ptyState(PTYStatePayload)            // PTY state change
+    case ptySpinner(PTYSpinnerPayload)        // Spinner/thinking status
+    case ptyPermissionResolved(PTYPermissionResolvedPayload)  // Permission resolved by another device
+
+    // Session lifecycle payloads
+    case sessionIdResolved(SessionIDResolvedPayload)  // Temp ID resolved to real ID
+    case sessionIdFailed(SessionIDFailedPayload)      // Session ID resolution failed
+
+    // Stream payloads
+    case streamReadComplete(StreamReadCompletePayload)  // JSONL reader caught up to EOF
+
+    // Workspace payloads
+    case workspaceRemoved(WorkspaceRemovedPayload)  // Workspace removed from server
 
     case unknown
 
@@ -150,6 +174,13 @@ enum AgentEventPayload: Codable {
                   payload.state != nil {
             // Note: pty_state should be checked by event type, not just payload
             self = .ptyState(payload)
+        } else if let payload = try? container.decode(PTYSpinnerPayload.self),
+                  payload.symbol != nil {
+            self = .ptySpinner(payload)
+        // PTYPermissionResolvedPayload - check by unique field resolved_by
+        } else if let payload = try? container.decode(PTYPermissionResolvedPayload.self),
+                  payload.resolvedBy != nil {
+            self = .ptyPermissionResolved(payload)
         // claude_message next (new structured format)
         // Check for message OR content field (cdev-agent sends content at payload level)
         } else if let payload = try? container.decode(ClaudeMessagePayload.self),
@@ -163,6 +194,9 @@ enum AgentEventPayload: Codable {
             self = .claudeWaiting(payload)
         } else if let payload = try? container.decode(ClaudePermissionPayload.self), payload.tool != nil {
             self = .claudePermission(payload)
+        // StreamReadCompletePayload - check BEFORE ClaudeSessionInfoPayload since both have session_id
+        } else if let payload = try? container.decode(StreamReadCompletePayload.self), payload.messagesEmitted != nil {
+            self = .streamReadComplete(payload)
         } else if let payload = try? container.decode(ClaudeSessionInfoPayload.self), payload.sessionId != nil {
             self = .claudeSessionInfo(payload)
         } else if let payload = try? container.decode(FileChangedPayload.self), payload.path != nil {
@@ -187,6 +221,16 @@ enum AgentEventPayload: Codable {
             self = .fileContent(payload)
         } else if let payload = try? container.decode(HeartbeatPayload.self), payload.serverTime != nil {
             self = .heartbeat(payload)
+        // Session lifecycle payloads - check BEFORE ErrorPayload/DeprecationWarningPayload since they have more specific fields
+        } else if let payload = try? container.decode(SessionIDResolvedPayload.self), payload.temporaryId != nil, payload.realId != nil {
+            self = .sessionIdResolved(payload)
+        } else if let payload = try? container.decode(SessionIDFailedPayload.self), payload.temporaryId != nil {
+            self = .sessionIdFailed(payload)
+        // Workspace payloads - check by unique field combination (id + name + path)
+        } else if let payload = try? container.decode(WorkspaceRemovedPayload.self),
+                  payload.id != nil, payload.name != nil, payload.path != nil {
+            self = .workspaceRemoved(payload)
+        // Generic error/warning payloads - check AFTER specific payloads that also have 'message' field
         } else if let payload = try? container.decode(ErrorPayload.self), payload.message != nil {
             self = .error(payload)
         } else if let payload = try? container.decode(DeprecationWarningPayload.self), payload.message != nil {
@@ -242,6 +286,18 @@ enum AgentEventPayload: Codable {
         case .ptyPermission(let payload):
             try container.encode(payload)
         case .ptyState(let payload):
+            try container.encode(payload)
+        case .ptySpinner(let payload):
+            try container.encode(payload)
+        case .ptyPermissionResolved(let payload):
+            try container.encode(payload)
+        case .sessionIdResolved(let payload):
+            try container.encode(payload)
+        case .sessionIdFailed(let payload):
+            try container.encode(payload)
+        case .streamReadComplete(let payload):
+            try container.encode(payload)
+        case .workspaceRemoved(let payload):
             try container.encode(payload)
         case .unknown:
             try container.encodeNil()
@@ -676,6 +732,65 @@ struct SessionWatchPayload: Codable {
     }
 }
 
+/// Payload for session_id_resolved event
+/// Sent when a temporary session ID is resolved to the real Claude session ID
+/// This happens after user accepts trust_folder for a new workspace
+struct SessionIDResolvedPayload: Codable {
+    let temporaryId: String?      // The UUID generated by cdev (from session/start)
+    let realId: String?           // The actual session ID from Claude
+    let workspaceId: String?
+    let sessionFile: String?      // Path to .jsonl file
+
+    enum CodingKeys: String, CodingKey {
+        case temporaryId = "temporary_id"
+        case realId = "real_id"
+        case workspaceId = "workspace_id"
+        case sessionFile = "session_file"
+    }
+}
+
+/// Payload for session_id_failed event
+/// Sent when session ID resolution fails (e.g., user declined trust_folder)
+struct SessionIDFailedPayload: Codable {
+    let temporaryId: String?      // The temporary UUID that failed to resolve
+    let workspaceId: String?
+    let reason: String?           // Reason for failure (e.g., "trust_declined")
+    let message: String?          // Human-readable message
+
+    enum CodingKeys: String, CodingKey {
+        case temporaryId = "temporary_id"
+        case workspaceId = "workspace_id"
+        case reason
+        case message
+    }
+}
+
+/// Payload for stream_read_complete event
+/// Sent when the JSONL reader catches up to the current end of file
+struct StreamReadCompletePayload: Codable {
+    let sessionId: String?
+    let messagesEmitted: Int?    // Number of messages emitted in this read
+    let fileOffset: Int?         // Current file offset
+    let fileSize: Int?           // Total file size
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case messagesEmitted = "messages_emitted"
+        case fileOffset = "file_offset"
+        case fileSize = "file_size"
+    }
+}
+
+// MARK: - Workspace Event Payloads
+
+/// Payload for workspace_removed event
+/// Sent when a workspace is removed from the server, broadcast to all subscribers
+struct WorkspaceRemovedPayload: Codable {
+    let id: String?          // Workspace ID
+    let name: String?        // Workspace name
+    let path: String?        // Workspace path on server
+}
+
 // MARK: - Multi-Device Session Awareness Payloads
 
 /// Payload for session_joined event - emitted when another device joins a session we're viewing
@@ -915,5 +1030,51 @@ struct PTYStatePayload: Codable {
     enum CodingKeys: String, CodingKey {
         case state
         case previousState = "previous_state"
+    }
+}
+
+/// Payload for pty_spinner events
+/// Spinner/thinking status with cycling symbol and message
+/// Events are debounced at 150ms - only emitted when message changes or 150ms passes
+struct PTYSpinnerPayload: Codable {
+    let text: String?       // Full spinner text as displayed (e.g., "✶ Vibing…")
+    let symbol: String?     // Just the spinner symbol (✳, ✶, ✻, ✽, ✢, or ·)
+    let message: String?    // Just the message without symbol (e.g., "Vibing…")
+    let sessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case symbol
+        case message
+        case sessionId = "session_id"
+    }
+}
+
+/// Payload for pty_permission_resolved events
+/// Sent when another device responds to a permission prompt
+/// Used for multi-device sync - dismiss permission UI when another device responds
+struct PTYPermissionResolvedPayload: Codable {
+    let sessionId: String?      // Session where permission was resolved
+    let workspaceId: String?    // Workspace containing the session
+    let resolvedBy: String?     // Client ID of the device that responded
+    let input: String?          // The input that was sent: "1", "2", "3", "enter", "escape"
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case workspaceId = "workspace_id"
+        case resolvedBy = "resolved_by"
+        case input
+    }
+
+    /// Check if permission was approved (input "1" or "2" typically means yes/yes-all)
+    var wasApproved: Bool {
+        guard let input = input else { return false }
+        return input == "1" || input == "2" || input.lowercased() == "enter"
+    }
+
+    /// Check if permission was denied (input "3" or escape typically means no/cancel)
+    var wasDenied: Bool {
+        guard let input = input else { return false }
+        return input == "3" || input.lowercased() == "escape" || input.lowercased() == "n"
     }
 }

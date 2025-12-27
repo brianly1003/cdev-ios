@@ -49,14 +49,26 @@ enum WorkspaceOperation: Equatable {
     case starting
     case stopping
     case connecting
+    case removing
 
     var displayText: String {
         switch self {
         case .starting: return "Starting..."
         case .stopping: return "Stopping..."
         case .connecting: return "Connecting..."
+        case .removing: return "Removing..."
         }
     }
+}
+
+// MARK: - Workspace Removal
+
+/// Result of workspace removal operation
+enum WorkspaceRemovalResult {
+    case removed           // Workspace removed for everyone
+    case leftOnly          // Only left workspace (still exists for others)
+    case cancelled         // User cancelled
+    case needsSessionStop  // Session must be stopped first
 }
 
 // MARK: - Workspace Manager ViewModel
@@ -106,6 +118,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Show manual add sheet
     @Published var showManualAddSheet: Bool = false
+
+    /// Show removal confirmation sheet
+    @Published var showRemovalSheet: Bool = false
+
+    /// Workspace pending removal with its state
+    @Published var removalInfo: WorkspaceRemovalInfo?
 
     // MARK: - Dependencies
 
@@ -569,59 +587,228 @@ final class WorkspaceManagerViewModel: ObservableObject {
         AppLogger.log("[WorkspaceManager] Manually added workspace: \(workspace.name)")
     }
 
-    // MARK: - Remove Workspace
+    // MARK: - Remove Workspace (Multi-Device Aware)
 
-    /// Remove a workspace from the manager
-    /// This removes the workspace from the list but does not delete files
-    func removeWorkspace(_ workspace: RemoteWorkspace) async {
+    /// Prepare workspace removal - checks state and shows appropriate UI
+    /// Called when user initiates removal (swipe action or menu)
+    func prepareWorkspaceRemoval(_ workspace: RemoteWorkspace) async {
         // Debounce: Prevent multiple rapid taps
         guard loadingWorkspaceId == nil else {
-            AppLogger.log("[WorkspaceManager] Ignoring remove - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
+            AppLogger.log("[WorkspaceManager] Ignoring removal prep - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
             return
         }
 
         loadingWorkspaceId = workspace.id
-        defer {
-            loadingWorkspaceId = nil
-            currentOperation = nil
-        }
+        currentOperation = .removing
 
         do {
-            // Stop all sessions first if any are running
-            for session in workspace.sessions where session.status == .running {
-                try await managerService.stopSession(sessionId: session.id)
+            // Get removal info with viewer data
+            let info = try await managerService.getWorkspaceRemovalInfo(
+                workspace: workspace,
+                myClientId: webSocketService.clientId
+            )
+
+            loadingWorkspaceId = nil
+            currentOperation = nil
+
+            // Decision tree based on state
+            if info.hasActiveSession {
+                // Session running - must stop first
+                removalInfo = info
+                showRemovalSheet = true
+            } else if info.hasOtherViewers {
+                // Other viewers - show options (Leave Only / Remove Anyway / Cancel)
+                removalInfo = info
+                showRemovalSheet = true
+            } else {
+                // No conflicts - remove directly with simple confirmation
+                removalInfo = info
+                showRemovalSheet = true
             }
 
-            // Remove workspace from manager
-            try await managerService.removeWorkspace(workspace.id)
+        } catch {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+
+            // If we can't get status, fall back to simple removal flow
+            AppLogger.log("[WorkspaceManager] Failed to get removal info, using fallback: \(error.localizedDescription)", type: .warning)
+            removalInfo = WorkspaceRemovalInfo(
+                workspace: workspace,
+                hasActiveSession: workspace.hasActiveSession,
+                activeSessionId: workspace.activeSession?.id,
+                hasOtherViewers: false,
+                viewerCount: 0,
+                otherViewerIds: []
+            )
+            showRemovalSheet = true
+        }
+    }
+
+    /// Stop running session, then auto-proceed with workspace removal
+    func stopSessionThenRemove() async {
+        guard let info = removalInfo, let sessionId = info.activeSessionId else {
+            AppLogger.log("[WorkspaceManager] No session to stop", type: .warning)
+            return
+        }
+
+        showRemovalSheet = false
+        loadingWorkspaceId = info.workspace.id
+        currentOperation = .stopping
+
+        do {
+            // Step 1: Stop the session
+            try await managerService.stopSession(sessionId: sessionId)
+            AppLogger.log("[WorkspaceManager] Session stopped, proceeding with removal")
+
+            // Wait briefly for session to fully stop
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+
+            // Step 2: Auto-proceed with workspace removal
+            currentOperation = .removing
+            try await managerService.removeWorkspace(info.workspace.id)
 
             // Clear from current if it was selected
-            if currentWorkspaceId == workspace.id {
+            if currentWorkspaceId == info.workspace.id {
                 currentWorkspaceId = nil
             }
 
             // Clear unreachable status
-            managerService.clearUnreachableStatus(workspace.id)
+            managerService.clearUnreachableStatus(info.workspace.id)
 
-            AppLogger.log("[WorkspaceManager] Removed workspace: \(workspace.name)")
+            loadingWorkspaceId = nil
+            currentOperation = nil
+            removalInfo = nil
+
+            AppLogger.log("[WorkspaceManager] Workspace removed after stopping session: \(info.workspace.name)")
             Haptics.success()
-        } catch let error as WorkspaceManagerError {
-            self.error = error
-            self.showError = true
-            Haptics.error()
+
         } catch {
-            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            loadingWorkspaceId = nil
+            currentOperation = nil
+            self.error = .rpcError(code: -1, message: "Failed to stop session and remove: \(error.localizedDescription)")
             self.showError = true
             Haptics.error()
         }
     }
 
+    /// Leave workspace without removing it (for multi-device scenarios)
+    /// Unsubscribes from events and removes from local UI only
+    func leaveWorkspaceOnly() async {
+        guard let info = removalInfo else { return }
+
+        showRemovalSheet = false
+        loadingWorkspaceId = info.workspace.id
+        currentOperation = .removing
+
+        do {
+            try await managerService.leaveWorkspace(info.workspace.id)
+
+            // Clear from current if it was selected
+            if currentWorkspaceId == info.workspace.id {
+                currentWorkspaceId = nil
+            }
+
+            loadingWorkspaceId = nil
+            currentOperation = nil
+            removalInfo = nil
+
+            AppLogger.log("[WorkspaceManager] Left workspace (local only): \(info.workspace.name)")
+            Haptics.success()
+
+        } catch {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+            self.error = .rpcError(code: -1, message: "Failed to leave workspace: \(error.localizedDescription)")
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
+    /// Remove workspace for everyone (force remove)
+    func removeWorkspaceForEveryone() async {
+        guard let info = removalInfo else { return }
+
+        showRemovalSheet = false
+        loadingWorkspaceId = info.workspace.id
+        currentOperation = .removing
+
+        do {
+            // Stop all sessions first if any are running
+            if info.hasActiveSession, let sessionId = info.activeSessionId {
+                try await managerService.stopSession(sessionId: sessionId)
+            }
+
+            // Remove workspace from manager (server broadcasts to all clients)
+            try await managerService.removeWorkspace(info.workspace.id)
+
+            // Clear from current if it was selected
+            if currentWorkspaceId == info.workspace.id {
+                currentWorkspaceId = nil
+            }
+
+            // Clear unreachable status
+            managerService.clearUnreachableStatus(info.workspace.id)
+
+            loadingWorkspaceId = nil
+            currentOperation = nil
+            removalInfo = nil
+
+            AppLogger.log("[WorkspaceManager] Removed workspace for everyone: \(info.workspace.name)")
+            Haptics.success()
+
+        } catch {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+            self.error = .rpcError(code: -1, message: "Failed to remove workspace: \(error.localizedDescription)")
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
+    /// Cancel removal flow
+    func cancelRemoval() {
+        showRemovalSheet = false
+        removalInfo = nil
+        loadingWorkspaceId = nil
+        currentOperation = nil
+    }
+
+    /// Legacy removal method - now redirects to new multi-device aware flow
+    func removeWorkspace(_ workspace: RemoteWorkspace) async {
+        await prepareWorkspaceRemoval(workspace)
+    }
+
     // MARK: - Setup
 
-    /// Clear saved manager and show setup
+    /// Clear saved manager, disconnect, and show setup
+    /// Use this when no onDisconnect callback is available (e.g., root view)
     func resetManager() {
+        AppLogger.log("[WorkspaceManager] Resetting manager - disconnecting WebSocket")
+
+        // Disconnect WebSocket first
+        webSocketService.disconnect()
+
+        // Reset local state
+        resetManagerState()
+    }
+
+    /// Reset local manager state without disconnecting WebSocket
+    /// Use this after calling onDisconnect callback to clean up manager state
+    func resetManagerState() {
+        AppLogger.log("[WorkspaceManager] Resetting manager state")
+
+        // Clear workspace store
+        WorkspaceStore.shared.clearActive()
+
+        // Reset manager state
         managerStore.clear()
         managerService.reset()
+
+        // Update status
+        serverStatus = .disconnected
+        currentWorkspaceId = nil
+
+        // Show setup sheet
         showSetupSheet = true
     }
 

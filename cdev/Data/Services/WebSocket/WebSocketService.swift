@@ -79,6 +79,39 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     @Atomic private var _watchedSessionId: String?
     var watchedSessionId: String? { _watchedSessionId }
 
+    // MARK: - Pending Trust Folder Permission
+
+    /// Stores pending trust_folder permission that arrives before Dashboard is ready
+    /// Dashboard should check this on init and clear after handling
+    private var _pendingTrustFolderEvent: AgentEvent?
+    private let pendingTrustFolderLock = NSLock()
+
+    /// Get and clear pending trust_folder permission (atomic operation)
+    /// Returns the event if one was pending, nil otherwise
+    func consumePendingTrustFolderPermission() -> AgentEvent? {
+        pendingTrustFolderLock.withLock {
+            let event = _pendingTrustFolderEvent
+            _pendingTrustFolderEvent = nil
+            AppLogger.log("[WebSocket] consumePendingTrustFolderPermission - found=\(event != nil)")
+            return event
+        }
+    }
+
+    /// Store a pending trust_folder permission event
+    func setPendingTrustFolderPermission(_ event: AgentEvent) {
+        pendingTrustFolderLock.withLock {
+            _pendingTrustFolderEvent = event
+            AppLogger.log("[WebSocket] Stored pending trust_folder permission for Dashboard")
+        }
+    }
+
+    /// Check if there's a pending trust_folder permission (without consuming)
+    var hasPendingTrustFolderPermission: Bool {
+        pendingTrustFolderLock.withLock {
+            _pendingTrustFolderEvent != nil
+        }
+    }
+
     // MARK: - Streams (Broadcast Pattern)
 
     /// Thread-safe storage for multiple state stream subscribers
@@ -177,20 +210,29 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
     /// Finish all async stream continuations to allow subscribers to be released
     private func finishAllContinuations() {
-        // Finish state stream continuations
-        continuationsLock.withLock {
-            for continuation in stateStreamContinuations.values {
-                continuation.finish()
-            }
+        // Copy continuations out of locks first to avoid holding lock during finish()
+        // finish() can trigger code that might try to acquire the same lock
+
+        // State stream continuations
+        let stateContinuations = continuationsLock.withLock {
+            let copy = Array(stateStreamContinuations.values)
             stateStreamContinuations.removeAll()
+            return copy
+        }
+        AppLogger.webSocket("Finishing \(stateContinuations.count) state continuations")
+        for continuation in stateContinuations {
+            continuation.finish()
         }
 
-        // Finish event stream continuations
-        eventContinuationsLock.withLock {
-            for continuation in eventStreamContinuations.values {
-                continuation.finish()
-            }
+        // Event stream continuations
+        let eventContinuations = eventContinuationsLock.withLock {
+            let copy = Array(eventStreamContinuations.values)
             eventStreamContinuations.removeAll()
+            return copy
+        }
+        AppLogger.webSocket("Finishing \(eventContinuations.count) event continuations")
+        for continuation in eventContinuations {
+            continuation.finish()
         }
     }
 
@@ -594,19 +636,22 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     }
 
     func disconnect() {
-        AppLogger.webSocket("Disconnecting")
+        AppLogger.webSocket("Disconnecting - start")
         shouldAutoReconnect = false
         stopTimers()
         stopNetworkMonitor()
+        AppLogger.webSocket("Disconnecting - timers stopped")
 
         // Clear watched session state (both session and workspace IDs)
         _watchedSessionId = nil
         _watchedWorkspaceId = nil
 
         // Clear pending request tracking to prevent memory buildup
+        AppLogger.webSocket("Disconnecting - clearing pending requests")
         pendingRequestMethodsLock.withLock {
             pendingRequestMethods.removeAll()
         }
+        AppLogger.webSocket("Disconnecting - pending requests cleared")
 
         // Cancel pending RPC requests and clear client
         if let client = rpcClient {
@@ -621,15 +666,21 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // Clear connection info to prevent reconnection to old server
         connectionInfo = nil
 
+        AppLogger.webSocket("Disconnecting - cancelling websocket")
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         session?.invalidateAndCancel()
         session = nil
+        AppLogger.webSocket("Disconnecting - websocket cancelled")
 
         // Finish all stream continuations to release subscribers
+        AppLogger.webSocket("Disconnecting - finishing continuations")
         finishAllContinuations()
+        AppLogger.webSocket("Disconnecting - continuations finished")
 
+        AppLogger.webSocket("Disconnecting - updating state")
         updateState(.disconnected)
+        AppLogger.webSocket("Disconnecting - complete")
     }
 
     /// Trigger reconnection from stability checks (ping/heartbeat failures)
@@ -992,6 +1043,19 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                     continue
                 }
 
+                // Store trust_folder permission for Dashboard to pick up
+                // (Dashboard may not be listening yet when this arrives after session/start)
+                if event.type == .ptyPermission {
+                    if case .ptyPermission(let payload) = event.payload {
+                        AppLogger.log("[WebSocket] pty_permission event - type=\(payload.type?.rawValue ?? "nil"), options=\(payload.options?.count ?? 0)")
+                        if payload.type == .trustFolder {
+                            setPendingTrustFolderPermission(event)
+                        }
+                    } else {
+                        AppLogger.log("[WebSocket] pty_permission event - failed to decode payload")
+                    }
+                }
+
                 // Broadcast to ALL event stream subscribers (copy to Array for thread safety)
                 let eventContinuations = eventContinuationsLock.withLock {
                     Array(eventStreamContinuations.values)
@@ -1117,6 +1181,24 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 // Handle heartbeat events - don't forward to event stream
                 if event.type == .heartbeat {
                     return
+                }
+
+                // Store trust_folder permission for Dashboard to pick up
+                // (Dashboard may not be listening yet when this arrives after session/start)
+                if event.type == .ptyPermission {
+                    if case .ptyPermission(let payload) = event.payload {
+                        AppLogger.log("[WS] pty_permission event - type=\(payload.type?.rawValue ?? "nil"), options=\(payload.options?.count ?? 0)")
+                        if payload.type == .trustFolder {
+                            setPendingTrustFolderPermission(event)
+                        }
+                    } else {
+                        AppLogger.log("[WS] pty_permission event - failed to decode payload")
+                    }
+                }
+
+                // Debug logging for session lifecycle and stream events
+                if event.type == .sessionIdFailed || event.type == .sessionIdResolved || event.type == .streamReadComplete {
+                    AppLogger.log("[WS] Special event: \(event.type.rawValue), payload type: \(type(of: event.payload))")
                 }
 
                 AppLogger.log("[WS] Broadcasting event: \(event.type.rawValue) to \(eventStreamContinuations.count) subscribers")

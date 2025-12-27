@@ -10,6 +10,7 @@ struct LogListView: View {
     var isInputFocused: Bool = false  // Track if input field is focused (for auto-scroll)
     var isStreaming: Bool = false  // Whether Claude is actively thinking/streaming
     var streamingStartTime: Date?  // When streaming started (for duration display)
+    var spinnerMessage: String?  // Custom message from pty_spinner events
 
     // Pull-to-refresh for loading more messages
     var hasMoreMessages: Bool = false
@@ -27,7 +28,7 @@ struct LogListView: View {
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0, scrollRequest: ScrollDirection? = nil) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, spinnerMessage: String? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0, scrollRequest: ScrollDirection? = nil) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
@@ -35,6 +36,7 @@ struct LogListView: View {
         self.isInputFocused = isInputFocused
         self.isStreaming = isStreaming
         self.streamingStartTime = streamingStartTime
+        self.spinnerMessage = spinnerMessage
         self.hasMoreMessages = hasMoreMessages
         self.isLoadingMore = isLoadingMore
         self.onLoadMore = onLoadMore
@@ -102,6 +104,7 @@ struct LogListView: View {
             isInputFocused: isInputFocused,
             isStreaming: isStreaming,
             streamingStartTime: streamingStartTime,
+            spinnerMessage: spinnerMessage,
             hasMoreMessages: hasMoreMessages,
             isLoadingMore: isLoadingMore,
             onLoadMore: onLoadMore,
@@ -543,6 +546,7 @@ private struct ElementsScrollView: View {
     let isInputFocused: Bool
     let isStreaming: Bool
     let streamingStartTime: Date?
+    var spinnerMessage: String?  // Custom message from pty_spinner events
 
     // Pull-to-refresh for loading more messages
     let hasMoreMessages: Bool
@@ -701,7 +705,7 @@ private struct ElementsScrollView: View {
 
             // Streaming indicator - fixed at bottom
             if isStreaming {
-                StreamingIndicatorView(startTime: streamingStartTime)
+                StreamingIndicatorView(startTime: streamingStartTime, message: spinnerMessage)
                     .padding(.horizontal, Spacing.sm)
                     .padding(.bottom, Spacing.xs)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -952,6 +956,7 @@ private struct LogsScrollView: View {
 /// Similar to Claude CLI's "Concocting... (esc to interrupt · thought for 2s)"
 struct StreamingIndicatorView: View {
     let startTime: Date?
+    var message: String?  // Custom message from pty_spinner (e.g., "Vibing…")
 
     @State private var elapsedSeconds: Int = 0
     @State private var timer: Timer?
@@ -964,15 +969,20 @@ struct StreamingIndicatorView: View {
                 .foregroundStyle(ColorSystem.primary)
                 .symbolEffect(.pulse)
 
-            Text("Thinking...")
-                .font(Typography.terminalSmall)
-                .foregroundStyle(ColorSystem.textSecondary)
-
-            if elapsedSeconds > 0 {
-                Text("(\(elapsedSeconds)s)")
+            // Only show message text if we have one (no fallback to prevent flashing)
+            // Note: Claude's PTY spinner already includes timing (e.g., "thought for 2s")
+            if let message = message {
+                Text(message)
                     .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textTertiary)
+                    .foregroundStyle(ColorSystem.textSecondary)
             }
+
+            // Elapsed seconds removed - Claude's spinner text already shows timing
+            // if elapsedSeconds > 0 {
+            //     Text("(\(elapsedSeconds)s)")
+            //         .font(Typography.terminalSmall)
+            //         .foregroundStyle(ColorSystem.textTertiary)
+            // }
 
             Spacer()
         }
