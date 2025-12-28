@@ -378,6 +378,13 @@ struct DashboardView: View {
                     .padding(.bottom, 80) // Above action bar
             }
 
+            // Copy feedback toast - bottom position
+            VStack {
+                Spacer()
+                CopyToast()
+                    .padding(.bottom, 140) // Above session toast
+            }
+
             // ⌘K Quick Switcher overlay
             if quickSwitcherViewModel.isVisible {
                 QuickSwitcherView(
@@ -541,7 +548,6 @@ struct StatusBarView: View {
     var isWatchingSession: Bool = false
     var onWorkspaceTap: (() -> Void)?
 
-    @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = true
     @StateObject private var sessionAwareness = SessionAwarenessManager.shared
     @State private var isPulsing = false
     @State private var showCopiedToast = false
@@ -612,8 +618,8 @@ struct StatusBarView: View {
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)
 
-            // Session ID row (only when connected and enabled)
-            if showSessionId, connectionState.isConnected, let fullId = sessionId, !fullId.isEmpty {
+            // Session ID row (always visible when connected)
+            if connectionState.isConnected, let fullId = sessionId, !fullId.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "number")
                         .font(.system(size: 8))

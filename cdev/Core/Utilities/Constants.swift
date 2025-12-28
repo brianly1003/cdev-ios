@@ -58,10 +58,8 @@ enum Constants {
         static let lastConnectedServer = "last_connected_server"
         static let autoReconnect = "auto_reconnect"
         static let showTimestamps = "show_timestamps"
-        static let syntaxHighlighting = "syntax_highlighting"
         static let hapticFeedback = "haptic_feedback"
         static let theme = "app_theme"
-        static let showSessionId = "show_session_id"
         static let diffZoomScale = "diff_zoom_scale"
         static let selectedSessionId = "selected_session_id"
         static let useElementsView = "use_elements_view"  // Feature flag for Elements API UI

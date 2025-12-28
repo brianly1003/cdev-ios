@@ -88,6 +88,7 @@
 		C3E366081FEC92B0372561C1 /* FileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0556DECE53C5878722626932 /* FileRepository.swift */; };
 		C5EA0F5773CCAA9640072D81 /* VirtualizedCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2318BAE1D5EBDEAE0C00704A /* VirtualizedCodeView.swift */; };
 		C9F75B6B68914828B16B17EC /* CopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03AB217A32A048D89A525C16 /* CopyButton.swift */; };
+		2377050000BA49C686418380 /* CopyToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = A430287A3C18468DAAACD920 /* CopyToast.swift */; };
 		CB296021DCE6C2F996819DF6 /* LogListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D96DFC5ABC029B228D12994D /* LogListView.swift */; };
 		CDAA96C006C0FDCFF4DBDC44 /* FileRepositoryProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AEEC23C7C04889710D4AE6D /* FileRepositoryProtocol.swift */; };
 		D0BEEC760BD88BC66D158CC1 /* SessionStorageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E7BABB6049A94E961749D0 /* SessionStorageProtocol.swift */; };
@@ -145,6 +146,7 @@
 		00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingKeyboardDismissButton.swift; sourceTree = "<group>"; };
 		0333578E8E5D6052061F9550 /* AgentCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCommand.swift; sourceTree = "<group>"; };
 		03AB217A32A048D89A525C16 /* CopyButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyButton.swift; sourceTree = "<group>"; };
+		A430287A3C18468DAAACD920 /* CopyToast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyToast.swift; sourceTree = "<group>"; };
 		0506631280A96B48BA613082 /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
 		0556DECE53C5878722626932 /* FileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileRepository.swift; sourceTree = "<group>"; };
 		0BC2B655ED24284B28813991 /* Atomic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Atomic.swift; sourceTree = "<group>"; };
@@ -809,6 +811,7 @@
 				00A124FD203D063C07FE43FA /* FloatingKeyboardDismissButton.swift */,
 				39A9FE817775280D126DB8AA /* FloatingToolkit.swift */,
 				03AB217A32A048D89A525C16 /* CopyButton.swift */,
+				A430287A3C18468DAAACD920 /* CopyToast.swift */,
 				RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */,
 				0EF1DE3FDDAE59D2A2E9F467 /* InteractionBanner.swift */,
 				624A07A99501D68A8E6C516B /* SessionPickerView.swift */,
@@ -997,6 +1000,7 @@
 				B9A8CBA66BC0B19FB2FE9E5C /* FloatingKeyboardDismissButton.swift in Sources */,
 				534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */,
 				C9F75B6B68914828B16B17EC /* CopyButton.swift in Sources */,
+				2377050000BA49C686418380 /* CopyToast.swift in Sources */,
 				C364EFFA2EF9DD0C00954454 /* QuickSwitcherViewModel.swift in Sources */,
 				C364EFFB2EF9DD0C00954454 /* QuickSwitcherView.swift in Sources */,
 				C364EFFC2EF9DD0C00954454 /* KeyboardShortcutHandler.swift in Sources */,

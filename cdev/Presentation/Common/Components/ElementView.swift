@@ -135,9 +135,11 @@ struct ElementView: View {
                     if text.count > 50_000 {
                         Task { @MainActor in
                             UIPasteboard.general.string = text
+                            CopyToastManager.shared.show()
                         }
                     } else {
                         UIPasteboard.general.string = text
+                        CopyToastManager.shared.show()
                     }
                     Haptics.selection()
                 } label: {

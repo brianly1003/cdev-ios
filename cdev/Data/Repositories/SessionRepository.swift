@@ -68,11 +68,6 @@ final class SessionRepository: SessionStorageProtocol, SettingsStorageProtocol {
         set { defaults.set(newValue, forKey: Constants.UserDefaults.showTimestamps) }
     }
 
-    var syntaxHighlighting: Bool {
-        get { defaults.object(forKey: Constants.UserDefaults.syntaxHighlighting) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Constants.UserDefaults.syntaxHighlighting) }
-    }
-
     var hapticFeedback: Bool {
         get { defaults.object(forKey: Constants.UserDefaults.hapticFeedback) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Constants.UserDefaults.hapticFeedback) }

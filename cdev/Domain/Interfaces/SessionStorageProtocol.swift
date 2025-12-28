@@ -30,9 +30,6 @@ protocol SettingsStorageProtocol {
     /// Show timestamps in logs
     var showTimestamps: Bool { get set }
 
-    /// Syntax highlighting enabled
-    var syntaxHighlighting: Bool { get set }
-
     /// Haptic feedback enabled
     var hapticFeedback: Bool { get set }
 

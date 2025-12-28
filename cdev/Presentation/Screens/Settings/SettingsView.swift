@@ -7,8 +7,6 @@ struct SettingsView: View {
 
     // Display settings
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
-    @AppStorage(Constants.UserDefaults.syntaxHighlighting) private var syntaxHighlighting = true
-    @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = false
     @AppStorage("app.theme") private var selectedTheme: String = AppTheme.dark.rawValue
 
     // Behavior settings
@@ -44,18 +42,6 @@ struct SettingsView: View {
                                 icon: "clock",
                                 title: "Timestamps",
                                 isOn: $showTimestamps
-                            )
-
-                            SettingsToggleRow(
-                                icon: "paintbrush",
-                                title: "Syntax Highlighting",
-                                isOn: $syntaxHighlighting
-                            )
-
-                            SettingsToggleRow(
-                                icon: "number",
-                                title: "Session ID",
-                                isOn: $showSessionId
                             )
 
                             SettingsThemeRow(
