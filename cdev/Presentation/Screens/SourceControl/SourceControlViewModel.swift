@@ -18,6 +18,9 @@ final class SourceControlViewModel: ObservableObject {
     @Published var stagedExpanded: Bool = true
     @Published var changesExpanded: Bool = true
     @Published var isCommitting: Bool = false
+    @Published var branches: [WorkspaceGitBranchInfo] = []
+    @Published var isLoadingBranches: Bool = false
+    @Published var isCheckingOut: Bool = false
 
     // MARK: - Dependencies
 
@@ -370,6 +373,92 @@ final class SourceControlViewModel: ObservableObject {
             Haptics.error()
         }
         state.isLoading = false
+    }
+
+    // MARK: - Branch Operations
+
+    /// Fetch all branches
+    func fetchBranches() async {
+        guard let workspaceId = currentWorkspaceId else {
+            AppLogger.log("[SourceControl] Cannot fetch branches - no workspace ID", type: .warning)
+            return
+        }
+
+        isLoadingBranches = true
+        do {
+            let result = try await workspaceManager.getBranches(workspaceId: workspaceId)
+            branches = result.branches ?? []
+            AppLogger.log("[SourceControl] Fetched \(branches.count) branches, current: \(result.current ?? "nil")")
+        } catch {
+            AppLogger.error(error, context: "Fetch branches")
+            state.lastError = "Failed to load branches"
+        }
+        isLoadingBranches = false
+    }
+
+    /// Checkout a branch
+    func checkout(branch: String) async -> Bool {
+        guard let workspaceId = currentWorkspaceId else {
+            state.lastError = "No workspace selected"
+            Haptics.error()
+            return false
+        }
+
+        // Don't checkout if already on this branch
+        if state.currentBranch?.name == branch {
+            AppLogger.log("[SourceControl] Already on branch: \(branch)")
+            return true
+        }
+
+        isCheckingOut = true
+        do {
+            let result = try await workspaceManager.gitCheckout(workspaceId: workspaceId, branch: branch)
+            if result.isSuccess {
+                AppLogger.log("[SourceControl] Checked out branch: \(branch)")
+                await refresh()
+                Haptics.success()
+                isCheckingOut = false
+                return true
+            } else {
+                state.lastError = result.error ?? result.message ?? "Failed to checkout branch"
+                Haptics.error()
+            }
+        } catch {
+            state.lastError = error.localizedDescription
+            Haptics.error()
+        }
+        isCheckingOut = false
+        return false
+    }
+
+    /// Create and checkout a new branch
+    func createBranch(name: String) async -> Bool {
+        guard let workspaceId = currentWorkspaceId else {
+            state.lastError = "No workspace selected"
+            Haptics.error()
+            return false
+        }
+
+        isCheckingOut = true
+        do {
+            let result = try await workspaceManager.gitCheckout(workspaceId: workspaceId, branch: name, create: true)
+            if result.isSuccess {
+                AppLogger.log("[SourceControl] Created and checked out branch: \(name)")
+                await refresh()
+                await fetchBranches()
+                Haptics.success()
+                isCheckingOut = false
+                return true
+            } else {
+                state.lastError = result.error ?? result.message ?? "Failed to create branch"
+                Haptics.error()
+            }
+        } catch {
+            state.lastError = error.localizedDescription
+            Haptics.error()
+        }
+        isCheckingOut = false
+        return false
     }
 
     // MARK: - Local State Management

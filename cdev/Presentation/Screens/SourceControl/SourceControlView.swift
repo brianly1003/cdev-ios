@@ -17,6 +17,7 @@ struct SourceControlView: View {
     @State private var showCommitSheet = false
     @State private var showDiscardAlert = false
     @State private var fileToDiscard: GitFileEntry?
+    @State private var showBranchSwitcher = false
 
     // Responsive layout
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -43,6 +44,10 @@ struct SourceControlView: View {
             AppLogger.log("[SourceControlView] onRefresh completed, state.totalCount=\(viewModel.state.totalCount)")
         }
         // Note: Diff sheet is hoisted to DashboardView to avoid TabView recreation issues
+        .sheet(isPresented: $showBranchSwitcher) {
+            BranchSwitcherSheet(viewModel: viewModel)
+                .presentationDetents([.medium, .large])
+        }
         .alert("Discard Changes?", isPresented: $showDiscardAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Discard", role: .destructive) {
@@ -71,6 +76,7 @@ struct SourceControlView: View {
                     // Branch & Sync Header
                     BranchHeaderView(
                         branch: viewModel.state.currentBranch,
+                        onBranchTap: { showBranchSwitcher = true },
                         onPull: { Task { await viewModel.pull() } },
                         onPush: { Task { await viewModel.push() } },
                         onRefresh: { Task { await onRefresh() } }
@@ -182,6 +188,7 @@ struct SourceControlView: View {
             // Always show branch header with push/pull buttons
             BranchHeaderView(
                 branch: viewModel.state.currentBranch,
+                onBranchTap: { showBranchSwitcher = true },
                 onPull: { Task { await viewModel.pull() } },
                 onPush: { Task { await viewModel.push() } },
                 onRefresh: { Task { await onRefresh() } }
@@ -292,22 +299,33 @@ enum FileAction {
 
 struct BranchHeaderView: View {
     let branch: GitBranch?
+    var onBranchTap: (() -> Void)?
     let onPull: () -> Void
     let onPush: () -> Void
     let onRefresh: () -> Void
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
-            // Branch name with icon
-            HStack(spacing: Spacing.xs) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 12, weight: .semibold))
+            // Branch name with icon - tappable to switch branches
+            Button {
+                onBranchTap?()
+                Haptics.selection()
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 12, weight: .semibold))
 
-                Text(branch?.name ?? "main")
-                    .font(Typography.terminal)
-                    .lineLimit(1)
+                    Text(branch?.name ?? "main")
+                        .font(Typography.terminal)
+                        .lineLimit(1)
+
+                    // Chevron to indicate tappable
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .foregroundStyle(ColorSystem.textPrimary)
             }
-            .foregroundStyle(ColorSystem.textPrimary)
+            .buttonStyle(.plain)
 
             Spacer()
 
@@ -766,6 +784,267 @@ struct GitErrorBanner: View {
                 .frame(width: 3),
             alignment: .leading
         )
+    }
+}
+
+// MARK: - Branch Switcher Sheet
+
+struct BranchSwitcherSheet: View {
+    @ObservedObject var viewModel: SourceControlViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var searchText = ""
+    @State private var showCreateBranch = false
+    @State private var newBranchName = ""
+    @FocusState private var isSearchFocused: Bool
+    @FocusState private var isNewBranchFocused: Bool
+
+    private var filteredBranches: [WorkspaceGitBranchInfo] {
+        let allBranches = viewModel.branches
+        guard !searchText.isEmpty else { return allBranches }
+        return allBranches.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private var localBranches: [WorkspaceGitBranchInfo] {
+        filteredBranches.filter { $0.isRemote != true }
+    }
+
+    private var remoteBranches: [WorkspaceGitBranchInfo] {
+        filteredBranches.filter { $0.isRemote == true }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Search bar
+                searchBar
+
+                if viewModel.isLoadingBranches {
+                    loadingView
+                } else if filteredBranches.isEmpty {
+                    emptyView
+                } else {
+                    branchList
+                }
+            }
+            .background(ColorSystem.terminalBg)
+            .navigationTitle("Switch Branch")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showCreateBranch = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .alert("Create Branch", isPresented: $showCreateBranch) {
+                TextField("Branch name", text: $newBranchName)
+                    .focused($isNewBranchFocused)
+                Button("Cancel", role: .cancel) {
+                    newBranchName = ""
+                }
+                Button("Create") {
+                    Task {
+                        let success = await viewModel.createBranch(name: newBranchName)
+                        if success {
+                            newBranchName = ""
+                            dismiss()
+                        }
+                    }
+                }
+                .disabled(newBranchName.isEmpty)
+            } message: {
+                Text("Enter a name for the new branch")
+            }
+            .task {
+                await viewModel.fetchBranches()
+            }
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: Spacing.xs) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14))
+                .foregroundStyle(ColorSystem.textTertiary)
+
+            TextField("Search branches...", text: $searchText)
+                .font(Typography.terminal)
+                .focused($isSearchFocused)
+                .submitLabel(.search)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+            }
+        }
+        .padding(Spacing.sm)
+        .background(ColorSystem.terminalBgElevated)
+    }
+
+    private var loadingView: some View {
+        VStack(spacing: Spacing.md) {
+            Spacer()
+            ProgressView()
+                .scaleEffect(1.2)
+            Text("Loading branches...")
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textSecondary)
+            Spacer()
+        }
+    }
+
+    private var emptyView: some View {
+        VStack(spacing: Spacing.md) {
+            Spacer()
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 40))
+                .foregroundStyle(ColorSystem.textTertiary)
+            if searchText.isEmpty {
+                Text("No branches found")
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.textSecondary)
+            } else {
+                Text("No branches matching '\(searchText)'")
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.textSecondary)
+            }
+            Spacer()
+        }
+    }
+
+    private var branchList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                // Local branches section
+                if !localBranches.isEmpty {
+                    Section {
+                        ForEach(localBranches, id: \.name) { branch in
+                            BranchRow(
+                                branch: branch,
+                                isCurrent: viewModel.state.currentBranch?.name == branch.name,
+                                isLoading: viewModel.isCheckingOut
+                            ) {
+                                Task {
+                                    let success = await viewModel.checkout(branch: branch.name)
+                                    if success { dismiss() }
+                                }
+                            }
+                        }
+                    } header: {
+                        sectionHeader(title: "Local", count: localBranches.count)
+                    }
+                }
+
+                // Remote branches section
+                if !remoteBranches.isEmpty {
+                    Section {
+                        ForEach(remoteBranches, id: \.name) { branch in
+                            BranchRow(
+                                branch: branch,
+                                isCurrent: false,
+                                isLoading: viewModel.isCheckingOut
+                            ) {
+                                // For remote branches, extract the branch name without origin/
+                                let localName = branch.name.hasPrefix("origin/")
+                                    ? String(branch.name.dropFirst(7))
+                                    : branch.name
+                                Task {
+                                    let success = await viewModel.checkout(branch: localName)
+                                    if success { dismiss() }
+                                }
+                            }
+                        }
+                    } header: {
+                        sectionHeader(title: "Remote", count: remoteBranches.count)
+                    }
+                }
+
+                // Bottom padding
+                Color.clear.frame(height: Spacing.xl)
+            }
+        }
+    }
+
+    private func sectionHeader(title: String, count: Int) -> some View {
+        HStack(spacing: Spacing.xs) {
+            Text(title)
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textPrimary)
+
+            Text("\(count)")
+                .font(Typography.badge)
+                .foregroundStyle(ColorSystem.textSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(ColorSystem.textSecondary.opacity(0.15))
+                .clipShape(Capsule())
+
+            Spacer()
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
+        .background(ColorSystem.terminalBgElevated)
+    }
+}
+
+// MARK: - Branch Row
+
+struct BranchRow: View {
+    let branch: WorkspaceGitBranchInfo
+    let isCurrent: Bool
+    let isLoading: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: Spacing.sm) {
+                // Branch icon
+                Image(systemName: branch.isRemote == true ? "cloud" : "arrow.triangle.branch")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isCurrent ? ColorSystem.primary : ColorSystem.textTertiary)
+                    .frame(width: 20)
+
+                // Branch name
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(branch.name)
+                        .font(Typography.terminal)
+                        .foregroundStyle(isCurrent ? ColorSystem.primary : ColorSystem.textPrimary)
+                        .lineLimit(1)
+
+                    if let upstream = branch.upstream {
+                        Text(upstream)
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textQuaternary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                // Current indicator
+                if isCurrent {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ColorSystem.primary)
+                }
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.sm)
+            .background(isCurrent ? ColorSystem.primary.opacity(0.08) : Color.clear)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading || isCurrent)
     }
 }
 
