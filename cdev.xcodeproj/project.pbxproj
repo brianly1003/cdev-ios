@@ -46,6 +46,7 @@
 		6C6F7C67E0BC4F47839E0591 /* RemoteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB7C109681411CAEB15A6B /* RemoteWorkspace.swift */; };
 		6D21B1BE994D76A4F6E49E1C /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6BC02BC16D7CC3133DF7BDD /* AppLogger.swift */; };
 		6DB1DB22EEDA6625C75199D0 /* FileViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */; };
+		85DE74B300D44A80A1AF6F37 /* MarkdownRendererView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA90B1B2318D4B7AA8377914 /* MarkdownRendererView.swift */; };
 		741626DD143D7A5408A7B101 /* SourceControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 304293E381F5D0D9639FF77A /* SourceControlView.swift */; };
 		75785EFBBBDF43358ED0BB2C /* RepositoryDiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */; };
 		7888DE0AED2CA22883B815F8 /* AgentStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72443A5CFC09CD2A8BA045ED /* AgentStatus.swift */; };
@@ -228,6 +229,7 @@
 		C364F0012EF9DECD00954454 /* WorkspaceStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStateManager.swift; sourceTree = "<group>"; };
 		C364F0022EF9DECD00954454 /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
 		C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewerView.swift; sourceTree = "<group>"; };
+		AA90B1B2318D4B7AA8377914 /* MarkdownRendererView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRendererView.swift; sourceTree = "<group>"; };
 		CD8868ADD6804B4C22DFDE52 /* FileCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCache.swift; sourceTree = "<group>"; };
 		D2BED9190DAD30ECF6A37DD5 /* cdevApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = cdevApp.swift; sourceTree = "<group>"; };
 		D5B08DD1153C235C6628A231 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
@@ -763,6 +765,7 @@
 				A7C9ED053DB1AE2276F5542B /* DirectoryListView.swift */,
 				5191A017882EFCC44D809A17 /* FileRowView.swift */,
 				C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */,
+				AA90B1B2318D4B7AA8377914 /* MarkdownRendererView.swift */,
 				5569767C5ED23569B6250CA5 /* SearchBarView.swift */,
 				77725AD3E154E90C54FF406C /* SearchResultRow.swift */,
 				4CE58FD24232947F9BFE709D /* SearchResultsView.swift */,
@@ -990,6 +993,7 @@
 				CDAA96C006C0FDCFF4DBDC44 /* FileRepositoryProtocol.swift in Sources */,
 				8A5E9E41AEC55B56733F53D7 /* FileRowView.swift in Sources */,
 				6DB1DB22EEDA6625C75199D0 /* FileViewerView.swift in Sources */,
+				85DE74B300D44A80A1AF6F37 /* MarkdownRendererView.swift in Sources */,
 				B9A8CBA66BC0B19FB2FE9E5C /* FloatingKeyboardDismissButton.swift in Sources */,
 				534544BA465FC101DC65249A /* FloatingToolkit.swift in Sources */,
 				C9F75B6B68914828B16B17EC /* CopyButton.swift in Sources */,

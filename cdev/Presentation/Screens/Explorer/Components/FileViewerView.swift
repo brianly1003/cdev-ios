@@ -21,6 +21,7 @@ struct FileViewerView: View {
     @State private var formattedContent: String?
     @State private var showFormatError = false
     @State private var formatErrorMessage = ""
+    @State private var showRenderedMarkdown = false  // For markdown preview mode
 
     // Fullscreen state
     @State private var isFullscreen = false
@@ -55,7 +56,12 @@ struct FileViewerView: View {
                 if isLoading {
                     loadingView
                 } else if let displayContent = displayContent {
-                    codeEditorView(content: displayContent)
+                    // Show rendered markdown or code editor
+                    if showRenderedMarkdown {
+                        MarkdownRendererView(content: displayContent)
+                    } else {
+                        codeEditorView(content: displayContent)
+                    }
                 } else {
                     errorView
                 }
@@ -832,7 +838,17 @@ struct FileViewerView: View {
     private func toggleBeautify() {
         guard let ext = file.fileExtension?.lowercased() else { return }
 
-        // If already formatted, restore original
+        // Handle markdown - toggle rendered view
+        if ext == "md" || ext == "markdown" {
+            withAnimation(.easeOut(duration: 0.2)) {
+                showRenderedMarkdown.toggle()
+                isFormatted = showRenderedMarkdown
+            }
+            Haptics.light()
+            return
+        }
+
+        // Handle JSON - format the content
         if isFormatted {
             withAnimation(.easeOut(duration: 0.2)) {
                 isFormatted = false
@@ -842,19 +858,11 @@ struct FileViewerView: View {
             return
         }
 
-        // Format the content
         guard let content = content else { return }
 
         Task { @MainActor in
             do {
-                let formatted: String
-                if ext == "json" {
-                    formatted = try beautifyJSON(content)
-                } else if ext == "md" || ext == "markdown" {
-                    formatted = beautifyMarkdown(content)
-                } else {
-                    return
-                }
+                let formatted = try beautifyJSON(content)
 
                 withAnimation(.easeOut(duration: 0.2)) {
                     formattedContent = formatted
@@ -863,12 +871,10 @@ struct FileViewerView: View {
                 }
                 Haptics.success()
             } catch {
-                // Show error
                 formatErrorMessage = error.localizedDescription
                 showFormatError = true
                 Haptics.error()
 
-                // Auto-dismiss error after 3 seconds
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -893,37 +899,6 @@ struct FileViewerView: View {
         }
 
         return formatted
-    }
-
-    /// Beautify Markdown with normalized formatting
-    private func beautifyMarkdown(_ content: String) -> String {
-        let lines = content.components(separatedBy: "\n")
-        var formatted: [String] = []
-
-        for line in lines {
-            var processedLine = line
-
-            // Normalize headers (ensure space after #)
-            if processedLine.hasPrefix("#") {
-                let hashCount = processedLine.prefix(while: { $0 == "#" }).count
-                let remaining = processedLine.dropFirst(hashCount).trimmingCharacters(in: .whitespaces)
-                processedLine = String(repeating: "#", count: hashCount) + " " + remaining
-            }
-
-            // Normalize list items (ensure space after bullet/number)
-            if processedLine.trimmingCharacters(in: .whitespaces).hasPrefix("-") ||
-               processedLine.trimmingCharacters(in: .whitespaces).hasPrefix("*") ||
-               processedLine.trimmingCharacters(in: .whitespaces).hasPrefix("+") {
-                let trimmed = processedLine.trimmingCharacters(in: .whitespaces)
-                let bullet = String(trimmed.prefix(1))
-                let remaining = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-                processedLine = bullet + " " + remaining
-            }
-
-            formatted.append(processedLine)
-        }
-
-        return formatted.joined(separator: "\n")
     }
 
     private func languageColor(for ext: String) -> Color {
