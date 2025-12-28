@@ -9,17 +9,31 @@ import SwiftUI
 ///     .floatingKeyboardDismissButton()
 /// ```
 struct FloatingKeyboardDismissButton: View {
+    /// Dynamic offset to position button above input bar (accounts for multi-line expansion)
+    var inputBarHeight: CGFloat = 60
+    /// Prompt text to calculate dynamic height based on line count
+    var promptText: String = ""
+
     @State private var isKeyboardVisible = false
     @State private var keyboardTopScreen: CGFloat = 0  // Keyboard top in screen coordinates
+
+    /// Calculate extra offset based on prompt text lines
+    private var textHeightOffset: CGFloat {
+        let lineCount = promptText.components(separatedBy: "\n").count
+        let estimatedLines = max(lineCount, Int(ceil(Double(promptText.count) / 40)))  // ~40 chars per line
+        let extraLines = max(0, min(estimatedLines - 1, 6))  // Cap at 6 extra lines
+        return CGFloat(extraLines) * 16  // 16pt per extra line
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let globalFrame = geometry.frame(in: .global)
             // Convert keyboard screen position to local coordinates
             let keyboardTopLocal = keyboardTopScreen - globalFrame.minY
-            // Position button above keyboard (clamped to visible area)
-            let editTextOffset: CGFloat = 60
-            let buttonY = min(keyboardTopLocal - 30, geometry.size.height - 30) - editTextOffset
+            // Position button above the input bar
+            // Base gap of 20pt for single line, plus textHeightOffset for multi-line
+            let totalOffset = inputBarHeight + textHeightOffset + 20
+            let buttonY = min(keyboardTopLocal - 8, geometry.size.height - 30) - totalOffset
 
             if isKeyboardVisible && buttonY > 0 {
                 Button {
@@ -40,13 +54,12 @@ struct FloatingKeyboardDismissButton: View {
                     y: buttonY
                 )
                 .transition(.scale.combined(with: .opacity))
-                .onAppear {
-                    AppLogger.log("[FloatingKeyboardDismiss] Button position - globalFrame=\(globalFrame), keyboardTopLocal=\(keyboardTopLocal), buttonY=\(buttonY)")
-                }
             }
         }
         .ignoresSafeArea(.keyboard)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isKeyboardVisible)
+        .animation(.easeOut(duration: 0.15), value: inputBarHeight)
+        .animation(.easeOut(duration: 0.1), value: textHeightOffset)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                 keyboardTopScreen = frame.origin.y

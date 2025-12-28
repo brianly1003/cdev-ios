@@ -17,6 +17,7 @@ struct DashboardView: View {
     @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
     @State private var isTextFieldEditing: Bool = false  // Tracks actual editing state from UITextView
+    @State private var actionBarHeight: CGFloat = 60  // Tracks input bar height for keyboard button positioning
 
     // File viewer presentation (hoisted from ExplorerView to avoid TabView recreation issues)
     @State private var fileToDisplay: FileEntry?
@@ -215,6 +216,18 @@ struct DashboardView: View {
                                     isTextFieldEditing = focused
                                 }
                             )
+                            // Track action bar height for keyboard dismiss button positioning
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: ActionBarHeightKey.self,
+                                        value: geo.size.height
+                                    )
+                                }
+                            )
+                            .onPreferenceChange(ActionBarHeightKey.self) { height in
+                                actionBarHeight = height
+                            }
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -225,8 +238,11 @@ struct DashboardView: View {
                 .background(ColorSystem.terminalBg)
                 // Floating keyboard dismiss button - tracks keyboard and positions itself
                 .overlay(alignment: .trailing) {
-                    FloatingKeyboardDismissButton()
-                        .padding(.trailing, Spacing.md)
+                    FloatingKeyboardDismissButton(
+                        inputBarHeight: actionBarHeight,
+                        promptText: viewModel.promptText
+                    )
+                    .padding(.trailing, Spacing.md)
                 }
                 .animation(Animations.stateChange, value: viewModel.selectedTab)
                 // Dismiss keyboard and reset search when switching tabs
@@ -1257,5 +1273,15 @@ struct SessionAwarenessToast: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: notification)
         }
+    }
+}
+
+// MARK: - Preference Keys
+
+/// Preference key for tracking ActionBarView height
+private struct ActionBarHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 60
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
