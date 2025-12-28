@@ -869,6 +869,10 @@ struct FloatingToolkitButton: View {
         let baseAngle = calculateOptimalBaseAngle(for: currentPos, in: geometry)
         let angleSpread: Double = 180
 
+        // Determine if we need to reverse order to maintain consistent item positioning
+        // When on right side (baseAngle ~180°), reverse the sweep to keep items in same visual order
+        let shouldReverseOrder = nearRight
+
         if isInCorner && total > 2 {
             // Multi-layer corner layout: items radiate outward in layers
             // Layer 1 (closest): 2 buttons with narrow spread
@@ -889,7 +893,9 @@ struct FloatingToolkitButton: View {
             if layer1Count > 0 {
                 let step = layer1Count > 1 ? layer1Spread / Double(layer1Count - 1) : 0
                 for i in 0..<layer1Count {
-                    let angle = baseAngle - layer1Spread / 2 + step * Double(i)
+                    // Reverse index when on right side to maintain consistent visual order
+                    let idx = shouldReverseOrder ? (layer1Count - 1 - i) : i
+                    let angle = baseAngle - layer1Spread / 2 + step * Double(idx)
                     let radians = angle * .pi / 180
                     let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer1Radius
                     let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer1Radius
@@ -905,7 +911,8 @@ struct FloatingToolkitButton: View {
             if layer2Count > 0 {
                 let step = layer2Count > 1 ? layer2Spread / Double(layer2Count - 1) : 0
                 for i in 0..<layer2Count {
-                    let angle = baseAngle - layer2Spread / 2 + step * Double(i)
+                    let idx = shouldReverseOrder ? (layer2Count - 1 - i) : i
+                    let angle = baseAngle - layer2Spread / 2 + step * Double(idx)
                     let radians = angle * .pi / 180
                     let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer2Radius
                     let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer2Radius
@@ -921,7 +928,8 @@ struct FloatingToolkitButton: View {
             if layer3Count > 0 {
                 let step = layer3Count > 1 ? layer3Spread / Double(layer3Count - 1) : 0
                 for i in 0..<layer3Count {
-                    let angle = baseAngle - layer3Spread / 2 + step * Double(i)
+                    let idx = shouldReverseOrder ? (layer3Count - 1 - i) : i
+                    let angle = baseAngle - layer3Spread / 2 + step * Double(idx)
                     let radians = angle * .pi / 180
                     let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer3Radius
                     let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer3Radius
@@ -948,7 +956,9 @@ struct FloatingToolkitButton: View {
                 guard count > 0 else { return }
                 let step = count > 1 ? angleSpread / Double(count - 1) : 0
                 for i in 0..<count {
-                    let angle = baseAngle - angleSpread / 2 + step * Double(i)
+                    // Reverse index when on right side to maintain consistent visual order
+                    let idx = shouldReverseOrder ? (count - 1 - i) : i
+                    let angle = baseAngle - angleSpread / 2 + step * Double(idx)
                     let radians = angle * .pi / 180
                     let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * radius
                     let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * radius

@@ -127,6 +127,57 @@ struct ElementView: View {
             RoundedRectangle(cornerRadius: 4)
                 .stroke(isCurrentMatch ? ColorSystem.warning : .clear, lineWidth: 2)
         )
+        // Context menu for copy functionality
+        .contextMenu {
+            if let text = copyableText, !text.isEmpty {
+                Button {
+                    // Use async for large content to avoid blocking main thread
+                    if text.count > 50_000 {
+                        Task { @MainActor in
+                            UIPasteboard.general.string = text
+                        }
+                    } else {
+                        UIPasteboard.general.string = text
+                    }
+                    Haptics.selection()
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    /// Text content for copy functionality
+    /// Returns the relevant text based on element type
+    private var copyableText: String? {
+        switch element.content {
+        case .userInput(let content):
+            return content.text
+        case .assistantText(let content):
+            return content.text
+        case .toolCall(let content):
+            let params = content.params.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
+            return "\(content.tool)(\(params))"
+        case .toolResult(let content):
+            return content.fullContent
+        case .thinking(let content):
+            return content.text
+        case .diff(let content):
+            return content.hunks.flatMap { $0.lines.map { $0.content } }.joined(separator: "\n")
+        case .editDiff(let content):
+            return content.lines.map { line in
+                let prefix = line.type == .added ? "+" : (line.type == .removed ? "-" : " ")
+                return "\(prefix) \(line.content)"
+            }.joined(separator: "\n")
+        case .interrupted(let content):
+            return content.message
+        case .contextCompaction(let content):
+            return content.summary
+        case .task(let content):
+            return content.description
+        case .taskGroup(let content):
+            return content.tasks.map { $0.description }.joined(separator: "\n")
+        }
     }
 
     /// Background color for search matches

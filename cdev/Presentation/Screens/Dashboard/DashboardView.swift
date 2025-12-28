@@ -37,10 +37,10 @@ struct DashboardView: View {
     /// See PredefinedTool enum for available tools, or use .addCustom() for new ones
     private var toolkitItems: [ToolkitItem] {
         var builder = ToolkitBuilder()
-            .add(.debugLogs { showDebugLogs = true })
+            .add(.settings { showSettings = true })
             .add(.refresh { Task { await viewModel.refreshStatus() } })
             .add(.clearLogs { Task { await viewModel.clearLogs() } })
-            .add(.settings { showSettings = true })
+            .add(.debugLogs { showDebugLogs = true })
 
         // Add reconnect button when disconnected/failed
         if !viewModel.connectionState.isConnected {

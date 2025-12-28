@@ -556,28 +556,7 @@ private struct CollapsibleCodeBlock: View {
     }
 }
 
-private struct CopiedToast: View {
-    var body: some View {
-        HStack(spacing: Spacing.xs) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(ColorSystem.success)
-            Text("Copied to clipboard")
-                .font(Typography.bannerBody)
-        }
-        .foregroundStyle(ColorSystem.textPrimary)
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.sm)
-        .background(ColorSystem.terminalBgElevated)
-        .overlay(
-            Capsule()
-                .stroke(ColorSystem.primary.opacity(0.3), lineWidth: 1)
-        )
-        .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 4)
-        .shadow(color: ColorSystem.primary.opacity(0.2), radius: 8, x: 0, y: 2)
-        .padding(.bottom, Spacing.md)
-    }
-}
+// CopiedToast is provided by CopyButton.swift component
 
 /// Copy cURL button with menu for different formats
 private struct CopyCurlButton: View {

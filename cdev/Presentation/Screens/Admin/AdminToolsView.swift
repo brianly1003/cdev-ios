@@ -21,6 +21,7 @@ struct AdminToolsView: View {
     @State private var searchText = ""
     @State private var selectedLog: DebugLogEntry?
     @State private var loadingLogId: UUID?
+    @State private var showCopiedToast = false
 
     /// Filtered logs based on category and search
     private var filteredLogs: [DebugLogEntry] {
@@ -105,6 +106,14 @@ struct AdminToolsView: View {
             }
             .background(ColorSystem.terminalBg)
             .floatingKeyboardDismissButton()
+            .overlay(alignment: .bottom) {
+                if showCopiedToast {
+                    CopiedToast()
+                        .padding(.bottom, Spacing.xl)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(Animations.stateChange, value: showCopiedToast)
             .navigationTitle("Debug Logs")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -160,6 +169,16 @@ struct AdminToolsView: View {
         let text = logStore.exportLogs(category: selectedCategory)
         UIPasteboard.general.string = text
         Haptics.success()
+
+        withAnimation {
+            showCopiedToast = true
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation {
+                showCopiedToast = false
+            }
+        }
     }
 
     /// Generate issue report and show share sheet
