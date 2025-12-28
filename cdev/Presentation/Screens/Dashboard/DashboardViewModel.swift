@@ -1947,6 +1947,10 @@ final class DashboardViewModel: ObservableObject {
                         spinnerMessage = nil  // Clear spinner message when idle
                     case .thinking:
                         claudeState = .running
+                        // Set fallback spinner message for LIVE mode (no pty_spinner events)
+                        if spinnerMessage == nil {
+                            spinnerMessage = "Thinking... (press ⏹ to stop)"
+                        }
                     case .permission, .question:
                         claudeState = .waiting
                     case .error:
