@@ -322,7 +322,8 @@ final class SourceControlViewModel: ObservableObject {
     // MARK: - Sync Operations
 
     /// Push to remote
-    func push() async {
+    /// - Parameter setUpstream: If true, sets upstream for new branches. Auto-detected if nil.
+    func push(setUpstream: Bool? = nil) async {
         guard let workspaceId = currentWorkspaceId else {
             state.lastError = "No workspace selected"
             Haptics.error()
@@ -331,10 +332,21 @@ final class SourceControlViewModel: ObservableObject {
 
         state.isLoading = true
         do {
-            let response = try await workspaceManager.gitPush(workspaceId: workspaceId)
+            // Auto-detect if we need to set upstream:
+            // If branch has no upstream tracking, we need --set-upstream
+            let needsUpstream = setUpstream ?? (state.currentBranch?.upstream == nil)
+
+            let response = try await workspaceManager.gitPush(
+                workspaceId: workspaceId,
+                force: false,
+                setUpstream: needsUpstream
+            )
             if response.isSuccess {
                 await refresh()
                 Haptics.success()
+                if needsUpstream {
+                    AppLogger.log("[SourceControl] Pushed with --set-upstream for new branch")
+                }
             } else {
                 state.lastError = response.message ?? "Push failed"
                 Haptics.error()
