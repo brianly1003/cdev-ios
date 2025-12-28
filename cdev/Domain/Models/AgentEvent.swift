@@ -35,6 +35,7 @@ enum AgentEventType: String, Codable {
     // Session lifecycle events
     case sessionIdResolved = "session_id_resolved"  // Temp session ID resolved to real ID
     case sessionIdFailed = "session_id_failed"      // Session ID resolution failed (e.g., user declined trust)
+    case sessionStopped = "session_stopped"         // Session stopped (broadcast to all clients)
 
     // Stream events
     case streamReadComplete = "stream_read_complete"  // JSONL reader caught up to end of file
@@ -149,6 +150,7 @@ enum AgentEventPayload: Codable {
     // Session lifecycle payloads
     case sessionIdResolved(SessionIDResolvedPayload)  // Temp ID resolved to real ID
     case sessionIdFailed(SessionIDFailedPayload)      // Session ID resolution failed
+    case sessionStopped(SessionStoppedPayload)        // Session stopped (broadcast)
 
     // Stream payloads
     case streamReadComplete(StreamReadCompletePayload)  // JSONL reader caught up to EOF
@@ -226,6 +228,10 @@ enum AgentEventPayload: Codable {
             self = .sessionIdResolved(payload)
         } else if let payload = try? container.decode(SessionIDFailedPayload.self), payload.temporaryId != nil {
             self = .sessionIdFailed(payload)
+        // SessionStoppedPayload - check by unique field combination (session_id + workspace_id, no temporary_id)
+        } else if let payload = try? container.decode(SessionStoppedPayload.self),
+                  payload.sessionId != nil, payload.workspaceId != nil {
+            self = .sessionStopped(payload)
         // Workspace payloads - check by unique field combination (id + name + path)
         } else if let payload = try? container.decode(WorkspaceRemovedPayload.self),
                   payload.id != nil, payload.name != nil, payload.path != nil {
@@ -294,6 +300,8 @@ enum AgentEventPayload: Codable {
         case .sessionIdResolved(let payload):
             try container.encode(payload)
         case .sessionIdFailed(let payload):
+            try container.encode(payload)
+        case .sessionStopped(let payload):
             try container.encode(payload)
         case .streamReadComplete(let payload):
             try container.encode(payload)
@@ -762,6 +770,21 @@ struct SessionIDFailedPayload: Codable {
         case workspaceId = "workspace_id"
         case reason
         case message
+    }
+}
+
+/// Payload for session_stopped event
+/// Broadcast to ALL connected clients when a session is stopped
+/// Enables multi-device sync - other devices can update UI from "Active" to "Idle"
+struct SessionStoppedPayload: Codable {
+    let sessionId: String?        // The session that was stopped
+    let workspaceId: String?      // The workspace containing the session
+    let stoppedBy: String?        // Client ID of the device that stopped it (optional)
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case workspaceId = "workspace_id"
+        case stoppedBy = "stopped_by"
     }
 }
 

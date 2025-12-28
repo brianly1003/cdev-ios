@@ -11,6 +11,9 @@ struct cdevApp: App {
     /// Tracks if user is on Dashboard (persisted for app lifecycle)
     @AppStorage("cdev.userOnDashboard") private var userOnDashboard: Bool = false
 
+    /// App theme preference (Light, Dark, System)
+    @AppStorage("app.theme") private var selectedTheme: String = "dark"
+
     init() {
         // Configure WorkspaceManagerService with WebSocket connection
         // This must happen early so the service can make JSON-RPC calls
@@ -52,11 +55,10 @@ struct cdevApp: App {
     }
 
     private var colorScheme: ColorScheme? {
-        let theme = DependencyContainer.shared.sessionRepository.theme
-        switch theme {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
+        switch selectedTheme {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil  // system
         }
     }
 

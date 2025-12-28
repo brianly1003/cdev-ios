@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.syntaxHighlighting) private var syntaxHighlighting = true
     @AppStorage(Constants.UserDefaults.showSessionId) private var showSessionId = false
+    @AppStorage("app.theme") private var selectedTheme: String = AppTheme.dark.rawValue
 
     // Behavior settings
     @AppStorage(Constants.UserDefaults.hapticFeedback) private var hapticFeedback = true
@@ -18,8 +19,13 @@ struct SettingsView: View {
     @State private var showDisconnectConfirm = false
     @State private var showClearDataConfirm = false
     @State private var showWorkspaceManager = false
+    @State private var showThemePicker = false
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    private var currentTheme: AppTheme {
+        AppTheme(rawValue: selectedTheme) ?? .dark
+    }
 
     var body: some View {
         NavigationStack {
@@ -52,11 +58,9 @@ struct SettingsView: View {
                                 isOn: $showSessionId
                             )
 
-                            SettingsNavRow(
-                                icon: "moon.stars",
-                                title: "Theme",
-                                value: "Dark",
-                                disabled: true
+                            SettingsThemeRow(
+                                currentTheme: currentTheme,
+                                onTap: { showThemePicker = true }
                             )
                         }
 
@@ -74,6 +78,9 @@ struct SettingsView: View {
                                 isOn: $autoReconnect
                             )
                         }
+
+                        // Voice Input Section (Beta)
+                        VoiceInputSettingsSection()
 
                         // Toolkit Section (Coming soon)
                         SettingsSection(title: "Toolkit", icon: "wrench.and.screwdriver") {
@@ -188,6 +195,20 @@ struct SettingsView: View {
                 )
                     .responsiveSheet()
             }
+            .sheet(isPresented: $showThemePicker) {
+                ThemePickerView(
+                    selectedTheme: currentTheme,
+                    onSelect: { theme in
+                        selectedTheme = theme.rawValue
+                        showThemePicker = false
+                        Haptics.selection()
+                    }
+                )
+                .presentationDetents([.height(280)])
+                .preferredColorScheme(currentTheme.colorScheme)
+            }
+            // Sheets need their own preferredColorScheme (don't inherit from parent)
+            .preferredColorScheme(currentTheme.colorScheme)
         }
     }
 }
@@ -438,13 +459,13 @@ private struct BrandedHeader: View {
 
             // Credits - compact inline
             HStack(spacing: Spacing.xxs) {
-                Text("Made with")
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textQuaternary)
-
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 8))
-                    .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.21)) // Brand orange
+//                Text("Made with")
+//                    .font(Typography.terminalSmall)
+//                    .foregroundStyle(ColorSystem.textQuaternary)
+//
+//                Image(systemName: "heart.fill")
+//                    .font(.system(size: 8))
+//                    .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.21)) // Brand orange
 
                 Text("by Brian Ly")
                     .font(Typography.terminalSmall)
@@ -454,6 +475,371 @@ private struct BrandedHeader: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, Spacing.md)
         .padding(.bottom, Spacing.xs)
+    }
+}
+
+// MARK: - Settings Theme Row
+
+private struct SettingsThemeRow: View {
+    let currentTheme: AppTheme
+    let onTap: () -> Void
+
+    var body: some View {
+        Button {
+            onTap()
+            Haptics.selection()
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: currentTheme.icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.primary)
+                    .frame(width: 20)
+
+                Text("Color Mode")
+                    .font(Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text(currentTheme.displayName)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                }
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Theme Picker View
+
+private struct ThemePickerView: View {
+    let selectedTheme: AppTheme
+    let onSelect: (AppTheme) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ForEach(AppTheme.allCases) { theme in
+                    Button {
+                        onSelect(theme)
+                    } label: {
+                        HStack(spacing: layout.contentSpacing) {
+                            // Theme icon with color
+                            Image(systemName: theme.icon)
+                                .font(.system(size: 20))
+                                .foregroundStyle(iconColor(for: theme))
+                                .frame(width: 32)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(theme.displayName)
+                                    .font(layout.bodyFont)
+                                    .foregroundStyle(ColorSystem.textPrimary)
+
+                                Text(themeDescription(for: theme))
+                                    .font(layout.captionFont)
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                            }
+
+                            Spacer()
+
+                            if theme == selectedTheme {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(ColorSystem.primary)
+                            } else {
+                                Circle()
+                                    .strokeBorder(ColorSystem.textQuaternary, lineWidth: 1.5)
+                                    .frame(width: 20, height: 20)
+                            }
+                        }
+                        .padding(.horizontal, layout.standardPadding)
+                        .padding(.vertical, layout.smallPadding + 4)
+                        .contentShape(Rectangle())  // Make entire row tappable
+                        .background(
+                            theme == selectedTheme
+                                ? ColorSystem.primary.opacity(0.08)
+                                : Color.clear
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    if theme != AppTheme.allCases.last {
+                        Divider()
+                            .background(ColorSystem.terminalBgHighlight)
+                            .padding(.leading, 56)
+                    }
+                }
+            }
+            .background(ColorSystem.terminalBgElevated)
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.top, layout.standardPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(ColorSystem.terminalBg)
+            .navigationTitle("Color Mode")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func iconColor(for theme: AppTheme) -> Color {
+        switch theme {
+        case .system: return ColorSystem.primary
+        case .light: return Color.orange
+        case .dark: return Color.indigo
+        }
+    }
+
+    private func themeDescription(for theme: AppTheme) -> String {
+        switch theme {
+        case .system: return "Follow iOS system setting"
+        case .light: return "Always use light appearance"
+        case .dark: return "Always use dark appearance"
+        }
+    }
+}
+
+// MARK: - Voice Input Settings Section
+
+private struct VoiceInputSettingsSection: View {
+    @StateObject private var settings = VoiceInputSettingsStore.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            // Section Header with Beta badge
+            HStack(spacing: 4) {
+                Image(systemName: "mic")
+                    .font(.system(size: 10))
+                Text("VOICE INPUT")
+                    .font(Typography.badge)
+
+                // Beta badge
+                Text("BETA")
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .foregroundStyle(ColorSystem.warning)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(ColorSystem.warning.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .foregroundStyle(ColorSystem.textTertiary)
+            .padding(.horizontal, Spacing.xs)
+
+            // Section Content
+            VStack(spacing: 0.5) {
+                // Enable Voice Input
+                VoiceInputToggleRow(
+                    icon: "mic.fill",
+                    title: "Enable Voice Input",
+                    subtitle: "Add microphone button to chat",
+                    isOn: Binding(
+                        get: { settings.isEnabled },
+                        set: { settings.isEnabled = $0 }
+                    )
+                )
+
+                // Auto-send on Silence (only visible when enabled)
+                if settings.isEnabled {
+                    VoiceInputToggleRow(
+                        icon: "bolt.fill",
+                        title: "Auto-send on Silence",
+                        subtitle: "Send message after 1.5s pause",
+                        isOn: Binding(
+                            get: { settings.autoSendOnSilence },
+                            set: { settings.autoSendOnSilence = $0 }
+                        )
+                    )
+
+                    // Language selector
+                    VoiceInputLanguageRow(
+                        currentLanguage: settings.selectedLanguage
+                    ) { language in
+                        settings.selectedLanguage = language
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+        }
+        .animation(.easeInOut(duration: 0.2), value: settings.isEnabled)
+    }
+}
+
+// MARK: - Voice Input Toggle Row
+
+private struct VoiceInputToggleRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(ColorSystem.primary)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text(subtitle)
+                    .font(Typography.caption2)
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .tint(ColorSystem.primary)
+                .scaleEffect(0.85)
+                .onChange(of: isOn) { _, _ in
+                    Haptics.selection()
+                }
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
+        .background(ColorSystem.terminalBgElevated)
+    }
+}
+
+// MARK: - Voice Input Language Row
+
+private struct VoiceInputLanguageRow: View {
+    let currentLanguage: VoiceInputLanguage
+    let onSelect: (VoiceInputLanguage) -> Void
+
+    @State private var showPicker = false
+
+    var body: some View {
+        Button {
+            showPicker = true
+            Haptics.selection()
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "globe")
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.primary)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Language")
+                        .font(Typography.body)
+                        .foregroundStyle(ColorSystem.textPrimary)
+
+                    Text("Speech recognition language")
+                        .font(Typography.caption2)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text(currentLanguage.flag)
+                        .font(.system(size: 16))
+
+                    Text(currentLanguage.name)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                }
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showPicker) {
+            VoiceLanguagePickerView(
+                selectedLanguage: currentLanguage,
+                onSelect: { language in
+                    onSelect(language)
+                    showPicker = false
+                }
+            )
+            .presentationDetents([.medium])
+        }
+    }
+}
+
+// MARK: - Voice Language Picker View
+
+private struct VoiceLanguagePickerView: View {
+    let selectedLanguage: VoiceInputLanguage
+    let onSelect: (VoiceInputLanguage) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        NavigationStack {
+            List(VoiceInputLanguage.all) { language in
+                Button {
+                    onSelect(language)
+                    Haptics.selection()
+                } label: {
+                    HStack(spacing: layout.contentSpacing) {
+                        Text(language.flag)
+                            .font(.system(size: 24))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(language.name)
+                                .font(layout.bodyFont)
+                                .foregroundStyle(ColorSystem.textPrimary)
+
+                            Text(language.nativeName)
+                                .font(layout.captionFont)
+                                .foregroundStyle(ColorSystem.textTertiary)
+                        }
+
+                        Spacer()
+
+                        if language.id == selectedLanguage.id {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: layout.iconMedium, weight: .semibold))
+                                .foregroundStyle(ColorSystem.primary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+            .navigationTitle("Voice Language")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 

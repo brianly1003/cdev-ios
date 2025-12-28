@@ -125,6 +125,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Workspace pending removal with its state
     @Published var removalInfo: WorkspaceRemovalInfo?
 
+    /// Show session stop warning sheet (when other devices are viewing)
+    @Published var showSessionStopSheet: Bool = false
+
+    /// Session pending stop with viewer info
+    @Published var sessionStopInfo: SessionStopInfo?
+
     // MARK: - Dependencies
 
     private let managerService: WorkspaceManagerService
@@ -436,8 +442,57 @@ final class WorkspaceManagerViewModel: ObservableObject {
         }
     }
 
-    /// Stop all sessions for a workspace
-    func stopWorkspace(_ workspace: RemoteWorkspace) async {
+    /// Prepare to stop sessions for a workspace - checks for other viewers first
+    /// Shows warning if other devices are viewing the session
+    func prepareStopWorkspace(_ workspace: RemoteWorkspace) async {
+        // Debounce: Prevent multiple rapid taps
+        guard loadingWorkspaceId == nil else {
+            AppLogger.log("[WorkspaceManager] Ignoring stop prep - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
+            return
+        }
+
+        loadingWorkspaceId = workspace.id
+        currentOperation = .stopping
+
+        // Check for other viewers across all running sessions
+        let myClientId = webSocketService.clientId
+        var hasOtherViewers = false
+        var totalOtherViewerCount = 0
+        var otherViewerIds: [String] = []
+
+        for session in workspace.sessions where session.status == .running {
+            if let viewers = session.viewers {
+                for viewerId in viewers where viewerId != myClientId {
+                    hasOtherViewers = true
+                    totalOtherViewerCount += 1
+                    if !otherViewerIds.contains(viewerId) {
+                        otherViewerIds.append(viewerId)
+                    }
+                }
+            }
+        }
+
+        loadingWorkspaceId = nil
+        currentOperation = nil
+
+        if hasOtherViewers {
+            // Show warning dialog
+            sessionStopInfo = SessionStopInfo(
+                workspace: workspace,
+                otherViewerCount: totalOtherViewerCount,
+                otherViewerIds: otherViewerIds
+            )
+            showSessionStopSheet = true
+            AppLogger.log("[WorkspaceManager] Stop requested for workspace with \(totalOtherViewerCount) other viewer(s)")
+        } else {
+            // No other viewers - stop directly
+            await stopWorkspaceConfirmed(workspace)
+        }
+    }
+
+    /// Stop all sessions for a workspace (confirmed action)
+    /// Called directly when no other viewers, or after user confirms warning
+    func stopWorkspaceConfirmed(_ workspace: RemoteWorkspace) async {
         // Debounce: Prevent multiple rapid taps
         guard loadingWorkspaceId == nil else {
             AppLogger.log("[WorkspaceManager] Ignoring stop - already loading workspace: \(loadingWorkspaceId ?? "unknown")")
@@ -468,6 +523,25 @@ final class WorkspaceManagerViewModel: ObservableObject {
             self.showError = true
             Haptics.error()
         }
+    }
+
+    /// Legacy stop method - now checks for viewers first
+    func stopWorkspace(_ workspace: RemoteWorkspace) async {
+        await prepareStopWorkspace(workspace)
+    }
+
+    /// Confirm stop after warning (user acknowledged other viewers)
+    func confirmStopSession() async {
+        guard let info = sessionStopInfo else { return }
+        showSessionStopSheet = false
+        sessionStopInfo = nil
+        await stopWorkspaceConfirmed(info.workspace)
+    }
+
+    /// Cancel stop session flow
+    func cancelStopSession() {
+        showSessionStopSheet = false
+        sessionStopInfo = nil
     }
 
     /// Connect to a workspace (start session if needed, then switch to it)

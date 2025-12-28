@@ -2240,6 +2240,39 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] stream_read_complete payload extraction FAILED - actual: \(event.payload)")
             }
 
+        case .sessionStopped:
+            // Session was stopped by another device - sync UI state
+            if case .sessionStopped(let payload) = event.payload {
+                let stoppedSessionId = payload.sessionId ?? ""
+                let stoppedWorkspaceId = payload.workspaceId ?? ""
+                let stoppedBy = payload.stoppedBy ?? "unknown"
+                AppLogger.log("[Dashboard] Session stopped broadcast: sessionId=\(stoppedSessionId), workspaceId=\(stoppedWorkspaceId), stoppedBy=\(stoppedBy)")
+
+                // Update the workspace list to reflect session stopped
+                WorkspaceManagerService.shared.removeSessionFromWorkspace(sessionId: stoppedSessionId)
+
+                // Check if it's our current session
+                let currentSessionId = agentStatus.sessionId
+                if !stoppedSessionId.isEmpty && stoppedSessionId == currentSessionId {
+                    AppLogger.log("[Dashboard] Current session was stopped by another device")
+
+                    // Reset session state
+                    claudeState = .idle
+                    isStreaming = false
+                    streamingStartTime = nil
+                    spinnerMessage = nil
+                    pendingInteraction = nil
+                    forceNewSession = true
+
+                    // Check if it was stopped by a different client
+                    let myClientId = webSocketService.clientId
+                    if stoppedBy != myClientId && !stoppedBy.isEmpty && stoppedBy != "unknown" {
+                        // Another device stopped our session - show info message
+                        error = .commandFailed(reason: "Session was stopped by another device")
+                    }
+                }
+            }
+
         case .workspaceRemoved:
             // Workspace was removed from server - check if it's our current workspace
             if case .workspaceRemoved(let payload) = event.payload {

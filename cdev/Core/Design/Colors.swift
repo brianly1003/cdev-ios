@@ -91,4 +91,21 @@ extension Color {
             opacity: Double(a) / 255
         )
     }
+
+    // MARK: - Adaptive Color Initializer (Light/Dark Mode)
+
+    /// Creates an adaptive color that automatically switches between light and dark mode
+    /// - Parameters:
+    ///   - light: Hex color for light mode
+    ///   - dark: Hex color for dark mode
+    init(light: String, dark: String) {
+        self.init(uiColor: UIColor { traitCollection in
+            switch traitCollection.userInterfaceStyle {
+            case .dark:
+                return UIColor(Color(hex: dark))
+            default:
+                return UIColor(Color(hex: light))
+            }
+        })
+    }
 }

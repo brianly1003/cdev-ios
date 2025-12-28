@@ -873,32 +873,29 @@ struct FloatingToolkitButton: View {
         // When on right side (baseAngle ~180°), reverse the sweep to keep items in same visual order
         let shouldReverseOrder = nearRight
 
-        if isInCorner && total > 2 {
-            // Multi-layer corner layout: items radiate outward in layers
-            // Layer 1 (closest): 2 buttons with narrow spread
-            // Layer 2 (middle): up to 5 buttons with wider spread
-            // Layer 3 (furthest): remaining buttons with full spread
-            let layer1Radius = expandedRadius * 0.9
-            let layer2Radius = expandedRadius * 1.5
-            let layer3Radius = expandedRadius * 2.1
+        if isInCorner {
+            // Corner layout: multi-layer arc to prevent overlap when clamped to screen edges
+            // Layer 1 (inner): up to 2 items at 80pt radius
+            // Layer 2 (outer): remaining items at 130pt radius
+            let innerRadius: CGFloat = 80
+            let outerRadius: CGFloat = 130
+            let anglePerItem: Double = 45  // Generous spacing
 
-            let maxPerLayer = 5
             let layer1Count = min(2, total)
-            let remaining = total - layer1Count
-            let layer2Count = min(maxPerLayer, remaining)
-            let layer3Count = remaining - layer2Count
+            let layer2Count = total - layer1Count
 
-            // Layer 1: wider spread (80°) for 2 buttons to avoid overlap
-            let layer1Spread: Double = 80
-            if layer1Count > 0 {
-                let step = layer1Count > 1 ? layer1Spread / Double(layer1Count - 1) : 0
-                for i in 0..<layer1Count {
-                    // Reverse index when on right side to maintain consistent visual order
-                    let idx = shouldReverseOrder ? (layer1Count - 1 - i) : i
-                    let angle = baseAngle - layer1Spread / 2 + step * Double(idx)
+            // Helper to add positions for a corner layer
+            func addCornerLayerPositions(count: Int, radius: CGFloat, startIndex: Int) {
+                guard count > 0 else { return }
+                let spread: Double = Double(max(1, count - 1)) * anglePerItem
+                let step = count > 1 ? spread / Double(count - 1) : 0
+
+                for i in 0..<count {
+                    let idx = shouldReverseOrder ? (count - 1 - i) : i
+                    let angle = baseAngle - spread / 2 + step * Double(idx)
                     let radians = angle * .pi / 180
-                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer1Radius
-                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer1Radius
+                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * radius
+                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * radius
                     positions.append(CGPoint(
                         x: max(minX, min(maxX, rawX)),
                         y: max(minY, min(maxY, rawY))
@@ -906,39 +903,8 @@ struct FloatingToolkitButton: View {
                 }
             }
 
-            // Layer 2: wider spread (100°) centered on baseAngle
-            let layer2Spread: Double = 100
-            if layer2Count > 0 {
-                let step = layer2Count > 1 ? layer2Spread / Double(layer2Count - 1) : 0
-                for i in 0..<layer2Count {
-                    let idx = shouldReverseOrder ? (layer2Count - 1 - i) : i
-                    let angle = baseAngle - layer2Spread / 2 + step * Double(idx)
-                    let radians = angle * .pi / 180
-                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer2Radius
-                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer2Radius
-                    positions.append(CGPoint(
-                        x: max(minX, min(maxX, rawX)),
-                        y: max(minY, min(maxY, rawY))
-                    ))
-                }
-            }
-
-            // Layer 3: full spread (140°) centered on baseAngle
-            let layer3Spread: Double = 140
-            if layer3Count > 0 {
-                let step = layer3Count > 1 ? layer3Spread / Double(layer3Count - 1) : 0
-                for i in 0..<layer3Count {
-                    let idx = shouldReverseOrder ? (layer3Count - 1 - i) : i
-                    let angle = baseAngle - layer3Spread / 2 + step * Double(idx)
-                    let radians = angle * .pi / 180
-                    let rawX = currentPos.x + CGFloat(Darwin.cos(radians)) * layer3Radius
-                    let rawY = currentPos.y + CGFloat(Darwin.sin(radians)) * layer3Radius
-                    positions.append(CGPoint(
-                        x: max(minX, min(maxX, rawX)),
-                        y: max(minY, min(maxY, rawY))
-                    ))
-                }
-            }
+            addCornerLayerPositions(count: layer1Count, radius: innerRadius, startIndex: 0)
+            addCornerLayerPositions(count: layer2Count, radius: outerRadius, startIndex: layer1Count)
 
         } else {
             // Normal case: 180° fan, multi-layer if more than 5 buttons

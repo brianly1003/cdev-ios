@@ -971,6 +971,30 @@ struct WorkspaceRemovalInfo {
     }
 }
 
+// MARK: - Session Stop Info
+
+/// Information about a session stop for multi-device warning
+/// Used to show warning when other devices are viewing the session
+struct SessionStopInfo {
+    let workspace: RemoteWorkspace
+    let otherViewerCount: Int
+    let otherViewerIds: [String]
+
+    /// Message describing the current state for UI
+    var warningMessage: String {
+        if otherViewerCount == 1 {
+            return "1 other device is viewing this session."
+        } else {
+            return "\(otherViewerCount) other devices are viewing this session."
+        }
+    }
+
+    /// Detailed description for the warning sheet
+    var detailMessage: String {
+        "Stopping the session will interrupt their view. They will see the session as stopped."
+    }
+}
+
 // MARK: - Errors
 
 enum WorkspaceManagerError: LocalizedError {

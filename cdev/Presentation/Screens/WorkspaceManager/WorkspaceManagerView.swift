@@ -207,6 +207,22 @@ struct WorkspaceManagerView: View {
                     .presentationCornerRadius(20)
                 }
             }
+            .sheet(isPresented: $viewModel.showSessionStopSheet) {
+                if let info = viewModel.sessionStopInfo {
+                    SessionStopWarningSheet(
+                        info: info,
+                        onConfirmStop: {
+                            await viewModel.confirmStopSession()
+                        },
+                        onCancel: {
+                            viewModel.cancelStopSession()
+                        }
+                    )
+                    .presentationDetents([.height(260)])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(20)
+                }
+            }
             } // End NavigationStack
 
             // Floating toolkit button with Debug Logs only
@@ -880,6 +896,130 @@ struct WorkspaceRemovalSheet: View {
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(Typography.body)
+                        .foregroundStyle(color == ColorSystem.textSecondary ? ColorSystem.textPrimary : color)
+
+                    if let subtitle = subtitle {
+                        Text(subtitle)
+                            .font(Typography.caption2)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, Spacing.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Session Stop Warning Sheet
+
+/// Warning sheet shown when stopping a session that has other viewers
+/// Allows user to confirm or cancel the stop action
+struct SessionStopWarningSheet: View {
+    let info: SessionStopInfo
+    let onConfirmStop: () async -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Drag indicator
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(ColorSystem.textQuaternary)
+                .frame(width: 36, height: 5)
+                .padding(.top, Spacing.sm)
+                .padding(.bottom, Spacing.md)
+
+            // Header
+            VStack(spacing: Spacing.xxs) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(ColorSystem.warning)
+
+                Text("Other Viewers Active")
+                    .font(Typography.bodyBold)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text(info.workspace.name)
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
+                    .lineLimit(1)
+
+                Text(info.warningMessage)
+                    .font(Typography.caption2)
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .multilineTextAlignment(.center)
+
+                Text(info.detailMessage)
+                    .font(Typography.caption2)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 2)
+            }
+            .padding(.bottom, Spacing.md)
+
+            Divider()
+                .background(ColorSystem.terminalBgHighlight)
+
+            // Action buttons
+            VStack(spacing: 0) {
+                actionButton(
+                    title: "Stop Anyway",
+                    subtitle: "Other devices will be notified",
+                    icon: "stop.circle.fill",
+                    color: ColorSystem.error,
+                    action: { Task { await onConfirmStop() } }
+                )
+
+                Divider()
+                    .background(ColorSystem.terminalBgHighlight)
+                    .padding(.leading, 48)
+
+                actionButton(
+                    title: "Cancel",
+                    subtitle: nil,
+                    icon: "xmark.circle",
+                    color: ColorSystem.textSecondary,
+                    action: onCancel
+                )
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .background(ColorSystem.terminalBgElevated)
+    }
+
+    // MARK: - Action Button
+
+    @ViewBuilder
+    private func actionButton(
+        title: String,
+        subtitle: String?,
+        icon: String,
+        color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: layout.contentSpacing) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .foregroundStyle(color)
+                    .frame(width: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(Typography.body)
                         .foregroundStyle(color == ColorSystem.textSecondary ? ColorSystem.textPrimary : color)

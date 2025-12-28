@@ -1230,14 +1230,31 @@ struct ToolResultElementView: View {
 
     private let previewLineCount = 3
 
+    /// Content with system-reminder tags stripped (internal Claude Code messages)
+    private var displayContent: String {
+        stripSystemTags(from: content.fullContent)
+    }
+
+    /// Strip internal system tags that shouldn't be displayed to users
+    private func stripSystemTags(from text: String) -> String {
+        var result = text
+        // Remove <system-reminder>...</system-reminder> tags
+        result = result.replacingOccurrences(
+            of: #"<system-reminder>[\s\S]*?</system-reminder>"#,
+            with: "",
+            options: .regularExpression
+        )
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Parsed web search result (if this is a WebSearch tool result)
     private var webSearchResult: ParsedWebSearchResult? {
         // Check if this is a WebSearch result by content pattern
-        guard content.fullContent.contains("Web search results for query:"),
-              content.fullContent.contains("Links: [") else {
+        guard displayContent.contains("Web search results for query:"),
+              displayContent.contains("Links: [") else {
             return nil
         }
-        return WebSearchParser.parse(content.fullContent)
+        return WebSearchParser.parse(displayContent)
     }
 
     var body: some View {
@@ -1292,7 +1309,7 @@ struct ToolResultElementView: View {
                                 .font(Typography.terminal)
                                 .foregroundStyle(ColorSystem.textQuaternary)
 
-                            Text("+\(content.lineCount - previewLineCount) lines (tap to expand)")
+                            Text("+\(displayLineCount - previewLineCount) lines (tap to expand)")
                                 .font(Typography.terminalSmall)
                                 .foregroundStyle(ColorSystem.textQuaternary)
                         }
@@ -1307,9 +1324,9 @@ struct ToolResultElementView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Group {
                         if searchText.isEmpty {
-                            Text(content.fullContent)
+                            Text(displayContent)
                         } else {
-                            HighlightedText(content.fullContent, highlighting: searchText)
+                            HighlightedText(displayContent, highlighting: searchText)
                         }
                     }
                     .font(Typography.terminalSmall)
@@ -1341,13 +1358,18 @@ struct ToolResultElementView: View {
         .frame(minHeight: 20)
     }
 
+    /// Line count for display content (after filtering system tags)
+    private var displayLineCount: Int {
+        displayContent.components(separatedBy: "\n").count
+    }
+
     private var hasMoreLines: Bool {
-        content.lineCount > previewLineCount
+        displayLineCount > previewLineCount
     }
 
     private var previewText: String {
-        guard !content.fullContent.isEmpty else { return "" }
-        let lines = content.fullContent.components(separatedBy: "\n")
+        guard !displayContent.isEmpty else { return "" }
+        let lines = displayContent.components(separatedBy: "\n")
         return lines.prefix(previewLineCount).joined(separator: "\n")
     }
 }

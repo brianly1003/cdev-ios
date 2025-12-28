@@ -8,6 +8,10 @@ struct DashboardView: View {
     @StateObject private var workspaceStateManager = WorkspaceStateManager.shared
     @StateObject private var quickSwitcherViewModel: QuickSwitcherViewModel
 
+    // Voice input (beta feature)
+    @StateObject private var voiceInputViewModel = VoiceInputViewModel()
+    @StateObject private var voiceInputSettings = VoiceInputSettingsStore.shared
+
     // Observe explorerViewModel directly for file content updates (nested ObservableObject workaround)
     @ObservedObject private var explorerViewModel: ExplorerViewModel
     @State private var showSettings = false
@@ -214,7 +218,9 @@ struct DashboardView: View {
                                 onFocusChange: { focused in
                                     // Update the editing state (for command suggestions)
                                     isTextFieldEditing = focused
-                                }
+                                },
+                                // Voice input (beta feature - only passed when enabled)
+                                voiceInputViewModel: voiceInputSettings.isEnabled ? voiceInputViewModel : nil
                             )
                             // Track action bar height for keyboard dismiss button positioning
                             .background(
@@ -389,11 +395,33 @@ struct DashboardView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 .zIndex(1000)  // Above everything else
             }
+
+            // Voice input overlay (beta feature)
+            if voiceInputViewModel.showOverlay {
+                VoiceInputOverlay(
+                    viewModel: voiceInputViewModel,
+                    onDismiss: {
+                        voiceInputViewModel.dismissOverlay()
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(2000)  // Above quick switcher
+            }
         }
+        .animation(Animations.stateChange, value: voiceInputViewModel.showOverlay)
         .errorAlert($viewModel.error)
         .onAppear {
             AppLogger.log("[DashboardView] onAppear - UI should be interactive now")
             previousConnectionState = viewModel.connectionState
+
+            // Connect voice input completion to prompt text
+            voiceInputViewModel.onTranscriptionComplete = { transcription in
+                if viewModel.promptText.isEmpty {
+                    viewModel.promptText = transcription
+                } else {
+                    viewModel.promptText += " " + transcription
+                }
+            }
         }
         // Track connection state changes for reconnection toast
         .onChange(of: viewModel.connectionState) { oldState, newState in
@@ -872,6 +900,9 @@ struct ActionBarView: View {
     let onToggleBashMode: () -> Void
     var onFocusChange: ((Bool) -> Void)?  // Callback to update focus state (workaround for FocusState limitation)
 
+    // Voice input (optional - beta feature)
+    var voiceInputViewModel: VoiceInputViewModel?
+
     // Keyboard height tracking for proper positioning
     @State private var keyboardHeight: CGFloat = 0
 
@@ -936,6 +967,12 @@ struct ActionBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: elementSpacing) {
+                // Voice input button (beta feature - only shown when enabled)
+                if let voiceVM = voiceInputViewModel {
+                    VoiceInputButton(viewModel: voiceVM)
+                        .transition(Animations.fadeScale)
+                }
+
                 // Bash mode toggle button - compact on iPhone
                 Button {
                     onToggleBashMode()
