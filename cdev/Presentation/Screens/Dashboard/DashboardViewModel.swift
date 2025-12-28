@@ -1755,6 +1755,14 @@ final class DashboardViewModel: ObservableObject {
                     // Started streaming
                     isStreaming = true
                     streamingStartTime = Date()
+                    // Set fallback spinner message for LIVE mode (no pty_spinner events)
+                    if spinnerMessage == nil {
+                        spinnerMessage = "Thinking... (press ⏹ to stop)"
+                    }
+                    // Also set claude state to running if not already
+                    if claudeState != .running {
+                        claudeState = .running
+                    }
                     AppLogger.log("[Dashboard] Streaming started (thinking)")
                 } else if !isStillStreaming && isStreaming {
                     // Stopped streaming
@@ -1948,9 +1956,9 @@ final class DashboardViewModel: ObservableObject {
                     case .thinking:
                         claudeState = .running
                         // Set fallback spinner message for LIVE mode (no pty_spinner events)
-                        if spinnerMessage == nil {
-                            spinnerMessage = "Thinking... (press ⏹ to stop)"
-                        }
+                        // if spinnerMessage == nil {
+                        //     spinnerMessage = "Thinking... (press ⏹ to stop)"
+                        // }
                     case .permission, .question:
                         claudeState = .waiting
                     case .error:

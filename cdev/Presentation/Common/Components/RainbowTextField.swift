@@ -398,14 +398,19 @@ private struct RainbowTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
-            parent.isEditing = true
-            // Notify parent of focus change (called synchronously for reliability)
-            parent.onFocusChange?(true)
+            // Defer state changes to avoid "modifying state during view update" error
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.isEditing = true
+                self?.parent.onFocusChange?(true)
+            }
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            parent.isEditing = false
-            parent.onFocusChange?(false)
+            // Defer state changes to avoid "modifying state during view update" error
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.isEditing = false
+                self?.parent.onFocusChange?(false)
+            }
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
