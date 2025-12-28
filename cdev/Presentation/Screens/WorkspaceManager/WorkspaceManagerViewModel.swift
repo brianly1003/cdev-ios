@@ -234,6 +234,39 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Observe WebSocket connection state to sync serverStatus
+        // This handles cases where AppState connects directly bypassing the ViewModel
+        Task { [weak self] in
+            guard let self = self else { return }
+            for await state in self.webSocketService.connectionStateStream {
+                await MainActor.run {
+                    switch state {
+                    case .connected:
+                        // Only update if we're not already connected (avoid flickering)
+                        if self.serverStatus != .connected {
+                            self.serverStatus = .connected
+                            self.isConnecting = false
+                            self.hasCheckedConnection = true
+                            AppLogger.log("[WorkspaceManager] Connection state synced: connected")
+                        }
+                    case .disconnected:
+                        // Only update if we were connected and not in a retry loop
+                        if self.serverStatus == .connected {
+                            self.serverStatus = .disconnected
+                            AppLogger.log("[WorkspaceManager] Connection state synced: disconnected")
+                        }
+                    case .connecting, .reconnecting:
+                        // Don't override detailed connecting status from our own retry loop
+                        break
+                    case .failed:
+                        if !self.isConnecting {
+                            self.serverStatus = .unreachable(lastError: "Connection failed")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Connection
@@ -656,9 +689,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Add a workspace manually by path
     /// Used as an alternative to Discovery Repos when user knows exact path
-    func addWorkspaceManually(path: String) async throws {
+    /// Returns the created workspace for git state detection
+    @discardableResult
+    func addWorkspaceManually(path: String) async throws -> RemoteWorkspace {
         let workspace = try await managerService.addWorkspace(path: path)
         AppLogger.log("[WorkspaceManager] Manually added workspace: \(workspace.name)")
+        return workspace
     }
 
     // MARK: - Remove Workspace (Multi-Device Aware)

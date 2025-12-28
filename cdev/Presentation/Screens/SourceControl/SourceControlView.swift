@@ -18,12 +18,20 @@ struct SourceControlView: View {
     @State private var showDiscardAlert = false
     @State private var fileToDiscard: GitFileEntry?
     @State private var showBranchSwitcher = false
+    @State private var showGitSetupWizard = false
+    @State private var showAddRemoteSheet = false
+    @State private var showCommitHistory = false
 
     // Responsive layout
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var isCompact: Bool {
         horizontalSizeClass == .compact
+    }
+
+    /// Get current workspace ID
+    private var currentWorkspaceId: String? {
+        WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
     }
 
     var body: some View {
@@ -46,7 +54,30 @@ struct SourceControlView: View {
         // Note: Diff sheet is hoisted to DashboardView to avoid TabView recreation issues
         .sheet(isPresented: $showBranchSwitcher) {
             BranchSwitcherSheet(viewModel: viewModel)
-                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showGitSetupWizard) {
+            if let workspaceId = currentWorkspaceId {
+                GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: workspaceId))
+                    .onDisappear {
+                        Task { await onRefresh() }
+                    }
+            }
+        }
+        .sheet(isPresented: $showAddRemoteSheet) {
+            if let workspaceId = currentWorkspaceId {
+                QuickAddRemoteSheet(
+                    workspaceId: workspaceId,
+                    isPresented: $showAddRemoteSheet,
+                    onSuccess: {
+                        Task { await onRefresh() }
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showCommitHistory) {
+            if let workspaceId = currentWorkspaceId {
+                CommitHistoryView(workspaceId: workspaceId)
+            }
         }
         .alert("Discard Changes?", isPresented: $showDiscardAlert) {
             Button("Cancel", role: .cancel) { }
@@ -76,7 +107,11 @@ struct SourceControlView: View {
                     // Branch & Sync Header
                     BranchHeaderView(
                         branch: viewModel.state.currentBranch,
+                        gitState: viewModel.gitState,
                         onBranchTap: { showBranchSwitcher = true },
+                        onSetupTap: { showGitSetupWizard = true },
+                        onAddRemoteTap: { showAddRemoteSheet = true },
+                        onHistoryTap: { showCommitHistory = true },
                         onPull: { Task { await viewModel.pull() } },
                         onPush: { Task { await viewModel.push() } },
                         onRefresh: { Task { await onRefresh() } }
@@ -188,7 +223,11 @@ struct SourceControlView: View {
             // Always show branch header with push/pull buttons
             BranchHeaderView(
                 branch: viewModel.state.currentBranch,
+                gitState: viewModel.gitState,
                 onBranchTap: { showBranchSwitcher = true },
+                onSetupTap: { showGitSetupWizard = true },
+                onAddRemoteTap: { showAddRemoteSheet = true },
+                onHistoryTap: { showCommitHistory = true },
                 onPull: { Task { await viewModel.pull() } },
                 onPush: { Task { await viewModel.push() } },
                 onRefresh: { Task { await onRefresh() } }
@@ -202,67 +241,127 @@ struct SourceControlView: View {
                 )
             }
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: Spacing.lg) {
-                        // Top anchor for scroll to top
-                        Color.clear
-                            .frame(height: 1)
-                            .id("sourceControlTop")
+            // Show appropriate content based on git state
+            switch viewModel.gitState {
+            case .noGit:
+                NoGitEmptyState(onInitialize: { showGitSetupWizard = true })
+            case .noRemote:
+                NoRemoteEmptyState(onAddRemote: { showAddRemoteSheet = true })
+            case .noPush:
+                noPushEmptyState
+            default:
+                noChangesEmptyState
+            }
+        }
+    }
 
-                        Spacer(minLength: 60)
+    /// Empty state when there's no remote push yet
+    private var noPushEmptyState: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    Color.clear.frame(height: 1).id("sourceControlTop")
 
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 48))
-                            .foregroundStyle(ColorSystem.success)
+                    Spacer(minLength: 60)
 
-                        Text("No Changes")
-                            .font(Typography.title3)
-                            .foregroundStyle(ColorSystem.textPrimary)
+                    Image(systemName: "arrow.up.circle")
+                        .font(.system(size: 48))
+                        .foregroundStyle(ColorSystem.primary)
 
-                        Text("Your working directory is clean")
-                            .font(Typography.terminal)
-                            .foregroundStyle(ColorSystem.textTertiary)
+                    Text("Ready to Push")
+                        .font(Typography.title3)
+                        .foregroundStyle(ColorSystem.textPrimary)
 
-                        // Sync status hint
-                        if let branch = viewModel.state.currentBranch {
-                            if branch.ahead > 0 {
-                                HStack(spacing: Spacing.xs) {
-                                    Image(systemName: "arrow.up.circle")
-                                        .font(.system(size: 14))
-                                    Text("\(branch.ahead) commit\(branch.ahead == 1 ? "" : "s") to push")
-                                        .font(Typography.terminal)
-                                }
-                                .foregroundStyle(ColorSystem.primary)
-                                .padding(.top, Spacing.sm)
-                            }
-                            if branch.behind > 0 {
-                                HStack(spacing: Spacing.xs) {
-                                    Image(systemName: "arrow.down.circle")
-                                        .font(.system(size: 14))
-                                    Text("\(branch.behind) commit\(branch.behind == 1 ? "" : "s") to pull")
-                                        .font(Typography.terminal)
-                                }
-                                .foregroundStyle(ColorSystem.info)
-                                .padding(.top, Spacing.xs)
-                            }
-                        }
+                    Text("Your repository has a remote configured but hasn't been pushed yet")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, Spacing.lg)
 
-                        Spacer()
-
-                        // Bottom anchor for scroll to bottom
-                        Color.clear
-                            .frame(height: 1)
-                            .id("sourceControlBottom")
+                    Button {
+                        Task { await viewModel.push() }
+                    } label: {
+                        Label("Push to Remote", systemImage: "arrow.up")
+                            .font(Typography.buttonLabel)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 300)
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, Spacing.sm)
+
+                    Spacer()
+
+                    Color.clear.frame(height: 1).id("sourceControlBottom")
                 }
-                // Note: Don't add .refreshable here - use the outer Group's refreshable
-                // Having two refreshable modifiers can cause race conditions
-                .onChange(of: scrollRequest) { _, direction in
-                    guard let direction = direction else { return }
-                    handleScrollRequest(direction: direction, proxy: proxy)
+                .frame(maxWidth: .infinity, minHeight: 300)
+            }
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
+            }
+        }
+    }
+
+    /// Empty state when working directory is clean
+    private var noChangesEmptyState: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    // Top anchor for scroll to top
+                    Color.clear
+                        .frame(height: 1)
+                        .id("sourceControlTop")
+
+                    Spacer(minLength: 60)
+
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 48))
+                        .foregroundStyle(ColorSystem.success)
+
+                    Text("No Changes")
+                        .font(Typography.title3)
+                        .foregroundStyle(ColorSystem.textPrimary)
+
+                    Text("Your working directory is clean")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textTertiary)
+
+                    // Sync status hint
+                    if let branch = viewModel.state.currentBranch {
+                        if branch.ahead > 0 {
+                            HStack(spacing: Spacing.xs) {
+                                Image(systemName: "arrow.up.circle")
+                                    .font(.system(size: 14))
+                                Text("\(branch.ahead) commit\(branch.ahead == 1 ? "" : "s") to push")
+                                    .font(Typography.terminal)
+                            }
+                            .foregroundStyle(ColorSystem.primary)
+                            .padding(.top, Spacing.sm)
+                        }
+                        if branch.behind > 0 {
+                            HStack(spacing: Spacing.xs) {
+                                Image(systemName: "arrow.down.circle")
+                                    .font(.system(size: 14))
+                                Text("\(branch.behind) commit\(branch.behind == 1 ? "" : "s") to pull")
+                                    .font(Typography.terminal)
+                            }
+                            .foregroundStyle(ColorSystem.info)
+                            .padding(.top, Spacing.xs)
+                        }
+                    }
+
+                    Spacer()
+
+                    // Bottom anchor for scroll to bottom
+                    Color.clear
+                        .frame(height: 1)
+                        .id("sourceControlBottom")
                 }
+                .frame(maxWidth: .infinity, minHeight: 300)
+            }
+            // Note: Don't add .refreshable here - use the outer Group's refreshable
+            // Having two refreshable modifiers can cause race conditions
+            .onChange(of: scrollRequest) { _, direction in
+                guard let direction = direction else { return }
+                handleScrollRequest(direction: direction, proxy: proxy)
             }
         }
     }
@@ -299,7 +398,11 @@ enum FileAction {
 
 struct BranchHeaderView: View {
     let branch: GitBranch?
+    var gitState: WorkspaceGitState?
     var onBranchTap: (() -> Void)?
+    var onSetupTap: (() -> Void)?
+    var onAddRemoteTap: (() -> Void)?
+    var onHistoryTap: (() -> Void)?
     let onPull: () -> Void
     let onPush: () -> Void
     let onRefresh: () -> Void
@@ -329,6 +432,27 @@ struct BranchHeaderView: View {
 
             Spacer()
 
+            // Git state badge (if needs setup)
+            if let state = gitState, state.needsSetup {
+                Button {
+                    switch state {
+                    case .noGit, .gitInitialized:
+                        onSetupTap?()
+                    case .noRemote:
+                        onAddRemoteTap?()
+                    case .noPush:
+                        // Push is already available via push button
+                        break
+                    default:
+                        break
+                    }
+                    Haptics.selection()
+                } label: {
+                    GitStateBadge(state: state)
+                }
+                .buttonStyle(.plain)
+            }
+
             // Sync status badges
             if let branch = branch {
                 if branch.behind > 0 {
@@ -341,6 +465,16 @@ struct BranchHeaderView: View {
 
             // Action buttons
             HStack(spacing: Spacing.xs) {
+                // History button
+                if let onHistoryTap = onHistoryTap {
+                    Button(action: onHistoryTap) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 14))
+                            .foregroundStyle(ColorSystem.textSecondary)
+                    }
+                    .pressEffect()
+                }
+
                 // Pull button
                 Button(action: onPull) {
                     Image(systemName: "arrow.down.circle")
@@ -792,10 +926,19 @@ struct GitErrorBanner: View {
 struct BranchSwitcherSheet: View {
     @ObservedObject var viewModel: SourceControlViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     @State private var searchText = ""
     @State private var showCreateBranch = false
     @State private var newBranchName = ""
+    @State private var branchToDelete: WorkspaceGitBranchInfo?
+    @State private var showDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var deleteError: String?
+    @State private var localExpanded = true
+    @State private var remoteExpanded = true
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isNewBranchFocused: Bool
 
@@ -816,8 +959,8 @@ struct BranchSwitcherSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Search bar
-                searchBar
+                // Search and create bar
+                searchAndCreateBar
 
                 if viewModel.isLoadingBranches {
                     loadingView
@@ -828,78 +971,141 @@ struct BranchSwitcherSheet: View {
                 }
             }
             .background(ColorSystem.terminalBg)
-            .navigationTitle("Switch Branch")
+            .navigationTitle("Branches")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showCreateBranch = true
                     } label: {
                         Image(systemName: "plus")
+                            .font(.system(size: layout.iconMedium))
                     }
                 }
             }
             .alert("Create Branch", isPresented: $showCreateBranch) {
                 TextField("Branch name", text: $newBranchName)
-                    .focused($isNewBranchFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 Button("Cancel", role: .cancel) {
                     newBranchName = ""
                 }
                 Button("Create") {
+                    let name = newBranchName
+                    newBranchName = ""
                     Task {
-                        let success = await viewModel.createBranch(name: newBranchName)
-                        if success {
-                            newBranchName = ""
-                            dismiss()
-                        }
+                        let success = await viewModel.createBranch(name: name)
+                        if success { dismiss() }
                     }
                 }
                 .disabled(newBranchName.isEmpty)
             } message: {
                 Text("Enter a name for the new branch")
             }
+            .confirmationDialog(
+                "Delete Branch",
+                isPresented: $showDeleteConfirmation,
+                presenting: branchToDelete
+            ) { branch in
+                Button("Delete Local Only", role: .destructive) {
+                    Task { await performDelete(branch: branch, deleteRemote: false) }
+                }
+                if branch.upstream != nil {
+                    Button("Delete Local & Remote", role: .destructive) {
+                        Task { await performDelete(branch: branch, deleteRemote: true) }
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    branchToDelete = nil
+                }
+            } message: { branch in
+                if viewModel.state.currentBranch?.name == branch.name {
+                    Text("Cannot delete the current branch. Switch to a different branch first.")
+                } else if let upstream = branch.upstream {
+                    Text("Delete '\(branch.name)'?\nThis branch tracks '\(upstream)'.")
+                } else {
+                    Text("Delete local branch '\(branch.name)'?")
+                }
+            }
+            .alert("Delete Failed", isPresented: .init(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )) {
+                Button("OK") { deleteError = nil }
+            } message: {
+                if let error = deleteError {
+                    Text(error)
+                }
+            }
             .task {
                 await viewModel.fetchBranches()
             }
         }
+        .presentationDetents(ResponsiveLayout.isIPad ? [.large] : [.medium, .large])
     }
 
-    private var searchBar: some View {
-        HStack(spacing: Spacing.xs) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14))
-                .foregroundStyle(ColorSystem.textTertiary)
+    private func performDelete(branch: WorkspaceGitBranchInfo, deleteRemote: Bool) async {
+        isDeleting = true
+        let result = await viewModel.deleteBranch(
+            branch: branch.name,
+            force: false,
+            deleteRemote: deleteRemote
+        )
+        isDeleting = false
 
-            TextField("Search branches...", text: $searchText)
-                .font(Typography.terminal)
-                .focused($isSearchFocused)
-                .submitLabel(.search)
+        if !result.success {
+            deleteError = result.error
+        }
+        branchToDelete = nil
+    }
 
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(ColorSystem.textTertiary)
+    // MARK: - Search & Create Bar
+
+    private var searchAndCreateBar: some View {
+        VStack(spacing: 0) {
+            // Search field
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundStyle(ColorSystem.textTertiary)
+
+                TextField("Search branches...", text: $searchText)
+                    .font(.system(size: 15))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
                 }
             }
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, Spacing.md)
+            .background(ColorSystem.terminalBgElevated)
+
+            Divider().background(ColorSystem.terminalBgHighlight)
         }
-        .padding(Spacing.sm)
-        .background(ColorSystem.terminalBgElevated)
     }
 
+    // MARK: - Loading & Empty Views
+
     private var loadingView: some View {
-        VStack(spacing: Spacing.md) {
+        VStack(spacing: Spacing.sm) {
             Spacer()
             ProgressView()
-                .scaleEffect(1.2)
-            Text("Loading branches...")
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.textSecondary)
+            Text("Loading...")
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textTertiary)
             Spacer()
         }
     }
@@ -909,19 +1115,22 @@ struct BranchSwitcherSheet: View {
             Spacer()
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 40))
-                .foregroundStyle(ColorSystem.textTertiary)
+                .foregroundStyle(ColorSystem.textQuaternary)
+
             if searchText.isEmpty {
-                Text("No branches found")
-                    .font(Typography.terminal)
+                Text("No branches")
+                    .font(.system(size: 15))
                     .foregroundStyle(ColorSystem.textSecondary)
             } else {
-                Text("No branches matching '\(searchText)'")
-                    .font(Typography.terminal)
+                Text("No match for '\(searchText)'")
+                    .font(.system(size: 15))
                     .foregroundStyle(ColorSystem.textSecondary)
             }
             Spacer()
         }
     }
+
+    // MARK: - Branch List
 
     private var branchList: some View {
         ScrollView {
@@ -929,119 +1138,187 @@ struct BranchSwitcherSheet: View {
                 // Local branches section
                 if !localBranches.isEmpty {
                     Section {
-                        ForEach(localBranches, id: \.name) { branch in
-                            BranchRow(
-                                branch: branch,
-                                isCurrent: viewModel.state.currentBranch?.name == branch.name,
-                                isLoading: viewModel.isCheckingOut
-                            ) {
-                                Task {
-                                    let success = await viewModel.checkout(branch: branch.name)
-                                    if success { dismiss() }
-                                }
+                        if localExpanded {
+                            ForEach(localBranches, id: \.name) { branch in
+                                CompactBranchRow(
+                                    branch: branch,
+                                    isCurrent: viewModel.state.currentBranch?.name == branch.name,
+                                    isLoading: viewModel.isCheckingOut || isDeleting,
+                                    onSelect: {
+                                        Task {
+                                            let success = await viewModel.checkout(branch: branch.name)
+                                            if success { dismiss() }
+                                        }
+                                    },
+                                    onDelete: viewModel.state.currentBranch?.name != branch.name ? {
+                                        branchToDelete = branch
+                                        showDeleteConfirmation = true
+                                    } : nil
+                                )
                             }
                         }
                     } header: {
-                        sectionHeader(title: "Local", count: localBranches.count)
+                        collapsibleHeader(
+                            title: "Local",
+                            count: localBranches.count,
+                            icon: "arrow.triangle.branch",
+                            isExpanded: $localExpanded
+                        )
                     }
                 }
 
                 // Remote branches section
                 if !remoteBranches.isEmpty {
                     Section {
-                        ForEach(remoteBranches, id: \.name) { branch in
-                            BranchRow(
-                                branch: branch,
-                                isCurrent: false,
-                                isLoading: viewModel.isCheckingOut
-                            ) {
-                                // For remote branches, extract the branch name without origin/
-                                let localName = branch.name.hasPrefix("origin/")
-                                    ? String(branch.name.dropFirst(7))
-                                    : branch.name
-                                Task {
-                                    let success = await viewModel.checkout(branch: localName)
-                                    if success { dismiss() }
-                                }
+                        if remoteExpanded {
+                            ForEach(remoteBranches, id: \.name) { branch in
+                                CompactBranchRow(
+                                    branch: branch,
+                                    isCurrent: false,
+                                    isLoading: viewModel.isCheckingOut || isDeleting,
+                                    onSelect: {
+                                        // Extract branch name without origin/
+                                        let localName = branch.name.hasPrefix("origin/")
+                                            ? String(branch.name.dropFirst(7))
+                                            : branch.name
+                                        Task {
+                                            let success = await viewModel.checkout(branch: localName)
+                                            if success { dismiss() }
+                                        }
+                                    },
+                                    onDelete: nil
+                                )
                             }
                         }
                     } header: {
-                        sectionHeader(title: "Remote", count: remoteBranches.count)
+                        collapsibleHeader(
+                            title: "Remote",
+                            count: remoteBranches.count,
+                            icon: "cloud",
+                            isExpanded: $remoteExpanded
+                        )
                     }
                 }
-
-                // Bottom padding
-                Color.clear.frame(height: Spacing.xl)
             }
         }
     }
 
-    private func sectionHeader(title: String, count: Int) -> some View {
-        HStack(spacing: Spacing.xs) {
-            Text(title)
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.textPrimary)
+    private func collapsibleHeader(title: String, count: Int, icon: String, isExpanded: Binding<Bool>) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isExpanded.wrappedValue.toggle()
+            }
+        } label: {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .frame(width: 14)
 
-            Text("\(count)")
-                .font(Typography.badge)
-                .foregroundStyle(ColorSystem.textSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(ColorSystem.textSecondary.opacity(0.15))
-                .clipShape(Capsule())
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.textSecondary)
 
-            Spacer()
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text("\(count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                Spacer()
+            }
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, Spacing.sm)
+            .background(ColorSystem.terminalBgElevated)
         }
-        .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.xs)
-        .background(ColorSystem.terminalBgElevated)
+        .buttonStyle(.plain)
     }
 }
 
 // MARK: - Branch Row
 
-struct BranchRow: View {
+/// Branch row for branch lists
+struct CompactBranchRow: View {
     let branch: WorkspaceGitBranchInfo
     let isCurrent: Bool
     let isLoading: Bool
     let onSelect: () -> Void
+    let onDelete: (() -> Void)?
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    /// Extract display name (remove origin/ prefix for remotes)
+    private var displayName: String {
+        if branch.isRemote == true, branch.name.hasPrefix("origin/") {
+            return String(branch.name.dropFirst(7))
+        }
+        return branch.name
+    }
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: Spacing.sm) {
-                // Branch icon
-                Image(systemName: branch.isRemote == true ? "cloud" : "arrow.triangle.branch")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isCurrent ? ColorSystem.primary : ColorSystem.textTertiary)
-                    .frame(width: 20)
+                // Current branch indicator
+                Circle()
+                    .fill(isCurrent ? ColorSystem.primary : Color.clear)
+                    .frame(width: 8, height: 8)
+                    .overlay(
+                        Circle()
+                            .stroke(isCurrent ? Color.clear : ColorSystem.textQuaternary, lineWidth: 1.5)
+                    )
 
                 // Branch name
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(branch.name)
-                        .font(Typography.terminal)
-                        .foregroundStyle(isCurrent ? ColorSystem.primary : ColorSystem.textPrimary)
-                        .lineLimit(1)
+                Text(displayName)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(isCurrent ? ColorSystem.primary : ColorSystem.textPrimary)
+                    .lineLimit(1)
 
-                    if let upstream = branch.upstream {
-                        Text(upstream)
-                            .font(Typography.terminalSmall)
-                            .foregroundStyle(ColorSystem.textQuaternary)
-                            .lineLimit(1)
-                    }
+                // Tracking info (inline)
+                if let upstream = branch.upstream {
+                    Text("→")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                    Text(upstream.replacingOccurrences(of: "origin/", with: ""))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                        .lineLimit(1)
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
 
-                // Current indicator
+                // Current checkmark
                 if isCurrent {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(ColorSystem.primary)
                 }
+
+                // Delete button (only for local non-current branches)
+                if let onDelete = onDelete {
+                    Button {
+                        onDelete()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14))
+                            .foregroundStyle(ColorSystem.textTertiary)
+                            .frame(width: 32, height: 32)
+                            .background(ColorSystem.terminalBgHighlight)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.vertical, 12)
             .background(isCurrent ? ColorSystem.primary.opacity(0.08) : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isLoading || isCurrent)

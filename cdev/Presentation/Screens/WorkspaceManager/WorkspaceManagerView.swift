@@ -156,10 +156,30 @@ struct WorkspaceManagerView: View {
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $viewModel.showManualAddSheet) {
-                ManualWorkspaceAddView { path in
-                    try await viewModel.addWorkspaceManually(path: path)
-                }
-                .presentationDetents([.medium])
+                ManualWorkspaceAddView(
+                    onAdd: { path in
+                        try await viewModel.addWorkspaceManually(path: path)
+                    },
+                    onOpenWorkspace: { workspace in
+                        // Connect to the workspace
+                        Task {
+                            if let host = viewModel.savedHost {
+                                let success = await onConnectToWorkspace?(workspace, host) ?? false
+                                if success {
+                                    dismiss()
+                                }
+                            }
+                        }
+                    },
+                    onSetupGit: { _ in
+                        // Git setup would be handled in SourceControl view
+                        // For now just dismiss - user can setup from SourceControl
+                    },
+                    onAddRemote: { _ in
+                        // Remote setup would be handled in SourceControl view
+                    }
+                )
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
             .task {

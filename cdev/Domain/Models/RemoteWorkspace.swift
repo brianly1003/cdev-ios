@@ -1,9 +1,62 @@
 import Foundation
 
+// MARK: - Workspace Git Info
+
+/// Git state information returned from workspace/add
+/// Allows the client to know git state without separate API calls
+struct WorkspaceGitInfo: Codable, Equatable {
+    let initialized: Bool           // Whether git is initialized
+    let hasRemotes: Bool            // Whether remotes are configured
+    let branch: String?             // Current branch name
+    let ahead: Int?                 // Commits ahead of upstream
+    let behind: Int?                // Commits behind upstream
+    let stagedCount: Int?           // Number of staged files
+    let unstagedCount: Int?         // Number of unstaged changes
+    let untrackedCount: Int?        // Number of untracked files
+    let state: String?              // Git state: "synced", "ahead", "behind", "diverged", etc.
+
+    enum CodingKeys: String, CodingKey {
+        case initialized, branch, ahead, behind, state
+        case hasRemotes = "has_remotes"
+        case stagedCount = "staged_count"
+        case unstagedCount = "unstaged_count"
+        case untrackedCount = "untracked_count"
+    }
+
+    /// Convert to WorkspaceGitState enum for UI
+    var workspaceGitState: WorkspaceGitState {
+        if !initialized {
+            return .noGit
+        }
+        if branch == nil {
+            return .gitInitialized
+        }
+        if !hasRemotes {
+            return .noRemote
+        }
+        if state == nil || (ahead == nil && behind == nil) {
+            return .noPush
+        }
+        if let state = state {
+            switch state.lowercased() {
+            case "synced":
+                return .synced
+            case "diverged":
+                return .diverged
+            case "conflict":
+                return .conflict
+            default:
+                return .synced
+            }
+        }
+        return .synced
+    }
+}
+
 // MARK: - Remote Workspace
 
 /// Remote workspace from cdev server
-/// Represents a git repository configured on the server
+/// Represents a directory (git or non-git) configured on the server
 /// Single-port architecture: all workspaces share port 8766
 struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     let id: String              // "ws-abc123" - unique identifier
@@ -13,9 +66,10 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     let createdAt: Date?        // When workspace was registered
     var sessions: [Session]     // Active Claude sessions for this workspace
     let activeSessionId: String? // Currently active session ID (for multi-device)
+    let git: WorkspaceGitInfo?  // Git state info (from workspace/add response)
 
     enum CodingKeys: String, CodingKey {
-        case id, name, path, sessions
+        case id, name, path, sessions, git
         case autoStart = "auto_start"
         case createdAt = "created_at"
         case activeSessionId = "active_session_id"
@@ -30,7 +84,8 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         autoStart: Bool = false,
         createdAt: Date? = nil,
         sessions: [Session] = [],
-        activeSessionId: String? = nil
+        activeSessionId: String? = nil,
+        git: WorkspaceGitInfo? = nil
     ) {
         self.id = id
         self.name = name
@@ -39,6 +94,7 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         self.createdAt = createdAt
         self.sessions = sessions
         self.activeSessionId = activeSessionId
+        self.git = git
     }
 
     // MARK: - Custom Decoder (handles missing sessions and date formats)
@@ -60,6 +116,9 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         // Sessions may be missing from workspace/add response - default to empty array
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
         activeSessionId = try container.decodeIfPresent(String.self, forKey: .activeSessionId)
+
+        // Git info from workspace/add response
+        git = try container.decodeIfPresent(WorkspaceGitInfo.self, forKey: .git)
     }
 
     /// Parse date from string with flexible ISO8601 format

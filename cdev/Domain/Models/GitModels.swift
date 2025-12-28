@@ -1,4 +1,258 @@
 import Foundation
+import SwiftUI
+
+// MARK: - Workspace Git State
+
+/// Represents the overall git state of a workspace
+enum WorkspaceGitState: String, Codable {
+    case noGit          // No .git folder
+    case gitInitialized // Has .git but no commits
+    case noRemote       // Has commits but no remote
+    case noPush         // Has remote but never pushed (no upstream)
+    case synced         // Fully configured
+    case diverged       // Has unpushed/unpulled commits
+    case conflict       // Has merge conflicts
+
+    var icon: String {
+        switch self {
+        case .noGit: return "folder"
+        case .gitInitialized: return "leaf"
+        case .noRemote: return "desktopcomputer"
+        case .noPush: return "link"
+        case .synced: return "checkmark.circle.fill"
+        case .diverged: return "arrow.triangle.2.circlepath"
+        case .conflict: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    var statusText: String {
+        switch self {
+        case .noGit: return "Not a Git Repository"
+        case .gitInitialized: return "Git Initialized"
+        case .noRemote: return "No Remote Configured"
+        case .noPush: return "Ready to Push"
+        case .synced: return "Synced"
+        case .diverged: return "Changes to Sync"
+        case .conflict: return "Conflicts"
+        }
+    }
+
+    var shortText: String {
+        switch self {
+        case .noGit: return "No Git"
+        case .gitInitialized: return "Init"
+        case .noRemote: return "Local"
+        case .noPush: return "Unpushed"
+        case .synced: return "Synced"
+        case .diverged: return "Diverged"
+        case .conflict: return "Conflict"
+        }
+    }
+
+    var actionRequired: String? {
+        switch self {
+        case .noGit: return "Initialize Git to start version control"
+        case .gitInitialized: return "Make your first commit"
+        case .noRemote: return "Add a remote to sync with GitHub/GitLab"
+        case .noPush: return "Push to set up tracking"
+        case .synced, .diverged, .conflict: return nil
+        }
+    }
+
+    var needsSetup: Bool {
+        switch self {
+        case .noGit, .gitInitialized, .noRemote, .noPush:
+            return true
+        case .synced, .diverged, .conflict:
+            return false
+        }
+    }
+}
+
+// MARK: - Git Remote URL Parser
+
+/// Parses and represents a git remote URL (SSH or HTTPS)
+struct GitRemoteURL: Equatable {
+    let originalURL: String
+    let provider: GitProvider
+    let host: String
+    let owner: String
+    let repoName: String
+    let isSSH: Bool
+
+    enum GitProvider: String, CaseIterable {
+        case github = "github.com"
+        case gitlab = "gitlab.com"
+        case bitbucket = "bitbucket.org"
+        case custom = "custom"
+
+        var displayName: String {
+            switch self {
+            case .github: return "GitHub"
+            case .gitlab: return "GitLab"
+            case .bitbucket: return "Bitbucket"
+            case .custom: return "Git Server"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .github: return "link.circle.fill"
+            case .gitlab: return "g.square.fill"
+            case .bitbucket: return "b.square.fill"
+            case .custom: return "server.rack"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .github: return .primary
+            case .gitlab: return .orange
+            case .bitbucket: return .blue
+            case .custom: return .gray
+            }
+        }
+    }
+
+    /// Parse a git URL string into components
+    /// Supports both SSH and HTTPS formats
+    static func parse(_ urlString: String) -> GitRemoteURL? {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // SSH format: git@github.com:username/repo.git
+        if trimmed.hasPrefix("git@") {
+            return parseSSH(trimmed)
+        }
+
+        // HTTPS format: https://github.com/username/repo.git
+        if trimmed.hasPrefix("https://") || trimmed.hasPrefix("http://") {
+            return parseHTTPS(trimmed)
+        }
+
+        // Try to auto-detect and fix common mistakes
+        // e.g., "github.com/user/repo" without protocol
+        if trimmed.contains("/") && !trimmed.contains("@") && trimmed.contains(".") {
+            return parseHTTPS("https://\(trimmed)")
+        }
+
+        return nil
+    }
+
+    private static func parseSSH(_ url: String) -> GitRemoteURL? {
+        // Pattern: git@host:owner/repo.git
+        // Example: git@github.com:brianly1003/Cdev.git
+
+        let pattern = #"^git@([^:]+):([^/]+)/(.+?)(?:\.git)?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)),
+              match.numberOfRanges == 4 else {
+            return nil
+        }
+
+        guard let hostRange = Range(match.range(at: 1), in: url),
+              let ownerRange = Range(match.range(at: 2), in: url),
+              let repoRange = Range(match.range(at: 3), in: url) else {
+            return nil
+        }
+
+        let host = String(url[hostRange])
+        let owner = String(url[ownerRange])
+        let repo = String(url[repoRange])
+
+        let provider = GitProvider.allCases.first { $0.rawValue == host } ?? .custom
+
+        return GitRemoteURL(
+            originalURL: url,
+            provider: provider,
+            host: host,
+            owner: owner,
+            repoName: repo,
+            isSSH: true
+        )
+    }
+
+    private static func parseHTTPS(_ url: String) -> GitRemoteURL? {
+        // Pattern: https://host/owner/repo.git
+        // Example: https://github.com/brianly1003/Cdev.git
+
+        guard let urlObj = URL(string: url),
+              let host = urlObj.host else {
+            return nil
+        }
+
+        let pathComponents = urlObj.pathComponents.filter { $0 != "/" }
+        guard pathComponents.count >= 2 else { return nil }
+
+        let owner = pathComponents[0]
+        var repo = pathComponents[1]
+
+        // Remove .git suffix if present
+        if repo.hasSuffix(".git") {
+            repo = String(repo.dropLast(4))
+        }
+
+        let provider = GitProvider.allCases.first { $0.rawValue == host } ?? .custom
+
+        return GitRemoteURL(
+            originalURL: url,
+            provider: provider,
+            host: host,
+            owner: owner,
+            repoName: repo,
+            isSSH: false
+        )
+    }
+
+    /// Convert to the other format (SSH ↔ HTTPS)
+    var alternateURL: String {
+        if isSSH {
+            return "https://\(host)/\(owner)/\(repoName).git"
+        } else {
+            return "git@\(host):\(owner)/\(repoName).git"
+        }
+    }
+
+    /// Display name for UI
+    var displayName: String {
+        "\(owner)/\(repoName)"
+    }
+
+    /// Full URL for git commands
+    var fullURL: String {
+        originalURL.hasSuffix(".git") ? originalURL : "\(originalURL).git"
+    }
+
+    /// Protocol badge text
+    var protocolText: String {
+        isSSH ? "SSH" : "HTTPS"
+    }
+}
+
+// MARK: - Git Remote Info
+
+/// Information about a git remote
+struct GitRemoteInfo: Codable, Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let fetchURL: String
+    let pushURL: String?
+    let provider: String?
+    let trackingBranches: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case fetchURL = "fetch_url"
+        case pushURL = "push_url"
+        case provider
+        case trackingBranches = "tracking_branches"
+    }
+
+    /// Parsed remote URL for display
+    var parsedURL: GitRemoteURL? {
+        GitRemoteURL.parse(fetchURL)
+    }
+}
 
 // MARK: - Git File Status
 

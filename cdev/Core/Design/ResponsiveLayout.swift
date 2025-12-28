@@ -127,6 +127,20 @@ struct ResponsiveLayout {
 
     /// Regular layout (iPad)
     static let regular = ResponsiveLayout(isCompact: false)
+
+    // MARK: - Device Detection
+
+    /// True if running on iPad device (not based on size class)
+    /// Use this for device-specific behaviors like presentation detents,
+    /// where the container's sizeClass may differ from the actual device.
+    static var isIPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+
+    /// True if running on iPhone device
+    static var isIPhone: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+    }
 }
 
 // MARK: - Environment Key

@@ -28,17 +28,31 @@ enum JSONRPCMethod {
     static let workspaceSubscriptions = "workspace/subscriptions"
     static let workspaceSubscribeAll = "workspace/subscribeAll"
     static let workspaceStatus = "workspace/status"
-    // Workspace Git operations (NEW - multi-workspace aware)
-    static let workspaceGitStatus = "workspace/git/status"
-    static let workspaceGitDiff = "workspace/git/diff"
-    static let workspaceGitStage = "workspace/git/stage"
-    static let workspaceGitUnstage = "workspace/git/unstage"
-    static let workspaceGitDiscard = "workspace/git/discard"
-    static let workspaceGitCommit = "workspace/git/commit"
-    static let workspaceGitPush = "workspace/git/push"
-    static let workspaceGitPull = "workspace/git/pull"
-    static let workspaceGitBranches = "workspace/git/branches"
-    static let workspaceGitCheckout = "workspace/git/checkout"
+    static let workspaceDiscover = "workspace/discover"
+    // Workspace Git operations (multi-workspace aware)
+    // Note: All git/* methods require workspace_id parameter
+    static let workspaceGitStatus = "git/status"
+    static let workspaceGitDiff = "git/diff"
+    static let workspaceGitStage = "git/stage"
+    static let workspaceGitUnstage = "git/unstage"
+    static let workspaceGitDiscard = "git/discard"
+    static let workspaceGitCommit = "git/commit"
+    static let workspaceGitPush = "git/push"
+    static let workspaceGitPull = "git/pull"
+    static let workspaceGitBranches = "git/branches"
+    static let workspaceGitCheckout = "git/checkout"
+    // Git setup operations (init, remote management)
+    static let workspaceGitInit = "git/init"
+    static let workspaceGitRemoteAdd = "git/remote/add"
+    static let workspaceGitRemoteRemove = "git/remote/remove"
+    static let workspaceGitRemoteList = "git/remote/list"
+    // Git state (workspace git configuration state)
+    static let workspaceGitState = "git/state"
+    // Git log (commit history)
+    static let workspaceGitLog = "git/log"
+    static let workspaceGitFetch = "git/fetch"
+    // Git branch operations
+    static let workspaceGitBranchDelete = "git/branch/delete"
 
     // Status
     static let statusGet = "status/get"
@@ -1692,5 +1706,511 @@ struct RepositoryIndexRebuildResult: Codable, Sendable {
     /// Whether rebuild was started or queued
     var isStarted: Bool {
         status == "started" || status == "queued"
+    }
+}
+
+// MARK: - Git Init & Remote Operations
+
+/// Workspace git init request parameters
+struct WorkspaceGitInitParams: Codable, Sendable {
+    let workspaceId: String
+    let initialBranch: String?
+    let initialCommit: Bool?
+    let commitMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+        case initialBranch = "initial_branch"
+        case initialCommit = "initial_commit"
+        case commitMessage = "commit_message"
+    }
+
+    init(workspaceId: String, initialBranch: String? = "main", initialCommit: Bool? = nil, commitMessage: String? = nil) {
+        self.workspaceId = workspaceId
+        self.initialBranch = initialBranch
+        self.initialCommit = initialCommit
+        self.commitMessage = commitMessage
+    }
+}
+
+/// Workspace git init response result
+struct WorkspaceGitInitResult: Codable, Sendable {
+    let success: Bool?
+    let branch: String?
+    let commitSha: String?
+    let filesCommitted: Int?
+    let message: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success, branch, message, error
+        case commitSha = "commit_sha"
+        case filesCommitted = "files_committed"
+    }
+
+    var isSuccess: Bool {
+        success == true
+    }
+}
+
+/// Workspace git remote add request parameters
+struct WorkspaceGitRemoteAddParams: Codable, Sendable {
+    let workspaceId: String
+    let name: String
+    let url: String
+    let fetch: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case name, url, fetch
+        case workspaceId = "workspace_id"
+    }
+
+    init(workspaceId: String, name: String = "origin", url: String, fetch: Bool? = nil) {
+        self.workspaceId = workspaceId
+        self.name = name
+        self.url = url
+        self.fetch = fetch
+    }
+}
+
+/// Workspace git remote add response result
+struct WorkspaceGitRemoteAddResult: Codable, Sendable {
+    let success: Bool?
+    let remote: RemoteInfoResult?
+    let fetchedBranches: [String]?
+    let message: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success, remote, message, error
+        case fetchedBranches = "fetched_branches"
+    }
+
+    struct RemoteInfoResult: Codable, Sendable {
+        let name: String?
+        let fetchUrl: String?
+        let pushUrl: String?
+        let provider: String?
+
+        enum CodingKeys: String, CodingKey {
+            case name, provider
+            case fetchUrl = "fetch_url"
+            case pushUrl = "push_url"
+        }
+    }
+
+    var isSuccess: Bool {
+        success == true
+    }
+}
+
+/// Workspace git remote remove request parameters
+struct WorkspaceGitRemoteRemoveParams: Codable, Sendable {
+    let workspaceId: String
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case workspaceId = "workspace_id"
+    }
+}
+
+/// Workspace git remote remove response result
+struct WorkspaceGitRemoteRemoveResult: Codable, Sendable {
+    let success: Bool?
+    let message: String?
+    let error: String?
+
+    var isSuccess: Bool {
+        success == true
+    }
+}
+
+/// Workspace git remote list request parameters
+struct WorkspaceGitRemoteListParams: Codable, Sendable {
+    let workspaceId: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+    }
+}
+
+/// Remote info in list response
+struct WorkspaceGitRemoteInfo: Codable, Sendable, Identifiable {
+    var id: String { name }
+
+    let name: String
+    let fetchUrl: String?
+    let pushUrl: String?
+    let provider: String?
+    let trackingBranches: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case name, provider
+        case fetchUrl = "fetch_url"
+        case pushUrl = "push_url"
+        case trackingBranches = "tracking_branches"
+    }
+
+    /// Parsed remote URL for UI display
+    var parsedURL: GitRemoteURL? {
+        guard let url = fetchUrl else { return nil }
+        return GitRemoteURL.parse(url)
+    }
+}
+
+/// Workspace git remote list response result
+struct WorkspaceGitRemoteListResult: Codable, Sendable {
+    let remotes: [WorkspaceGitRemoteInfo]?
+    let message: String?
+    let error: String?
+
+    /// Safe accessor for remotes
+    var safeRemotes: [WorkspaceGitRemoteInfo] {
+        remotes ?? []
+    }
+}
+
+// MARK: - Git State
+
+/// Workspace git state request parameters
+struct WorkspaceGitStateParams: Codable, Sendable {
+    let workspaceId: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+    }
+}
+
+/// Workspace git state response result
+/// Returns the overall git configuration state for a workspace
+struct WorkspaceGitStateResult: Codable, Sendable {
+    let state: String?           // "no_git", "git_initialized", "no_remote", "no_push", "synced", "diverged", "conflict"
+    let isGitRepo: Bool?
+    let hasRemote: Bool?
+    let hasUpstream: Bool?
+    let branch: String?
+    let remote: String?
+    let upstream: String?
+    let ahead: Int?
+    let behind: Int?
+    let hasConflicts: Bool?
+    let message: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state, branch, remote, upstream, ahead, behind, message, error
+        case isGitRepo = "is_git_repo"
+        case hasRemote = "has_remote"
+        case hasUpstream = "has_upstream"
+        case hasConflicts = "has_conflicts"
+    }
+
+    /// Convert to WorkspaceGitState enum
+    var gitState: WorkspaceGitState {
+        guard let stateString = state else { return .noGit }
+
+        switch stateString {
+        case "no_git": return .noGit
+        case "git_initialized": return .gitInitialized
+        case "no_remote": return .noRemote
+        case "no_push": return .noPush
+        case "synced": return .synced
+        case "diverged": return .diverged
+        case "conflict": return .conflict
+        default: return .synced
+        }
+    }
+}
+
+// MARK: - Git Log (Commit History)
+
+/// Git log request parameters
+struct WorkspaceGitLogParams: Codable, Sendable {
+    let workspaceId: String
+    let limit: Int?
+    let offset: Int?
+    let branch: String?
+    let path: String?
+    let author: String?
+    let since: String?
+    let until: String?
+    let graph: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case limit, offset, branch, path, author, since, until, graph
+        case workspaceId = "workspace_id"
+    }
+
+    init(
+        workspaceId: String,
+        limit: Int? = 50,
+        offset: Int? = nil,
+        branch: String? = nil,
+        path: String? = nil,
+        author: String? = nil,
+        since: String? = nil,
+        until: String? = nil,
+        graph: Bool? = true
+    ) {
+        self.workspaceId = workspaceId
+        self.limit = limit
+        self.offset = offset
+        self.branch = branch
+        self.path = path
+        self.author = author
+        self.since = since
+        self.until = until
+        self.graph = graph
+    }
+}
+
+/// Commit author info (for structured author data)
+struct GitCommitAuthor: Codable, Sendable {
+    let name: String
+    let email: String
+}
+
+/// Commit author info (simple string format from API)
+struct GitCommitAuthorSimple: Codable, Sendable {
+    let author: String
+    let authorEmail: String
+
+    enum CodingKeys: String, CodingKey {
+        case author
+        case authorEmail = "author_email"
+    }
+}
+
+/// Git reference (branch, tag, HEAD)
+struct GitCommitRef: Codable, Sendable, Identifiable {
+    var id: String { name }
+
+    let name: String
+    let type: String  // "head", "local_branch", "remote_branch", "tag"
+
+    enum CodingKeys: String, CodingKey {
+        case name, type
+    }
+
+    /// Ref type enum for easier handling
+    var refType: GitRefType {
+        switch type {
+        case "head": return .head
+        case "local_branch": return .localBranch
+        case "remote_branch": return .remoteBranch
+        case "tag": return .tag
+        default: return .localBranch
+        }
+    }
+
+    enum GitRefType {
+        case head
+        case localBranch
+        case remoteBranch
+        case tag
+    }
+}
+
+/// Graph line for visualization
+struct GitGraphLine: Codable, Sendable {
+    let fromColumn: Int
+    let toColumn: Int
+    let type: String  // "straight", "merge_left", "merge_right", "branch_left", "branch_right"
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case fromColumn = "from_column"
+        case toColumn = "to_column"
+    }
+
+    var lineType: GraphLineType {
+        switch type {
+        case "straight": return .straight
+        case "merge_left": return .mergeLeft
+        case "merge_right": return .mergeRight
+        case "branch_left": return .branchLeft
+        case "branch_right": return .branchRight
+        case "horizontal": return .horizontal
+        case "cross": return .cross
+        default: return .straight
+        }
+    }
+
+    enum GraphLineType {
+        case straight
+        case mergeLeft
+        case mergeRight
+        case branchLeft
+        case branchRight
+        case horizontal
+        case cross
+    }
+}
+
+/// Graph position for commit node
+struct GitGraphPosition: Codable, Sendable {
+    let column: Int
+    let lines: [GitGraphLine]?
+}
+
+/// Commit node in git log
+struct GitCommitNode: Codable, Sendable, Identifiable {
+    var id: String { sha }
+
+    let sha: String
+    let shortSha: String?
+    let subject: String
+    let author: String
+    let authorEmail: String
+    let date: String
+    let relativeDate: String?
+    let parentShas: [String]?
+    let isMerge: Bool?
+    let refs: [GitCommitRef]?
+    let graphPosition: GitGraphPosition?
+
+    enum CodingKeys: String, CodingKey {
+        case sha, subject, author, date, refs
+        case shortSha = "short_sha"
+        case authorEmail = "author_email"
+        case relativeDate = "relative_date"
+        case parentShas = "parent_shas"
+        case isMerge = "is_merge"
+        case graphPosition = "graph_position"
+    }
+
+    /// Get short SHA (first 7 chars if not provided)
+    var displaySha: String {
+        shortSha ?? String(sha.prefix(7))
+    }
+
+    /// Author info as structured object
+    var authorInfo: GitCommitAuthor {
+        GitCommitAuthor(name: author, email: authorEmail)
+    }
+
+    /// Check if this is a merge commit
+    var isMergeCommit: Bool {
+        isMerge ?? ((parentShas?.count ?? 0) > 1)
+    }
+
+    /// Parse date from ISO8601 string
+    var parsedDate: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: date) {
+            return date
+        }
+        // Try without fractional seconds
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: date)
+    }
+
+    /// Get relative date string (from API or fallback to date prefix)
+    var displayRelativeDate: String {
+        relativeDate ?? String(date.prefix(10))
+    }
+}
+
+/// Git log response result
+struct WorkspaceGitLogResult: Codable, Sendable {
+    let commits: [GitCommitNode]?
+    let totalCount: Int?
+    let hasMore: Bool?
+    let maxColumns: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case commits
+        case totalCount = "total_count"
+        case hasMore = "has_more"
+        case maxColumns = "max_columns"
+    }
+
+    /// Safe accessor for commits
+    var safeCommits: [GitCommitNode] {
+        commits ?? []
+    }
+}
+
+// MARK: - Git Fetch
+
+/// Git fetch request parameters
+struct WorkspaceGitFetchParams: Codable, Sendable {
+    let workspaceId: String
+    let remote: String?
+    let prune: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case remote, prune
+        case workspaceId = "workspace_id"
+    }
+
+    init(workspaceId: String, remote: String? = "origin", prune: Bool? = true) {
+        self.workspaceId = workspaceId
+        self.remote = remote
+        self.prune = prune
+    }
+}
+
+/// Git fetch response result
+struct WorkspaceGitFetchResult: Codable, Sendable {
+    let success: Bool?
+    let newCommits: Int?
+    let newBranches: [String]?
+    let prunedBranches: [String]?
+    let message: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success, message, error
+        case newCommits = "new_commits"
+        case newBranches = "new_branches"
+        case prunedBranches = "pruned_branches"
+    }
+
+    var isSuccess: Bool {
+        success == true
+    }
+}
+
+// MARK: - Git Branch Delete
+
+/// Git branch delete request parameters
+struct WorkspaceGitBranchDeleteParams: Codable, Sendable {
+    let workspaceId: String
+    let branch: String
+    let force: Bool?
+    let deleteRemote: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case branch, force
+        case workspaceId = "workspace_id"
+        case deleteRemote = "delete_remote"
+    }
+
+    init(workspaceId: String, branch: String, force: Bool = false, deleteRemote: Bool = false) {
+        self.workspaceId = workspaceId
+        self.branch = branch
+        self.force = force
+        self.deleteRemote = deleteRemote
+    }
+}
+
+/// Git branch delete response result
+struct WorkspaceGitBranchDeleteResult: Codable, Sendable {
+    let success: Bool?
+    let branch: String?
+    let message: String?
+    let error: String?
+    let deletedRemote: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case success, branch, message, error
+        case deletedRemote = "deleted_remote"
+    }
+
+    var isSuccess: Bool {
+        success == true
     }
 }

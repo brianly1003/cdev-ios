@@ -174,7 +174,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: WorkspaceListResponse = try await client.request(
-            method: "workspace/list",
+            method: JSONRPCMethod.workspaceList,
             params: EmptyParams()
         )
 
@@ -205,7 +205,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: RemoteWorkspace = try await client.request(
-            method: "workspace/get",
+            method: JSONRPCMethod.workspaceGet,
             params: WorkspaceIdParams(id: id)
         )
 
@@ -231,7 +231,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: RemoteWorkspace = try await client.request(
-            method: "workspace/add",
+            method: JSONRPCMethod.workspaceAdd,
             params: AddWorkspaceParams(path: path, name: workspaceName)
         )
 
@@ -254,7 +254,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let _: EmptyResponse = try await client.request(
-            method: "workspace/remove",
+            method: JSONRPCMethod.workspaceRemove,
             params: WorkspaceIdParams(id: id)
         )
 
@@ -277,7 +277,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: SessionStartResponse = try await client.request(
-            method: "session/start",
+            method: JSONRPCMethod.sessionStart,
             params: WMSessionStartParams(workspaceId: workspaceId)
         )
 
@@ -316,7 +316,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         do {
             let _: EmptyResponse = try await client.request(
-                method: "session/stop",
+                method: JSONRPCMethod.sessionStop,
                 params: SessionIdParams(sessionId: sessionId)
             )
         } catch let error as JSONRPCClientError {
@@ -344,7 +344,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let _: SessionSendResponse = try await client.request(
-            method: "session/send",
+            method: JSONRPCMethod.sessionSend,
             params: WMSessionSendParams(
                 sessionId: sessionId,
                 prompt: prompt,
@@ -364,7 +364,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let _: EmptyResponse = try await client.request(
-            method: "session/respond",
+            method: JSONRPCMethod.sessionRespond,
             params: WMSessionRespondParams(sessionId: sessionId, type: type, response: response)
         )
 
@@ -379,7 +379,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: SessionStateResponse = try await client.request(
-            method: "session/state",
+            method: JSONRPCMethod.sessionState,
             params: SessionIdParams(sessionId: sessionId)
         )
 
@@ -403,7 +403,7 @@ final class WorkspaceManagerService: ObservableObject {
         }
 
         let response: ActiveSessionsResponse = try await client.request(
-            method: "session/active",
+            method: JSONRPCMethod.sessionActive,
             params: params
         )
 
@@ -512,7 +512,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: WorkspaceSubscribeResponse = try await client.request(
-            method: "workspace/subscribe",
+            method: JSONRPCMethod.workspaceSubscribe,
             params: WorkspaceIdParams(id: workspaceId)
         )
 
@@ -528,7 +528,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let _: EmptyResponse = try await client.request(
-            method: "workspace/unsubscribe",
+            method: JSONRPCMethod.workspaceUnsubscribe,
             params: WorkspaceIdParams(id: workspaceId)
         )
 
@@ -544,7 +544,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: WorkspaceSubscriptionsResponse = try await client.request(
-            method: "workspace/subscriptions",
+            method: JSONRPCMethod.workspaceSubscriptions,
             params: EmptyParams()
         )
 
@@ -561,7 +561,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let _: EmptyResponse = try await client.request(
-            method: "workspace/subscribeAll",
+            method: JSONRPCMethod.workspaceSubscribeAll,
             params: EmptyParams()
         )
 
@@ -605,7 +605,7 @@ final class WorkspaceManagerService: ObservableObject {
         let task = Task<[DiscoveredRepository], Error> { [weak self] in
             let client = ws.getJSONRPCClient()
             let response: DiscoveryResponse = try await client.request(
-                method: "workspace/discover",
+                method: JSONRPCMethod.workspaceDiscover,
                 params: DiscoverParams(paths: paths, fresh: fresh ? true : nil),
                 timeout: 120.0
             )
@@ -657,7 +657,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: GitStatusExtendedResponse = try await client.request(
-            method: "workspace/git/status",
+            method: JSONRPCMethod.workspaceGitStatus,
             params: WorkspaceIdParams(id: workspaceId)
         )
 
@@ -672,7 +672,7 @@ final class WorkspaceManagerService: ObservableObject {
 
         let client = ws.getJSONRPCClient()
         let response: GitDiffResponse = try await client.request(
-            method: "workspace/git/diff",
+            method: JSONRPCMethod.workspaceGitDiff,
             params: WorkspaceGitDiffParams(workspaceId: workspaceId, staged: staged)
         )
 
@@ -801,6 +801,161 @@ final class WorkspaceManagerService: ObservableObject {
         let response: WorkspaceGitCheckoutResult = try await client.request(
             method: JSONRPCMethod.workspaceGitCheckout,
             params: WorkspaceGitCheckoutParams(workspaceId: workspaceId, branch: branch, create: create)
+        )
+
+        return response
+    }
+
+    // MARK: - Git Setup Operations
+
+    /// Initialize git for a workspace
+    @discardableResult
+    func gitInit(workspaceId: String, initialBranch: String = "main", initialCommit: Bool = false, commitMessage: String? = nil) async throws -> WorkspaceGitInitResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitInitResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitInit,
+            params: WorkspaceGitInitParams(
+                workspaceId: workspaceId,
+                initialBranch: initialBranch,
+                initialCommit: initialCommit,
+                commitMessage: commitMessage
+            )
+        )
+
+        return response
+    }
+
+    /// Add a remote to a workspace's git repository
+    @discardableResult
+    func gitRemoteAdd(workspaceId: String, name: String = "origin", url: String, fetch: Bool = true) async throws -> WorkspaceGitRemoteAddResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitRemoteAddResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitRemoteAdd,
+            params: WorkspaceGitRemoteAddParams(workspaceId: workspaceId, name: name, url: url, fetch: fetch)
+        )
+
+        return response
+    }
+
+    /// Remove a remote from a workspace's git repository
+    @discardableResult
+    func gitRemoteRemove(workspaceId: String, name: String) async throws -> WorkspaceGitRemoteRemoveResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitRemoteRemoveResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitRemoteRemove,
+            params: WorkspaceGitRemoteRemoveParams(workspaceId: workspaceId, name: name)
+        )
+
+        return response
+    }
+
+    /// List remotes for a workspace's git repository
+    func getRemotes(workspaceId: String) async throws -> WorkspaceGitRemoteListResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitRemoteListResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitRemoteList,
+            params: WorkspaceGitRemoteListParams(workspaceId: workspaceId)
+        )
+
+        return response
+    }
+
+    /// Get git configuration state for a workspace
+    func getGitState(workspaceId: String) async throws -> WorkspaceGitStateResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitStateResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitState,
+            params: WorkspaceGitStateParams(workspaceId: workspaceId)
+        )
+
+        return response
+    }
+
+    // MARK: - Git History Operations
+
+    /// Get commit history for a workspace
+    func gitLog(
+        workspaceId: String,
+        limit: Int = 50,
+        offset: Int? = nil,
+        branch: String? = nil,
+        path: String? = nil,
+        author: String? = nil,
+        graph: Bool = true
+    ) async throws -> WorkspaceGitLogResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitLogResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitLog,
+            params: WorkspaceGitLogParams(
+                workspaceId: workspaceId,
+                limit: limit,
+                offset: offset,
+                branch: branch,
+                path: path,
+                author: author,
+                graph: graph
+            )
+        )
+
+        return response
+    }
+
+    /// Fetch from remote for a workspace
+    @discardableResult
+    func gitFetch(workspaceId: String, remote: String = "origin", prune: Bool = true) async throws -> WorkspaceGitFetchResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitFetchResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitFetch,
+            params: WorkspaceGitFetchParams(workspaceId: workspaceId, remote: remote, prune: prune)
+        )
+
+        return response
+    }
+
+    /// Delete a branch (local and optionally remote)
+    @discardableResult
+    func gitBranchDelete(workspaceId: String, branch: String, force: Bool = false, deleteRemote: Bool = false) async throws -> WorkspaceGitBranchDeleteResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitBranchDeleteResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitBranchDelete,
+            params: WorkspaceGitBranchDeleteParams(
+                workspaceId: workspaceId,
+                branch: branch,
+                force: force,
+                deleteRemote: deleteRemote
+            )
         )
 
         return response

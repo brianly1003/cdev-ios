@@ -21,6 +21,8 @@ final class SourceControlViewModel: ObservableObject {
     @Published var branches: [WorkspaceGitBranchInfo] = []
     @Published var isLoadingBranches: Bool = false
     @Published var isCheckingOut: Bool = false
+    @Published var remotes: [WorkspaceGitRemoteInfo] = []
+    @Published var gitState: WorkspaceGitState = .synced
 
     // MARK: - Dependencies
 
@@ -408,6 +410,117 @@ final class SourceControlViewModel: ObservableObject {
         isLoadingBranches = false
     }
 
+    /// Fetch remotes and update git state
+    func fetchRemotes() async {
+        guard let workspaceId = currentWorkspaceId else {
+            return
+        }
+
+        do {
+            let result = try await workspaceManager.getRemotes(workspaceId: workspaceId)
+            remotes = result.safeRemotes
+            AppLogger.log("[SourceControl] Fetched \(remotes.count) remotes")
+        } catch {
+            AppLogger.error(error, context: "Fetch remotes")
+        }
+    }
+
+    /// Fetch git state from the server
+    func fetchGitState() async {
+        guard let workspaceId = currentWorkspaceId else {
+            gitState = .noGit
+            return
+        }
+
+        do {
+            let result = try await workspaceManager.getGitState(workspaceId: workspaceId)
+            gitState = result.gitState
+            AppLogger.log("[SourceControl] Git state: \(gitState.rawValue)")
+        } catch {
+            // Fallback to local detection
+            updateGitStateLocally()
+            AppLogger.error(error, context: "Fetch git state")
+        }
+    }
+
+    /// Update git state based on current status (fallback)
+    private func updateGitStateLocally() {
+        // Determine git state from available data
+        if state.currentBranch == nil && state.totalCount == 0 {
+            // No branch info could mean no git or not initialized
+            // We'll rely on the WorkspaceStatus gitTrackerState for accurate detection
+            gitState = .noGit
+        } else if remotes.isEmpty {
+            gitState = .noRemote
+        } else if state.currentBranch?.upstream == nil {
+            gitState = .noPush
+        } else if !state.conflictedFiles.isEmpty {
+            gitState = .conflict
+        } else if state.currentBranch?.ahead ?? 0 > 0 || state.currentBranch?.behind ?? 0 > 0 {
+            gitState = .diverged
+        } else {
+            gitState = .synced
+        }
+    }
+
+    /// Initialize git for current workspace
+    func initializeGit() async -> Bool {
+        guard let workspaceId = currentWorkspaceId else {
+            state.lastError = "No workspace selected"
+            Haptics.error()
+            return false
+        }
+
+        state.isLoading = true
+        do {
+            let result = try await workspaceManager.gitInit(workspaceId: workspaceId)
+            if result.isSuccess {
+                AppLogger.log("[SourceControl] Git initialized successfully")
+                await refresh()
+                Haptics.success()
+                state.isLoading = false
+                return true
+            } else {
+                state.lastError = result.error ?? result.message ?? "Failed to initialize git"
+                Haptics.error()
+            }
+        } catch {
+            state.lastError = error.localizedDescription
+            Haptics.error()
+        }
+        state.isLoading = false
+        return false
+    }
+
+    /// Add a remote to current workspace
+    func addRemote(name: String, url: String) async -> Bool {
+        guard let workspaceId = currentWorkspaceId else {
+            state.lastError = "No workspace selected"
+            Haptics.error()
+            return false
+        }
+
+        state.isLoading = true
+        do {
+            let result = try await workspaceManager.gitRemoteAdd(workspaceId: workspaceId, name: name, url: url)
+            if result.isSuccess {
+                AppLogger.log("[SourceControl] Remote added: \(name)")
+                await fetchRemotes()
+                Haptics.success()
+                state.isLoading = false
+                return true
+            } else {
+                state.lastError = result.error ?? result.message ?? "Failed to add remote"
+                Haptics.error()
+            }
+        } catch {
+            state.lastError = error.localizedDescription
+            Haptics.error()
+        }
+        state.isLoading = false
+        return false
+    }
+
     /// Checkout a branch
     func checkout(branch: String) async -> Bool {
         guard let workspaceId = currentWorkspaceId else {
@@ -471,6 +584,48 @@ final class SourceControlViewModel: ObservableObject {
         }
         isCheckingOut = false
         return false
+    }
+
+    /// Delete a branch (local and optionally remote)
+    /// - Parameters:
+    ///   - branch: Branch name to delete
+    ///   - force: Force delete even if not fully merged
+    ///   - deleteRemote: Also delete from remote (origin)
+    /// - Returns: Success result with optional error message
+    func deleteBranch(branch: String, force: Bool = false, deleteRemote: Bool = false) async -> (success: Bool, error: String?) {
+        guard let workspaceId = currentWorkspaceId else {
+            Haptics.error()
+            return (false, "No workspace selected")
+        }
+
+        // Cannot delete current branch
+        if state.currentBranch?.name == branch {
+            Haptics.error()
+            return (false, "Cannot delete the current branch. Switch to a different branch first.")
+        }
+
+        do {
+            let result = try await workspaceManager.gitBranchDelete(
+                workspaceId: workspaceId,
+                branch: branch,
+                force: force,
+                deleteRemote: deleteRemote
+            )
+
+            if result.success == true {
+                AppLogger.log("[SourceControl] Deleted branch: \(branch), remote: \(result.deletedRemote ?? false)")
+                await fetchBranches()
+                Haptics.success()
+                return (true, nil)
+            } else {
+                let errorMsg = result.error ?? result.message ?? "Failed to delete branch"
+                Haptics.error()
+                return (false, errorMsg)
+            }
+        } catch {
+            Haptics.error()
+            return (false, error.localizedDescription)
+        }
     }
 
     // MARK: - Local State Management
