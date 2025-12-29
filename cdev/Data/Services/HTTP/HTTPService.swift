@@ -215,6 +215,95 @@ final class HTTPService: HTTPServiceProtocol {
         }
     }
 
+    // MARK: - Token Authentication
+
+    /// Exchange pairing token for access/refresh token pair
+    /// This endpoint does NOT require existing auth token
+    /// - Parameter pairingToken: The pairing token from QR code
+    /// - Returns: TokenPair with access and refresh tokens
+    func exchangePairingToken(_ pairingToken: String) async throws -> TokenPair {
+        guard let baseURL = baseURL else {
+            throw AppError.serverUnreachable
+        }
+
+        let url = baseURL.appendingPathComponent("/api/auth/exchange")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Note: No Authorization header - pairing token is in the body
+
+        let body = TokenExchangeRequest(pairingToken: pairingToken)
+        request.httpBody = try encoder.encode(body)
+
+        AppLogger.network("[HTTP] → POST /api/auth/exchange (exchanging pairing token)")
+
+        let startTime = Date()
+        let (data, response) = try await session.data(for: request)
+        let duration = Date().timeIntervalSince(startTime)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.invalidResponse
+        }
+
+        if (200...299).contains(httpResponse.statusCode) {
+            AppLogger.network("[HTTP] ← \(httpResponse.statusCode) /api/auth/exchange (\(Int(duration * 1000))ms)")
+            return try decoder.decode(TokenPair.self, from: data)
+        } else {
+            let errorBody = String(data: data, encoding: .utf8)
+            AppLogger.network("[HTTP] ✗ \(httpResponse.statusCode) /api/auth/exchange - \(errorBody ?? "no body")", type: .error)
+
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw AppError.tokenInvalid
+            }
+            throw AppError.httpRequestFailed(statusCode: httpResponse.statusCode, message: errorBody)
+        }
+    }
+
+    /// Refresh access token using refresh token
+    /// This endpoint does NOT require existing auth token
+    /// - Parameter refreshToken: The refresh token from previous token pair
+    /// - Returns: New TokenPair with fresh access and refresh tokens
+    func refreshTokenPair(_ refreshToken: String) async throws -> TokenPair {
+        guard let baseURL = baseURL else {
+            throw AppError.serverUnreachable
+        }
+
+        let url = baseURL.appendingPathComponent("/api/auth/refresh")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Note: No Authorization header - refresh token is in the body
+
+        let body = TokenRefreshRequest(refreshToken: refreshToken)
+        request.httpBody = try encoder.encode(body)
+
+        AppLogger.network("[HTTP] → POST /api/auth/refresh (refreshing token pair)")
+
+        let startTime = Date()
+        let (data, response) = try await session.data(for: request)
+        let duration = Date().timeIntervalSince(startTime)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.invalidResponse
+        }
+
+        if (200...299).contains(httpResponse.statusCode) {
+            AppLogger.network("[HTTP] ← \(httpResponse.statusCode) /api/auth/refresh (\(Int(duration * 1000))ms)")
+            return try decoder.decode(TokenPair.self, from: data)
+        } else {
+            let errorBody = String(data: data, encoding: .utf8)
+            AppLogger.network("[HTTP] ✗ \(httpResponse.statusCode) /api/auth/refresh - \(errorBody ?? "no body")", type: .error)
+
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                // Refresh token expired or invalid - user needs to re-pair
+                throw AppError.refreshTokenExpired
+            }
+            throw AppError.httpRequestFailed(statusCode: httpResponse.statusCode, message: errorBody)
+        }
+    }
+
     // MARK: - Private
 
     private func performPost<B: Encodable>(path: String, body: B?) async throws -> Data {

@@ -75,6 +75,12 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     /// Returns the event if one was pending, nil otherwise
     /// Used by Dashboard to pick up permissions that arrived before it was ready
     func consumePendingTrustFolderPermission() -> AgentEvent?
+
+    // MARK: - Token Expiry Warning
+
+    /// Callback for token expiry warning (called ~5 minutes before token expires)
+    /// Parameter: time remaining in seconds until token expires
+    var onTokenExpiryWarning: ((TimeInterval) -> Void)? { get set }
 }
 
 /// Protocol for HTTP API operations
@@ -100,4 +106,16 @@ protocol HTTPServiceProtocol: AnyObject {
 
     /// Health check
     func healthCheck() async throws -> Bool
+
+    // MARK: - Token Authentication
+
+    /// Exchange pairing token for access/refresh token pair
+    /// - Parameter pairingToken: The pairing token from QR code
+    /// - Returns: TokenPair with access and refresh tokens
+    func exchangePairingToken(_ pairingToken: String) async throws -> TokenPair
+
+    /// Refresh access token using refresh token
+    /// - Parameter refreshToken: The refresh token from previous token pair
+    /// - Returns: New TokenPair with fresh access and refresh tokens
+    func refreshTokenPair(_ refreshToken: String) async throws -> TokenPair
 }

@@ -47,6 +47,7 @@
 		6C6F7C67E0BC4F47839E0591 /* RemoteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB7C109681411CAEB15A6B /* RemoteWorkspace.swift */; };
 		6D21B1BE994D76A4F6E49E1C /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6BC02BC16D7CC3133DF7BDD /* AppLogger.swift */; };
 		6DB1DB22EEDA6625C75199D0 /* FileViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */; };
+		7169D51A2E5AB6A74D2332D1 /* TokenManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD7D86FA8355B3BFB5FC8D03 /* TokenManager.swift */; };
 		741626DD143D7A5408A7B101 /* SourceControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 304293E381F5D0D9639FF77A /* SourceControlView.swift */; };
 		75785EFBBBDF43358ED0BB2C /* RepositoryDiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774013458A2F480C9CF16520 /* RepositoryDiscoveryView.swift */; };
 		7888DE0AED2CA22883B815F8 /* AgentStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72443A5CFC09CD2A8BA045ED /* AgentStatus.swift */; };
@@ -88,6 +89,7 @@
 		C364F0052EF9DECD00954454 /* WorkspaceStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C364F0012EF9DECD00954454 /* WorkspaceStateManager.swift */; };
 		C3E366081FEC92B0372561C1 /* FileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0556DECE53C5878722626932 /* FileRepository.swift */; };
 		C5EA0F5773CCAA9640072D81 /* VirtualizedCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2318BAE1D5EBDEAE0C00704A /* VirtualizedCodeView.swift */; };
+		C98A6448B99D119A83A4C1EC /* TokenPair.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01D927DF50E0B5E19D4E643 /* TokenPair.swift */; };
 		C9F75B6B68914828B16B17EC /* CopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03AB217A32A048D89A525C16 /* CopyButton.swift */; };
 		CB296021DCE6C2F996819DF6 /* LogListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D96DFC5ABC029B228D12994D /* LogListView.swift */; };
 		CDAA96C006C0FDCFF4DBDC44 /* FileRepositoryProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AEEC23C7C04889710D4AE6D /* FileRepositoryProtocol.swift */; };
@@ -217,6 +219,7 @@
 		97A8E5CF0E73CACC6D09B62C /* Colors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Colors.swift; sourceTree = "<group>"; };
 		98E7BABB6049A94E961749D0 /* SessionStorageProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStorageProtocol.swift; sourceTree = "<group>"; };
 		9F08738A357E2DD3C7F0AB9E /* ConnectionInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionInfo.swift; sourceTree = "<group>"; };
+		A01D927DF50E0B5E19D4E643 /* TokenPair.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TokenPair.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718A9BCDEF1 /* SessionAwarenessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAwarenessManager.swift; sourceTree = "<group>"; };
 		A430287A3C18468DAAACD920 /* CopyToast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyToast.swift; sourceTree = "<group>"; };
 		A75794D2C09305A7691F967F /* VoiceInputViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceInputViewModel.swift; sourceTree = "<group>"; };
@@ -238,6 +241,7 @@
 		C364F0012EF9DECD00954454 /* WorkspaceStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStateManager.swift; sourceTree = "<group>"; };
 		C364F0022EF9DECD00954454 /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
 		C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewerView.swift; sourceTree = "<group>"; };
+		CD7D86FA8355B3BFB5FC8D03 /* TokenManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TokenManager.swift; sourceTree = "<group>"; };
 		CD8868ADD6804B4C22DFDE52 /* FileCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCache.swift; sourceTree = "<group>"; };
 		COMMITHISTORY01REF00001 /* CommitHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHistoryView.swift; sourceTree = "<group>"; };
 		D2BED9190DAD30ECF6A37DD5 /* cdevApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = cdevApp.swift; sourceTree = "<group>"; };
@@ -730,6 +734,7 @@
 				2F8F091359BCD01CCB774AA4 /* QRCode */,
 				F5AB644FE702CA8BA81BFEB7 /* WebSocket */,
 				6EAEB8F139773C03DA816BDC /* Voice */,
+				F4105DF77DB53D8A29885CB9 /* Token */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -769,6 +774,7 @@
 				EAE980F6AA5F258638889DB0 /* LogEntry.swift */,
 				0506631280A96B48BA613082 /* Workspace.swift */,
 				2F9A05495FD0EA439B5660E3 /* VoiceInputModels.swift */,
+				A01D927DF50E0B5E19D4E643 /* TokenPair.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -787,6 +793,15 @@
 				2318BAE1D5EBDEAE0C00704A /* VirtualizedCodeView.swift */,
 			);
 			path = Components;
+			sourceTree = "<group>";
+		};
+		F4105DF77DB53D8A29885CB9 /* Token */ = {
+			isa = PBXGroup;
+			children = (
+				CD7D86FA8355B3BFB5FC8D03 /* TokenManager.swift */,
+			);
+			name = Token;
+			path = Token;
 			sourceTree = "<group>";
 		};
 		F5416DB9D11DA6C70D851707 /* Admin */ = {
@@ -1076,6 +1091,8 @@
 				6545472317A45E0391D76588 /* VoiceInputButton.swift in Sources */,
 				1E45BA284C2D34F693D493C6 /* VoiceInputOverlay.swift in Sources */,
 				F438AD925FA2C9F2942165CE /* CdevAlert.swift in Sources */,
+				C98A6448B99D119A83A4C1EC /* TokenPair.swift in Sources */,
+				7169D51A2E5AB6A74D2332D1 /* TokenManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

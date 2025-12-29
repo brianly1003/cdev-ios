@@ -8,6 +8,7 @@ struct ConnectionInfo: Codable, Equatable {
     let sessionId: String
     let repoName: String
     let token: String?
+    let tokenExpiresAtString: String?  // ISO8601 expiry time from server
 
     /// JSON keys match cdev-agent's PairingInfo:
     /// - ws: WebSocket URL
@@ -15,20 +16,49 @@ struct ConnectionInfo: Codable, Equatable {
     /// - session: Session ID
     /// - repo: Repository name
     /// - token: Optional pairing token
+    /// - token_expires_at: Optional ISO8601 expiry time
     enum CodingKeys: String, CodingKey {
         case webSocketURL = "ws"
         case httpURL = "http"
         case sessionId = "session"
         case repoName = "repo"
         case token
+        case tokenExpiresAtString = "token_expires_at"
     }
 
-    init(webSocketURL: URL, httpURL: URL, sessionId: String, repoName: String, token: String? = nil) {
+    init(webSocketURL: URL, httpURL: URL, sessionId: String, repoName: String, token: String? = nil, tokenExpiresAt: String? = nil) {
         self.webSocketURL = webSocketURL
         self.httpURL = httpURL
         self.sessionId = sessionId
         self.repoName = repoName
         self.token = token
+        self.tokenExpiresAtString = tokenExpiresAt
+    }
+
+    /// Parsed token expiry date
+    var tokenExpiresAt: Date? {
+        guard let expiryString = tokenExpiresAtString else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: expiryString) {
+            return date
+        }
+        // Try without fractional seconds
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: expiryString)
+    }
+
+    /// Check if token is expired
+    var isTokenExpired: Bool {
+        guard let expiresAt = tokenExpiresAt else { return false }
+        return Date() > expiresAt
+    }
+
+    /// Time until token expires (nil if no expiry or already expired)
+    var tokenTimeRemaining: TimeInterval? {
+        guard let expiresAt = tokenExpiresAt else { return nil }
+        let remaining = expiresAt.timeIntervalSinceNow
+        return remaining > 0 ? remaining : nil
     }
 
     init(from decoder: Decoder) throws {
@@ -57,6 +87,7 @@ struct ConnectionInfo: Codable, Equatable {
         self.sessionId = try container.decode(String.self, forKey: .sessionId)
         self.repoName = try container.decode(String.self, forKey: .repoName)
         self.token = try container.decodeIfPresent(String.self, forKey: .token)
+        self.tokenExpiresAtString = try container.decodeIfPresent(String.self, forKey: .tokenExpiresAtString)
     }
 
     /// Host address (for display)

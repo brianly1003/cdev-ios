@@ -37,7 +37,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private var pingTimer: DispatchSourceTimer?
     private var heartbeatCheckTimer: DispatchSourceTimer?
     private var failedRetryTimer: DispatchSourceTimer?  // Periodic retry when in failed state
+    private var tokenExpiryWarningTimer: DispatchSourceTimer?  // Token expiry warning
     private let timerQueue = DispatchQueue(label: "com.cdev.websocket.timers", qos: .utility)
+
+    /// Callback for token expiry warning (called ~5 minutes before token expires)
+    /// Parameter: time remaining in seconds
+    var onTokenExpiryWarning: ((TimeInterval) -> Void)?
 
     /// Track if we should attempt reconnection
     private var shouldAutoReconnect = true
@@ -312,6 +317,52 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         heartbeatCheckTimer?.cancel()
         heartbeatCheckTimer = nil
         stopFailedRetryTimer()
+        stopTokenExpiryWarningTimer()
+    }
+
+    /// Stop the token expiry warning timer
+    private func stopTokenExpiryWarningTimer() {
+        tokenExpiryWarningTimer?.cancel()
+        tokenExpiryWarningTimer = nil
+    }
+
+    /// Schedule a warning before token expires
+    /// Warns 5 minutes before expiry (or immediately if less than 5 minutes remaining)
+    private func scheduleTokenExpiryWarning() {
+        stopTokenExpiryWarningTimer()
+
+        guard let connectionInfo = connectionInfo,
+              let expiresAt = connectionInfo.tokenExpiresAt else {
+            return
+        }
+
+        let warningTime: TimeInterval = 5 * 60  // Warn 5 minutes before expiry
+        let timeUntilExpiry = expiresAt.timeIntervalSinceNow
+
+        // If already expired or about to expire, warn immediately
+        if timeUntilExpiry <= warningTime {
+            AppLogger.webSocket("Token expires soon (in \(Int(timeUntilExpiry))s) - warning immediately")
+            onTokenExpiryWarning?(timeUntilExpiry > 0 ? timeUntilExpiry : 0)
+            return
+        }
+
+        // Schedule warning for 5 minutes before expiry
+        let delayUntilWarning = timeUntilExpiry - warningTime
+        AppLogger.webSocket("Token expires in \(Int(timeUntilExpiry))s - scheduling warning in \(Int(delayUntilWarning))s")
+
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer.schedule(deadline: .now() + delayUntilWarning)
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.stopTokenExpiryWarningTimer()
+
+            // Calculate remaining time (should be ~5 minutes)
+            let remaining = expiresAt.timeIntervalSinceNow
+            AppLogger.webSocket("Token expiry warning - \(Int(remaining))s remaining", type: .warning)
+            self.onTokenExpiryWarning?(remaining > 0 ? remaining : 0)
+        }
+        timer.resume()
+        tokenExpiryWarningTimer = timer
     }
 
     /// Stop the failed retry timer
@@ -555,6 +606,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             ))
         }
         AppLogger.webSocket("JSON-RPC mode enabled")
+
+        // Schedule token expiry warning if token has an expiry time
+        scheduleTokenExpiryWarning()
     }
 
     private func waitForConnection(connectionInfo: ConnectionInfo) async throws {
@@ -1584,13 +1638,26 @@ extension WebSocketService: URLSessionWebSocketDelegate {
         guard !isReconnecting else { return }
 
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) }
-        AppLogger.webSocket("WebSocket closed: \(closeCode.rawValue)")
+        AppLogger.webSocket("WebSocket closed: code=\(closeCode.rawValue), reason=\(reasonString ?? "none")")
 
-        // Only update state if not empty reason
-        if let reason = reasonString, !reason.isEmpty {
-            updateState(.failed(reason: reason))
-        } else {
-            updateState(.disconnected)
+        // Handle specific close codes
+        switch closeCode.rawValue {
+        case 1008:  // Policy Violation - authentication failed
+            AppLogger.webSocket("Authentication failed (close code 1008)", type: .error)
+            updateState(.failed(reason: "Authentication failed - token may be expired"))
+        case 1001:  // Going Away - server shutting down
+            AppLogger.webSocket("Server going away", type: .warning)
+            updateState(.failed(reason: "Server shutting down"))
+        case 1006:  // Abnormal Closure - connection lost without close frame
+            AppLogger.webSocket("Connection lost abnormally", type: .warning)
+            updateState(.failed(reason: "Connection lost"))
+        default:
+            // Use reason string if provided, otherwise generic message
+            if let reason = reasonString, !reason.isEmpty {
+                updateState(.failed(reason: reason))
+            } else {
+                updateState(.disconnected)
+            }
         }
     }
 }

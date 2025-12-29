@@ -34,6 +34,7 @@ enum AppError: LocalizedError {
     // Authentication errors
     case tokenExpired
     case tokenInvalid
+    case refreshTokenExpired
     case authorizationFailed(statusCode: Int)
 
     // Data errors
@@ -103,6 +104,8 @@ enum AppError: LocalizedError {
             return "Authentication token has expired"
         case .tokenInvalid:
             return "Authentication token is invalid"
+        case .refreshTokenExpired:
+            return "Session has expired. Please scan a new QR code."
         case .authorizationFailed(let statusCode):
             return "Authorization failed (\(statusCode))"
         case .decodingFailed(let error):
@@ -138,7 +141,7 @@ enum AppError: LocalizedError {
             return "Try reconnecting to the agent"
         case .invalidQRCode, .invalidQRCodeDetail:
             return "Scan the QR code displayed by the agent"
-        case .sessionExpired, .tokenExpired:
+        case .sessionExpired, .tokenExpired, .refreshTokenExpired:
             return "Please scan a new QR code to reconnect"
         case .tokenInvalid, .authorizationFailed:
             return "The QR code may have expired. Please scan a fresh QR code."
@@ -152,7 +155,7 @@ enum AppError: LocalizedError {
     /// Check if this error indicates authentication/token issues
     var isAuthenticationError: Bool {
         switch self {
-        case .tokenExpired, .tokenInvalid, .authorizationFailed, .sessionExpired:
+        case .tokenExpired, .tokenInvalid, .refreshTokenExpired, .authorizationFailed, .sessionExpired:
             return true
         case .httpRequestFailed(let statusCode, _):
             return statusCode == 401 || statusCode == 403

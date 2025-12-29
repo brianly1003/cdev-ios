@@ -131,11 +131,16 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Session pending stop with viewer info
     @Published var sessionStopInfo: SessionStopInfo?
 
+    /// Token expiry warning state
+    @Published var showTokenExpiryWarning: Bool = false
+    @Published var tokenTimeRemaining: TimeInterval = 0
+
     // MARK: - Dependencies
 
     private let managerService: WorkspaceManagerService
     private let managerStore: ManagerStore
     private let webSocketService: WebSocketServiceProtocol
+    private let httpService: HTTPServiceProtocol
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Computed Properties
@@ -182,11 +187,13 @@ final class WorkspaceManagerViewModel: ObservableObject {
     init(
         managerService: WorkspaceManagerService? = nil,
         managerStore: ManagerStore? = nil,
-        webSocketService: WebSocketServiceProtocol? = nil
+        webSocketService: WebSocketServiceProtocol? = nil,
+        httpService: HTTPServiceProtocol? = nil
     ) {
         self.managerService = managerService ?? .shared
         self.managerStore = managerStore ?? .shared
         self.webSocketService = webSocketService ?? DependencyContainer.shared.webSocketService
+        self.httpService = httpService ?? DependencyContainer.shared.httpService
 
         // Initialize currentWorkspaceId from the active workspace's remoteWorkspaceId
         // This ensures "Current" badge shows correctly when reopening the view
@@ -205,7 +212,96 @@ final class WorkspaceManagerViewModel: ObservableObject {
             self.hasCheckedConnection = false
         }
 
+        // Set up TokenManager with HTTPService for token refresh
+        TokenManager.shared.setHTTPService(self.httpService)
+        setupTokenManagerCallbacks()
+
         setupBindings()
+        setupTokenExpiryWarning()
+    }
+
+    private func setupTokenManagerCallbacks() {
+        // Handle token refresh success - update HTTP service auth token
+        TokenManager.shared.onTokensRefreshed = { [weak self] tokenPair in
+            Task { @MainActor in
+                self?.httpService.authToken = tokenPair.accessToken
+                AppLogger.log("[WorkspaceManager] Token refreshed, updated HTTP auth token")
+            }
+        }
+
+        // Handle token refresh failure - need to re-pair
+        TokenManager.shared.onRefreshFailed = { [weak self] error in
+            Task { @MainActor in
+                AppLogger.log("[WorkspaceManager] Token refresh failed: \(error)", type: .error)
+                self?.handleRefreshTokenExpired()
+            }
+        }
+
+        // Handle token expiring soon warning
+        TokenManager.shared.onTokenExpiringSoon = { [weak self] timeRemaining in
+            Task { @MainActor in
+                self?.handleTokenExpiryWarning(timeRemaining: timeRemaining)
+            }
+        }
+    }
+
+    private func handleRefreshTokenExpired() {
+        // Refresh token expired - disconnect and prompt for re-pairing
+        serverStatus = .disconnected
+        webSocketService.disconnect()
+        TokenManager.shared.clearTokens()
+
+        // Show error to user
+        self.error = .rpcError(code: 401, message: "Session expired. Please scan a new QR code.")
+        self.showError = true
+
+        // Show setup sheet for re-pairing
+        showSetupSheet = true
+    }
+
+    /// Exchange pairing token for access/refresh token pair
+    private func exchangePairingToken(_ pairingToken: String, host: String) async throws -> TokenPair {
+        // Set up HTTP service with the correct base URL before exchange
+        let isLocal = isLocalHost(host)
+        let httpScheme = isLocal ? "http" : "https"
+        let baseURL: URL
+        if isLocal {
+            baseURL = URL(string: "\(httpScheme)://\(host):\(ServerConnection.serverPort)")!
+        } else {
+            baseURL = URL(string: "\(httpScheme)://\(host)")!
+        }
+        httpService.baseURL = baseURL
+
+        // Exchange the pairing token
+        let tokenPair = try await TokenManager.shared.exchangePairingToken(pairingToken, host: host)
+
+        // Update HTTP service with new access token
+        httpService.authToken = tokenPair.accessToken
+
+        return tokenPair
+    }
+
+    private func setupTokenExpiryWarning() {
+        // Set up callback for token expiry warning
+        // Note: Need to use concrete type since callback is set on WebSocketService
+        if let wsService = webSocketService as? WebSocketService {
+            wsService.onTokenExpiryWarning = { [weak self] timeRemaining in
+                Task { @MainActor in
+                    self?.handleTokenExpiryWarning(timeRemaining: timeRemaining)
+                }
+            }
+        }
+    }
+
+    private func handleTokenExpiryWarning(timeRemaining: TimeInterval) {
+        AppLogger.log("[WorkspaceManager] Token expiry warning - \(Int(timeRemaining))s remaining")
+        self.tokenTimeRemaining = timeRemaining
+        self.showTokenExpiryWarning = true
+    }
+
+    /// Dismiss token expiry warning (user acknowledged)
+    func dismissTokenExpiryWarning() {
+        showTokenExpiryWarning = false
     }
 
     private func setupBindings() {
@@ -323,8 +419,31 @@ final class WorkspaceManagerViewModel: ObservableObject {
         managerStore.saveHost(host, token: token)
         managerService.setCurrentHost(host)
 
-        // Build connection info with token
-        let connectionInfo = buildConnectionInfo(for: host, token: token)
+        // Handle token exchange if this is a pairing token
+        var accessToken = token
+        if let pairingToken = token, TokenType.from(token: pairingToken) == .pairing {
+            AppLogger.log("[WorkspaceManager] Detected pairing token, exchanging for access/refresh pair")
+            do {
+                let tokenPair = try await exchangePairingToken(pairingToken, host: host)
+                accessToken = tokenPair.accessToken
+                AppLogger.log("[WorkspaceManager] Token exchange successful, access token expires: \(tokenPair.accessTokenExpiresAt)")
+            } catch {
+                AppLogger.log("[WorkspaceManager] Token exchange failed: \(error)", type: .error)
+                // Fall back to using the pairing token directly (backward compatibility)
+                // This allows connection to servers that don't support token exchange yet
+            }
+        } else if token == nil {
+            // No token provided, check if we have stored tokens for this host
+            if let storedHost = TokenManager.shared.getStoredHost(),
+               storedHost == host,
+               let storedToken = await TokenManager.shared.getValidAccessToken() {
+                AppLogger.log("[WorkspaceManager] Using stored access token for host: \(host)")
+                accessToken = storedToken
+            }
+        }
+
+        // Build connection info with token (access token or fallback to original)
+        let connectionInfo = buildConnectionInfo(for: host, token: accessToken)
 
         // Retry loop
         while currentRetryAttempt < maxRetryAttempts && !connectionCancelled {
