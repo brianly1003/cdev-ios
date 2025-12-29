@@ -65,7 +65,7 @@ struct QuickSwitcherView: View {
                         }
                     }
                     .frame(maxHeight: isCompact ? 400 : 500)
-                    .onChange(of: viewModel.selectedIndex) { newIndex in
+                    .onChange(of: viewModel.selectedIndex) { _, newIndex in
                         withAnimation(.easeOut(duration: 0.15)) {
                             proxy.scrollTo(newIndex, anchor: .center)
                         }
@@ -150,7 +150,7 @@ struct QuickSwitcherView: View {
                 .foregroundStyle(ColorSystem.textPrimary)
                 .focused($isSearchFocused)
                 .submitLabel(.search)
-                .onChange(of: viewModel.searchText) { _ in
+                .onChange(of: viewModel.searchText) {
                     viewModel.resetSelection()
                 }
 

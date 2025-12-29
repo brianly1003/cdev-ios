@@ -54,7 +54,7 @@ final class NotificationService: ObservableObject {
         authorizationStatus = settings.authorizationStatus
         isAuthorized = settings.authorizationStatus == .authorized
 
-        AppLogger.log("[Notification] Status: \(authorizationStatus.description)")
+        AppLogger.log("[Notification] Status: \(authorizationStatus.statusDescription)")
     }
 
     // MARK: - Permission Notifications
@@ -67,7 +67,7 @@ final class NotificationService: ObservableObject {
         workspaceName: String?
     ) async {
         // Check if app is in background
-        let appState = await UIApplication.shared.applicationState
+        let appState = UIApplication.shared.applicationState
         guard appState != .active else {
             AppLogger.log("[Notification] Skipping - app is active")
             return
@@ -138,7 +138,11 @@ final class NotificationService: ObservableObject {
 
         // Clear badge
         Task { @MainActor in
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            if #available(iOS 16.0, *) {
+                try? await UNUserNotificationCenter.current().setBadgeCount(0)
+            } else {
+                UIApplication.shared.applicationIconBadgeNumber = 0
+            }
         }
 
         AppLogger.log("[Notification] Cleared permission notification")
@@ -150,15 +154,19 @@ final class NotificationService: ObservableObject {
         notificationCenter.removeAllPendingNotificationRequests()
 
         Task { @MainActor in
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            if #available(iOS 16.0, *) {
+                try? await UNUserNotificationCenter.current().setBadgeCount(0)
+            } else {
+                UIApplication.shared.applicationIconBadgeNumber = 0
+            }
         }
     }
 }
 
 // MARK: - UNAuthorizationStatus Description
 
-extension UNAuthorizationStatus: CustomStringConvertible {
-    public var description: String {
+extension UNAuthorizationStatus {
+    var statusDescription: String {
         switch self {
         case .notDetermined: return "notDetermined"
         case .denied: return "denied"

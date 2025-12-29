@@ -68,11 +68,17 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     let activeSessionId: String? // Currently active session ID (for multi-device)
     let git: WorkspaceGitInfo?  // Git state info (from workspace/add response)
 
+    // New top-level git state fields (from workspace/add enhancement)
+    let isGitRepo: Bool?        // Whether .git folder exists
+    let gitState: String?       // Git state: "no_git", "git_initialized", "no_remote", "no_push", "synced", "diverged", "conflict"
+
     enum CodingKeys: String, CodingKey {
         case id, name, path, sessions, git
         case autoStart = "auto_start"
         case createdAt = "created_at"
         case activeSessionId = "active_session_id"
+        case isGitRepo = "is_git_repo"
+        case gitState = "git_state"
     }
 
     // MARK: - Init with defaults
@@ -85,7 +91,9 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         createdAt: Date? = nil,
         sessions: [Session] = [],
         activeSessionId: String? = nil,
-        git: WorkspaceGitInfo? = nil
+        git: WorkspaceGitInfo? = nil,
+        isGitRepo: Bool? = nil,
+        gitState: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -95,6 +103,8 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         self.sessions = sessions
         self.activeSessionId = activeSessionId
         self.git = git
+        self.isGitRepo = isGitRepo
+        self.gitState = gitState
     }
 
     // MARK: - Custom Decoder (handles missing sessions and date formats)
@@ -117,8 +127,12 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
         activeSessionId = try container.decodeIfPresent(String.self, forKey: .activeSessionId)
 
-        // Git info from workspace/add response
+        // Git info from workspace/add response (nested object)
         git = try container.decodeIfPresent(WorkspaceGitInfo.self, forKey: .git)
+
+        // Top-level git state fields (from workspace/add enhancement)
+        isGitRepo = try container.decodeIfPresent(Bool.self, forKey: .isGitRepo)
+        gitState = try container.decodeIfPresent(String.self, forKey: .gitState)
     }
 
     /// Parse date from string with flexible ISO8601 format
@@ -161,6 +175,48 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     /// Most recently active session (running or not)
     var mostRecentSession: Session? {
         sessions.sorted { ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast) }.first
+    }
+
+    // MARK: - Git State Computed Properties
+
+    /// Convert gitState string to WorkspaceGitState enum
+    /// Prefers top-level gitState, falls back to nested git.workspaceGitState
+    var workspaceGitState: WorkspaceGitState {
+        // Prefer top-level gitState (from workspace/add enhancement)
+        if let stateString = gitState {
+            switch stateString.lowercased() {
+            case "no_git": return .noGit
+            case "git_initialized": return .gitInitialized
+            case "no_remote": return .noRemote
+            case "no_push": return .noPush
+            case "synced": return .synced
+            case "diverged": return .diverged
+            case "conflict": return .conflict
+            default: break
+            }
+        }
+
+        // Fall back to nested git info
+        if let git = git {
+            return git.workspaceGitState
+        }
+
+        // Default based on isGitRepo
+        if let isGit = isGitRepo {
+            return isGit ? .synced : .noGit
+        }
+
+        return .noGit
+    }
+
+    /// Whether this workspace is a git repository
+    var isGitRepository: Bool {
+        isGitRepo ?? (git?.initialized ?? false)
+    }
+
+    /// Whether this workspace needs git setup (not fully configured)
+    var needsGitSetup: Bool {
+        workspaceGitState.needsSetup
     }
 
     // MARK: - Hashable (for Set operations)

@@ -3,6 +3,11 @@ import SwiftUI
 // MARK: - Git State Badge
 
 /// Compact badge showing workspace git state
+/// Colors follow CDEV-COLOR-SYSTEM.md:
+/// - Warning (Golden Pulse #F6C85D): noGit, gitInitialized, noRemote, noPush
+/// - Success (Terminal Mint #68D391): synced
+/// - Info (Stream Blue #63B3ED): diverged
+/// - Error (Signal Coral #FC8181): conflict
 struct GitStateBadge: View {
     let state: WorkspaceGitState
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -16,22 +21,27 @@ struct GitStateBadge: View {
             Text(state.shortText)
                 .font(Typography.badge)
         }
-        .foregroundStyle(stateColor)
+        .foregroundColor(stateColor)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(stateColor.opacity(0.15))
         .clipShape(Capsule())
     }
 
+    /// State colors from ColorSystem following CDEV-COLOR-SYSTEM.md
     private var stateColor: Color {
         switch state {
         case .noGit, .gitInitialized, .noRemote, .noPush:
+            // Golden Pulse - Warning states requiring action
             return ColorSystem.warning
         case .synced:
+            // Terminal Mint - Success/healthy state
             return ColorSystem.success
         case .diverged:
+            // Stream Blue - Informational state
             return ColorSystem.info
         case .conflict:
+            // Signal Coral - Error state
             return ColorSystem.error
         }
     }
@@ -289,28 +299,48 @@ struct NoGitEmptyState: View {
 
     var body: some View {
         VStack(spacing: Spacing.md) {
-            Image(systemName: "folder.badge.questionmark")
-                .font(.system(size: 48))
-                .foregroundStyle(ColorSystem.textTertiary)
+            // Warning icon with glow - using ColorSystem.warning (Golden Pulse)
+            ZStack {
+                Circle()
+                    .fill(ColorSystem.warningGlow)
+                    .frame(width: 80, height: 80)
+                Circle()
+                    .fill(ColorSystem.warning.opacity(0.2))
+                    .frame(width: 64, height: 64)
+                Image(systemName: "folder.badge.questionmark")
+                    .font(.system(size: 32))
+                    .foregroundColor(ColorSystem.warning)
+            }
 
             VStack(spacing: Spacing.xs) {
                 Text("Not a Git Repository")
-                    .font(Typography.body)
-                    .foregroundStyle(ColorSystem.textPrimary)
+                    .font(Typography.bodyBold)
+                    .foregroundColor(ColorSystem.textPrimary)
 
                 Text("Initialize git to track changes and sync with remote")
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textSecondary)
+                    .font(Typography.caption1)
+                    .foregroundColor(ColorSystem.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
+            // Primary button - Terminal Mint success color
             Button {
+                Haptics.medium()
                 onInitialize()
             } label: {
-                Label("Initialize Git", systemImage: "leaf")
-                    .font(Typography.buttonLabel)
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "leaf.fill")
+                        .font(.system(size: layout.iconMedium))
+                    Text("Initialize Git")
+                        .font(Typography.buttonLabel)
+                }
+                .foregroundColor(ColorSystem.terminalBg)
+                .padding(.horizontal, layout.largePadding)
+                .frame(height: layout.buttonHeight + 4)
+                .background(ColorSystem.success)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
         }
         .padding(Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -328,28 +358,48 @@ struct NoRemoteEmptyState: View {
 
     var body: some View {
         VStack(spacing: Spacing.md) {
-            Image(systemName: "link.badge.plus")
-                .font(.system(size: 48))
-                .foregroundStyle(ColorSystem.textTertiary)
+            // Info icon with glow - using ColorSystem.info (Stream Blue)
+            ZStack {
+                Circle()
+                    .fill(ColorSystem.infoGlow)
+                    .frame(width: 80, height: 80)
+                Circle()
+                    .fill(ColorSystem.info.opacity(0.2))
+                    .frame(width: 64, height: 64)
+                Image(systemName: "link.badge.plus")
+                    .font(.system(size: 32))
+                    .foregroundColor(ColorSystem.info)
+            }
 
             VStack(spacing: Spacing.xs) {
                 Text("No Remote Configured")
-                    .font(Typography.body)
-                    .foregroundStyle(ColorSystem.textPrimary)
+                    .font(Typography.bodyBold)
+                    .foregroundColor(ColorSystem.textPrimary)
 
                 Text("Add a remote to sync with GitHub, GitLab, or Bitbucket")
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textSecondary)
+                    .font(Typography.caption1)
+                    .foregroundColor(ColorSystem.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
+            // Primary button - Cdev Teal primary color
             Button {
+                Haptics.medium()
                 onAddRemote()
             } label: {
-                Label("Connect Remote", systemImage: "link")
-                    .font(Typography.buttonLabel)
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "link")
+                        .font(.system(size: layout.iconMedium))
+                    Text("Connect Remote")
+                        .font(Typography.buttonLabel)
+                }
+                .foregroundColor(ColorSystem.terminalBg)
+                .padding(.horizontal, layout.largePadding)
+                .frame(height: layout.buttonHeight + 4)
+                .background(ColorSystem.primary)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
         }
         .padding(Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

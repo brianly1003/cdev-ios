@@ -24,14 +24,26 @@ struct WorkspaceManagerView: View {
     /// Show debug logs sheet (for FloatingToolkit)
     @State private var showDebugLogs: Bool = false
 
+    /// Show settings sheet (for FloatingToolkit)
+    @State private var showSettings: Bool = false
+
     /// Scroll request (from floating toolkit force touch)
     @State private var scrollRequest: ScrollDirection?
+
+    /// Git setup sheet state
+    @State private var showGitSetup: Bool = false
+    @State private var gitSetupWorkspace: RemoteWorkspace?
+
+    /// No Git alert state (shown when tapping workspace without git)
+    @State private var showNoGitAlert: Bool = false
+    @State private var noGitAlertWorkspace: RemoteWorkspace?
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     /// Toolkit items for FloatingToolkitButton (only shows Debug when root view)
     private var toolkitItems: [ToolkitItem] {
         ToolkitBuilder()
+            .add(.settings { showSettings = true })
             .add(.debugLogs { showDebugLogs = true })
             .build()
     }
@@ -205,6 +217,64 @@ struct WorkspaceManagerView: View {
                 AdminToolsView()
                     .responsiveSheet()
             }
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+                    .responsiveSheet()
+            }
+            .sheet(isPresented: $showGitSetup, onDismiss: {
+                gitSetupWorkspace = nil
+                // Refresh workspace list to update git state
+                Task { await viewModel.refreshWorkspaces() }
+            }) {
+                if let workspace = gitSetupWorkspace {
+                    GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: workspace.id))
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                        .presentationBackground(ColorSystem.terminalBg)
+                }
+            }
+            .sheet(isPresented: $showNoGitAlert, onDismiss: {
+                // Handle post-dismiss actions
+                if let workspace = noGitAlertWorkspace, gitSetupWorkspace != nil {
+                    // GitSetup was requested - will be shown via showGitSetup binding
+                }
+                noGitAlertWorkspace = nil
+            }) {
+                if let workspace = noGitAlertWorkspace {
+                    NoGitAlertSheet(
+                        workspace: workspace,
+                        onSetupGit: {
+                            // Store workspace for git setup, dismiss current sheet
+                            gitSetupWorkspace = workspace
+                            showNoGitAlert = false
+                        },
+                        onOpenAnyway: {
+                            showNoGitAlert = false
+                            // Delay connection until sheet is dismissed
+                            Task {
+                                try? await Task.sleep(nanoseconds: 500_000_000)
+                                await connectToWorkspace(workspace)
+                            }
+                        },
+                        onCancel: {
+                            showNoGitAlert = false
+                        }
+                    )
+                    .presentationDetents([.height(320)])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(20)
+                    .presentationBackground(ColorSystem.terminalBgElevated)
+                }
+            }
+            .onChange(of: showNoGitAlert) { _, isPresented in
+                // When NoGitAlert dismisses, check if we need to show GitSetup
+                if !isPresented && gitSetupWorkspace != nil {
+                    // Delay to ensure sheet dismiss animation completes
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showGitSetup = true
+                    }
+                }
+            }
             .sheet(isPresented: $viewModel.showRemovalSheet) {
                 if let info = viewModel.removalInfo {
                     WorkspaceRemovalSheet(
@@ -329,56 +399,16 @@ struct WorkspaceManagerView: View {
                         operation: viewModel.operationFor(workspace),
                         isServerConnected: viewModel.isConnected,
                         onConnect: {
+                            // Check if workspace needs git setup - show alert instead of direct connect
+                            if workspace.workspaceGitState == .noGit {
+                                noGitAlertWorkspace = workspace
+                                showNoGitAlert = true
+                                return
+                            }
+
+                            // Normal connection flow
                             Task {
-                                AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH START ==========")
-                                AppLogger.log("[WorkspaceManagerView] onConnect: workspace=\(workspace.name), id=\(workspace.id)")
-                                AppLogger.log("[WorkspaceManagerView] onConnect: hasActiveSession=\(workspace.hasActiveSession), sessions=\(workspace.sessions.count)")
-                                AppLogger.log("[WorkspaceManagerView] onConnect: savedHost=\(viewModel.savedHost ?? "nil"), isConnected=\(viewModel.isConnected)")
-                                AppLogger.log("[WorkspaceManagerView] onConnect: currentWorkspaceId=\(viewModel.currentWorkspaceId ?? "nil")")
-
-                                // For already-active workspaces, dismiss FIRST to avoid visual glitch
-                                // when WebSocket reconnects (shared WebSocket causes isConnected state change)
-                                if workspace.hasActiveSession {
-                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Dismissing first before connection")
-                                    dismiss()
-
-                                    // Wait for fullScreenCover dismiss animation to complete
-                                    // The animation takes ~400ms, so we wait 500ms to be safe
-                                    // This prevents "presentation in progress" errors when presenting other sheets
-                                    try? await Task.sleep(nanoseconds: 500_000_000)  // 500ms
-                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: After dismiss delay, calling connectToWorkspace")
-
-                                    let running = await viewModel.connectToWorkspace(workspace)
-                                    AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
-
-                                    if let running = running, let host = viewModel.savedHost {
-                                        AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Calling onConnectToWorkspace callback")
-                                        let success = await onConnectToWorkspace?(running, host) ?? false
-                                        AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: onConnectToWorkspace returned: \(success)")
-                                    } else {
-                                        AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
-                                    }
-                                } else {
-                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Starting new session flow")
-                                    // For inactive workspaces, wait for connection result before dismissing
-                                    let running = await viewModel.connectToWorkspace(workspace)
-                                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
-
-                                    if let running = running, let host = viewModel.savedHost {
-                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Calling onConnectToWorkspace callback")
-                                        let success = await onConnectToWorkspace?(running, host) ?? false
-                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: onConnectToWorkspace returned: \(success)")
-                                        if success {
-                                            AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Dismissing view")
-                                            dismiss()
-                                        } else {
-                                            AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Connection failed, NOT dismissing")
-                                        }
-                                    } else {
-                                        AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
-                                    }
-                                }
-                                AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH END ==========")
+                                await connectToWorkspace(workspace)
                             }
                         },
                         onStart: {
@@ -390,7 +420,11 @@ struct WorkspaceManagerView: View {
                         onRemove: {
                             // Prepare removal with multi-device awareness
                             Task { await viewModel.prepareWorkspaceRemoval(workspace) }
-                        }
+                        },
+                        onSetupGit: workspace.needsGitSetup ? {
+                            gitSetupWorkspace = workspace
+                            showGitSetup = true
+                        } : nil
                     )
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
@@ -439,6 +473,59 @@ struct WorkspaceManagerView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Connection Helper
+
+    /// Connect to workspace (extracted for reuse in alert "Open Anyway" action)
+    private func connectToWorkspace(_ workspace: RemoteWorkspace) async {
+        AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH START ==========")
+        AppLogger.log("[WorkspaceManagerView] connectToWorkspace: workspace=\(workspace.name), id=\(workspace.id)")
+        AppLogger.log("[WorkspaceManagerView] connectToWorkspace: hasActiveSession=\(workspace.hasActiveSession), sessions=\(workspace.sessions.count)")
+        AppLogger.log("[WorkspaceManagerView] connectToWorkspace: savedHost=\(viewModel.savedHost ?? "nil"), isConnected=\(viewModel.isConnected)")
+        AppLogger.log("[WorkspaceManagerView] connectToWorkspace: currentWorkspaceId=\(viewModel.currentWorkspaceId ?? "nil")")
+
+        // For already-active workspaces, dismiss FIRST to avoid visual glitch
+        // when WebSocket reconnects (shared WebSocket causes isConnected state change)
+        if workspace.hasActiveSession {
+            AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Dismissing first before connection")
+            dismiss()
+
+            // Wait for fullScreenCover dismiss animation to complete
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 500ms
+            AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: After dismiss delay, calling connectToWorkspace")
+
+            let running = await viewModel.connectToWorkspace(workspace)
+            AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
+
+            if let running = running, let host = viewModel.savedHost {
+                AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Calling onConnectToWorkspace callback")
+                let success = await onConnectToWorkspace?(running, host) ?? false
+                AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: onConnectToWorkspace returned: \(success)")
+            } else {
+                AppLogger.log("[WorkspaceManagerView] ACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
+            }
+        } else {
+            AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Starting new session flow")
+            // For inactive workspaces, wait for connection result before dismissing
+            let running = await viewModel.connectToWorkspace(workspace)
+            AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: connectToWorkspace returned: \(running?.name ?? "nil")")
+
+            if let running = running, let host = viewModel.savedHost {
+                AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Calling onConnectToWorkspace callback")
+                let success = await onConnectToWorkspace?(running, host) ?? false
+                AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: onConnectToWorkspace returned: \(success)")
+                if success {
+                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Dismissing view")
+                    dismiss()
+                } else {
+                    AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Connection failed, NOT dismissing")
+                }
+            } else {
+                AppLogger.log("[WorkspaceManagerView] INACTIVE PATH: Failed - running=\(running != nil), host=\(viewModel.savedHost ?? "nil")")
+            }
+        }
+        AppLogger.log("[WorkspaceManagerView] ========== WORKSPACE SWITCH END ==========")
     }
 
     // MARK: - Loading View
@@ -596,6 +683,7 @@ struct WorkspaceManagerView: View {
 // MARK: - Server Connection Banner
 
 /// Non-blocking banner showing server connection status with actions
+/// Compact design with clear touch targets
 struct ServerConnectionBanner: View {
     let status: ServerConnectionStatus
     let host: String?
@@ -609,85 +697,50 @@ struct ServerConnectionBanner: View {
     var body: some View {
         // Only show banner when not connected
         if !status.isConnected {
-            HStack(spacing: Spacing.sm) {
-                // Status indicator
-                HStack(spacing: Spacing.xxs) {
-                    statusIcon
-                        .font(.system(size: layout.iconSmall))
-
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(status.statusText)
-                            .font(Typography.caption1)
-                            .fontWeight(.medium)
-                            .foregroundStyle(status.statusColor)
-
-                        if let host = host {
-                            Text(host)
-                                .font(Typography.terminalSmall)
-                                .foregroundStyle(ColorSystem.textTertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
+            HStack(spacing: Spacing.xs) {
+                // Status indicator with background pill
+                statusPill
 
                 Spacer()
 
                 // Action buttons
-                HStack(spacing: Spacing.xs) {
-                    switch status {
-                    case .connecting:
-                        // Cancel button during connection attempts
-                        Button {
-                            onCancel?()
-                        } label: {
-                            Text("Cancel")
-                                .font(Typography.caption1)
-                                .fontWeight(.medium)
-                                .foregroundStyle(ColorSystem.textSecondary)
-                                .padding(.horizontal, Spacing.sm)
-                                .padding(.vertical, Spacing.xxs)
-                                .background(ColorSystem.terminalBgElevated)
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-
-                    case .disconnected, .unreachable:
-                        // Retry button
-                        Button {
-                            onRetry?()
-                        } label: {
-                            Label("Retry", systemImage: "arrow.clockwise")
-                                .font(Typography.caption1)
-                                .fontWeight(.medium)
-                                .foregroundStyle(ColorSystem.primary)
-                                .padding(.horizontal, Spacing.sm)
-                                .padding(.vertical, Spacing.xxs)
-                                .background(ColorSystem.primary.opacity(0.12))
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-
-                        // Change server button
-                        Button {
-                            onChangeServer?()
-                        } label: {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: layout.iconSmall))
-                                .foregroundStyle(ColorSystem.textSecondary)
-                                .padding(Spacing.xxs)
-                                .background(ColorSystem.terminalBgElevated)
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-
-                    case .connected:
-                        EmptyView()
-                    }
-                }
+                actionButtons
             }
             .padding(.horizontal, layout.standardPadding)
             .padding(.vertical, Spacing.xs)
             .background(bannerBackground)
+        }
+    }
+
+    // MARK: - Status Pill (icon + text)
+
+    @ViewBuilder
+    private var statusPill: some View {
+        HStack(spacing: Spacing.xs) {
+            // Icon with small background
+            ZStack {
+                Circle()
+                    .fill(statusIconBackground)
+                    .frame(width: 28, height: 28)
+
+                statusIcon
+                    .font(.system(size: 13, weight: .semibold))
+            }
+
+            // Status text
+            VStack(alignment: .leading, spacing: 0) {
+                Text(status.statusText)
+                    .font(Typography.caption1)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(status.statusColor)
+
+                if let host = host {
+                    Text(host)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .lineLimit(1)
+                }
+            }
         }
     }
 
@@ -700,12 +753,89 @@ struct ServerConnectionBanner: View {
         case .connecting:
             ProgressView()
                 .scaleEffect(0.7)
+                .tint(ColorSystem.warning)
         case .disconnected:
             Image(systemName: "wifi.slash")
-                .foregroundStyle(ColorSystem.textTertiary)
+                .foregroundStyle(ColorSystem.error)
         case .unreachable:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(ColorSystem.error)
+        }
+    }
+
+    private var statusIconBackground: Color {
+        switch status {
+        case .connected:
+            return ColorSystem.success.opacity(0.15)
+        case .connecting:
+            return ColorSystem.warning.opacity(0.15)
+        case .disconnected, .unreachable:
+            return ColorSystem.error.opacity(0.15)
+        }
+    }
+
+    // MARK: - Action Buttons
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        HStack(spacing: Spacing.xs) {
+            switch status {
+            case .connecting:
+                // Cancel button
+                Button {
+                    onCancel?()
+                } label: {
+                    Text("Cancel")
+                        .font(Typography.caption1)
+                        .fontWeight(.medium)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, 6)
+                        .background(ColorSystem.terminalBgHighlight)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+            case .disconnected, .unreachable:
+                // Retry button - prominent pill
+                Button {
+                    onRetry?()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Retry")
+                            .font(Typography.caption1)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundStyle(ColorSystem.primary)
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.vertical, 6)
+                    .background(ColorSystem.primary.opacity(0.15))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+                // Change server button - square with border
+                Button {
+                    onChangeServer?()
+                } label: {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textSecondary)
+                        .frame(width: 30, height: 30)
+                        .background(ColorSystem.terminalBgHighlight)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(ColorSystem.textQuaternary.opacity(0.5), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+            case .connected:
+                EmptyView()
+            }
         }
     }
 
@@ -1065,6 +1195,143 @@ struct SessionStopWarningSheet: View {
     }
 }
 
+// MARK: - No Git Alert Sheet
+
+/// Custom styled sheet for workspace without git repository
+/// Matches Cdev Signature Design System - Eye-Friendly Edition
+/// Uses ColorSystem terminal theme with desaturated accent colors
+struct NoGitAlertSheet: View {
+    let workspace: RemoteWorkspace
+    let onSetupGit: () -> Void
+    let onOpenAnyway: () -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Drag indicator - using textQuaternary for subtle visibility
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(ColorSystem.textQuaternary)
+                .frame(width: 36, height: 5)
+                .padding(.top, Spacing.sm)
+                .padding(.bottom, Spacing.md)
+
+            // Header with icon and title
+            VStack(spacing: Spacing.sm) {
+                // Warning icon with glow effect - using warningGlow from ColorSystem
+                ZStack {
+                    // Outer glow - matches ColorSystem.warningGlow pattern
+                    Circle()
+                        .fill(ColorSystem.warningGlow)
+                        .frame(width: 72, height: 72)
+
+                    // Inner circle - subtle warning background
+                    Circle()
+                        .fill(ColorSystem.warning.opacity(0.2))
+                        .frame(width: 56, height: 56)
+
+                    // Icon - Golden Pulse warning color (#F6C85D in dark mode)
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundColor(ColorSystem.warning)
+                }
+
+                // Title - using textPrimary (#E2E8F0 in dark mode)
+                Text("No Git Repository")
+                    .font(Typography.title3)
+                    .foregroundColor(ColorSystem.textPrimary)
+
+                // Workspace name badge - terminal themed
+                HStack(spacing: 4) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 10))
+                    Text(workspace.name)
+                        .font(Typography.terminal)
+                }
+                .foregroundColor(ColorSystem.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(ColorSystem.terminalBgHighlight)
+                .clipShape(Capsule())
+
+                // Description - using textTertiary for muted hint text
+                Text("This workspace is not tracked by git.\nSetup git to track changes and sync.")
+                    .font(Typography.caption1)
+                    .foregroundColor(ColorSystem.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+            }
+            .padding(.bottom, Spacing.lg)
+
+            // Action buttons - following Cdev button patterns
+            VStack(spacing: Spacing.sm) {
+                // Primary action - Setup Git
+                // Uses Terminal Mint success color (#68D391 in dark mode)
+                Button {
+                    Haptics.medium()
+                    onSetupGit()
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "leaf.fill")
+                            .font(.system(size: layout.iconMedium))
+                        Text("Setup Git")
+                            .font(Typography.buttonLabel)
+                    }
+                    .foregroundColor(ColorSystem.terminalBg) // Dark text on light button
+                    .frame(maxWidth: .infinity)
+                    .frame(height: layout.buttonHeight + 8)
+                    .background(ColorSystem.success)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+                }
+                .buttonStyle(.plain)
+
+                // Secondary action - Open Anyway
+                // Uses Cdev Teal primary color (#4FD1C5 in dark mode)
+                Button {
+                    Haptics.light()
+                    onOpenAnyway()
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .font(.system(size: layout.iconMedium))
+                        Text("Open Anyway")
+                            .font(Typography.buttonLabel)
+                    }
+                    .foregroundColor(ColorSystem.primary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: layout.buttonHeight + 4)
+                    .background(ColorSystem.primaryGlow)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CornerRadius.medium)
+                            .stroke(ColorSystem.primary.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                // Cancel button - text only, using textTertiary
+                Button {
+                    onCancel()
+                } label: {
+                    Text("Cancel")
+                        .font(Typography.buttonLabel)
+                        .foregroundColor(ColorSystem.textTertiary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: layout.buttonHeight)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, layout.largePadding)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .background(ColorSystem.terminalBgElevated) // #1E2128 in dark mode
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
@@ -1088,5 +1355,20 @@ struct SessionStopWarningSheet: View {
             host: "192.168.1.100"
         )
     }
+    .background(ColorSystem.terminalBg)
+}
+
+#Preview("No Git Alert Sheet") {
+    NoGitAlertSheet(
+        workspace: RemoteWorkspace(
+            id: "test-1",
+            name: "test001",
+            path: "/Users/brianly/Projects/test001"
+        ),
+        onSetupGit: {},
+        onOpenAnyway: {},
+        onCancel: {}
+    )
+    .frame(height: 320)
     .background(ColorSystem.terminalBg)
 }

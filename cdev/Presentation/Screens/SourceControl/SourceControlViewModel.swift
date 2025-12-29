@@ -118,7 +118,8 @@ final class SourceControlViewModel: ObservableObject {
             if error is CancellationError {
                 AppLogger.log("[SourceControl] Git status refresh cancelled")
             } else {
-                state.lastError = error.localizedDescription
+                // Extract user-friendly error message
+                state.lastError = extractUserFriendlyError(from: error)
                 AppLogger.error(error, context: "Refresh git status")
             }
         }
@@ -649,5 +650,49 @@ final class SourceControlViewModel: ObservableObject {
         // Only update unstaged - staged files should come from API
         state.unstagedFiles = unstagedFiles
         state.untrackedFiles = untrackedFiles
+    }
+
+    // MARK: - Error Handling
+
+    /// Extract user-friendly error message from various error types
+    private func extractUserFriendlyError(from error: Error) -> String {
+        // Handle WorkspaceManagerError for RPC errors
+        if let wsError = error as? WorkspaceManagerError {
+            switch wsError {
+            case .rpcError(_, let message):
+                let lowerMessage = message.lowercased()
+
+                // Not a git repository
+                if lowerMessage.contains("not a git repository") ||
+                   lowerMessage.contains("not a git repo") {
+                    return "This workspace is not a git repository. Use Setup Git to initialize."
+                }
+
+                // Workspace not found
+                if lowerMessage.contains("workspace not found") ||
+                   lowerMessage.contains("invalid workspace") {
+                    return "Workspace not found. It may have been removed."
+                }
+
+                // Return the actual message if descriptive enough
+                if message.count > 15 {
+                    return message
+                }
+
+                return "Git operation failed. Please try again."
+
+            case .notConnected:
+                return "Not connected to server."
+
+            case .timeout:
+                return "Request timed out."
+
+            default:
+                return "An error occurred. Please try again."
+            }
+        }
+
+        // Default to localized description
+        return error.localizedDescription
     }
 }

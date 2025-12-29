@@ -16,6 +16,7 @@ struct WorkspaceRowView: View {
     let onStart: () -> Void
     let onStop: () -> Void
     let onRemove: () -> Void
+    var onSetupGit: (() -> Void)?  // Optional: called when user wants to setup git
 
     // Responsive layout
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -49,7 +50,7 @@ struct WorkspaceRowView: View {
 
             // Workspace info
             VStack(alignment: .leading, spacing: 2) {
-                // Name row
+                // Name row with git status
                 HStack(spacing: layout.tightSpacing) {
                     Text(workspace.name)
                         .font(Typography.body)
@@ -65,6 +66,11 @@ struct WorkspaceRowView: View {
                             .padding(.vertical, 2)
                             .background(ColorSystem.primary.opacity(0.15))
                             .clipShape(Capsule())
+                    }
+
+                    // Git status badge for non-git workspaces
+                    if workspace.needsGitSetup {
+                        gitSetupBadge
                     }
                 }
 
@@ -213,6 +219,41 @@ struct WorkspaceRowView: View {
         }
     }
 
+    // MARK: - Git Setup Badge
+
+    @ViewBuilder
+    private var gitSetupBadge: some View {
+        let gitState = workspace.workspaceGitState
+        // Use ColorSystem.warning (Golden Pulse #F6C85D) for noGit state per CDEV-COLOR-SYSTEM.md
+        let badgeColor = gitState == .noGit ? ColorSystem.warning : ColorSystem.textTertiary
+
+        // Match "Current" badge style: Typography.badge, padding(.horizontal, 6), padding(.vertical, 2)
+        HStack(spacing: 3) {
+            Image(systemName: gitState.icon)
+                .font(.system(size: 8))
+            Text(gitState.shortText)
+                .font(Typography.badge)
+            // Chevron to indicate it's tappable
+            Image(systemName: "chevron.right")
+                .font(.system(size: 6, weight: .bold))
+        }
+        .foregroundColor(badgeColor)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(badgeColor.opacity(0.15))
+        .clipShape(Capsule())
+        .contentShape(Capsule())
+        // Use highPriorityGesture to capture tap before the row's simultaneousGesture
+        .highPriorityGesture(
+            TapGesture().onEnded {
+                if let onSetupGit = onSetupGit {
+                    Haptics.light()
+                    onSetupGit()
+                }
+            }
+        )
+    }
+
     // MARK: - Helpers
 
     private var statusColor: Color {
@@ -261,6 +302,7 @@ struct SwipeableWorkspaceRow: View {
     let onStart: () -> Void
     let onStop: () -> Void
     let onRemove: () -> Void
+    var onSetupGit: (() -> Void)?
 
     init(
         workspace: RemoteWorkspace,
@@ -272,7 +314,8 @@ struct SwipeableWorkspaceRow: View {
         onConnect: @escaping () -> Void,
         onStart: @escaping () -> Void,
         onStop: @escaping () -> Void,
-        onRemove: @escaping () -> Void
+        onRemove: @escaping () -> Void,
+        onSetupGit: (() -> Void)? = nil
     ) {
         self.workspace = workspace
         self.isCurrentWorkspace = isCurrentWorkspace
@@ -284,6 +327,7 @@ struct SwipeableWorkspaceRow: View {
         self.onStart = onStart
         self.onStop = onStop
         self.onRemove = onRemove
+        self.onSetupGit = onSetupGit
     }
 
     var body: some View {
@@ -297,7 +341,8 @@ struct SwipeableWorkspaceRow: View {
             onConnect: onConnect,
             onStart: onStart,
             onStop: onStop,
-            onRemove: onRemove
+            onRemove: onRemove,
+            onSetupGit: onSetupGit
         )
         // Only show swipe actions when server is connected
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {

@@ -217,11 +217,13 @@ final class WorkspaceManagerService: ObservableObject {
         return response
     }
 
-    /// Add a new workspace (register a repository)
+    /// Add a new workspace (register a folder or repository)
     /// - Parameters:
-    ///   - path: Absolute path to the git repository
+    ///   - path: Absolute path to the folder/repository
     ///   - name: Display name (if nil, derived from path's last component)
-    func addWorkspace(path: String, name: String? = nil) async throws -> RemoteWorkspace {
+    ///   - createIfMissing: If true, creates the directory if it doesn't exist
+    /// - Returns: RemoteWorkspace with `isGitRepo` and `gitState` indicating git status
+    func addWorkspace(path: String, name: String? = nil, createIfMissing: Bool = false) async throws -> RemoteWorkspace {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
@@ -232,7 +234,11 @@ final class WorkspaceManagerService: ObservableObject {
         let client = ws.getJSONRPCClient()
         let response: RemoteWorkspace = try await client.request(
             method: JSONRPCMethod.workspaceAdd,
-            params: AddWorkspaceParams(path: path, name: workspaceName)
+            params: AddWorkspaceParams(
+                path: path,
+                name: workspaceName,
+                createIfMissing: createIfMissing ? true : nil  // Only send if true
+            )
         )
 
         // Add to local workspaces list and maintain alphabetical sort
@@ -991,6 +997,12 @@ private struct WorkspaceIdParams: Encodable {
 private struct AddWorkspaceParams: Encodable {
     let path: String
     let name: String  // Required by API - derived from path if not provided
+    let createIfMissing: Bool?  // Create directory if it doesn't exist
+
+    enum CodingKeys: String, CodingKey {
+        case path, name
+        case createIfMissing = "create_if_missing"
+    }
 }
 
 private struct DiscoverParams: Encodable {

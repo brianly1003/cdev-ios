@@ -156,10 +156,22 @@ final class GitSetupViewModel: ObservableObject {
             workspaceId: workspaceId,
             initialBranch: "main"
         )
-        guard result.isSuccess else {
-            throw GitSetupError.initFailed(result.error ?? result.message ?? "Unknown error")
+
+        // Handle success or "already initialized" cases
+        if result.isSuccess {
+            AppLogger.log("[GitSetup] Git initialized successfully")
+            return
         }
-        AppLogger.log("[GitSetup] Git initialized successfully")
+
+        // If already a git repository, treat as success and continue to next step
+        let errorMessage = (result.error ?? result.message ?? "").lowercased()
+        if errorMessage.contains("already") && errorMessage.contains("git repository") {
+            AppLogger.log("[GitSetup] Directory already a git repository - continuing to next step")
+            return
+        }
+
+        // Otherwise, throw the error
+        throw GitSetupError.initFailed(result.error ?? result.message ?? "Unknown error")
     }
 
     private func createInitialCommit() async throws {
@@ -214,34 +226,47 @@ struct GitSetupWizard: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Progress steps
-                SetupProgressView(
-                    steps: viewModel.steps,
-                    currentStep: viewModel.currentStep,
-                    completedSteps: viewModel.completedSteps
-                )
-                .padding()
+            ZStack {
+                // Background color that fills entire view
+                ColorSystem.terminalBg
+                    .ignoresSafeArea()
 
-                Divider()
+                VStack(spacing: 0) {
+                    // Progress steps
+                    SetupProgressView(
+                        steps: viewModel.steps,
+                        currentStep: viewModel.currentStep,
+                        completedSteps: viewModel.completedSteps
+                    )
+                    .padding()
+                    .background(ColorSystem.terminalBg)
 
-                // Current step content
-                ScrollView {
-                    currentStepContent
-                        .padding()
+                    Divider()
+                        .overlay(ColorSystem.terminalBgHighlight)
+
+                    // Current step content
+                    ScrollView {
+                        currentStepContent
+                            .padding()
+                    }
+                    .background(ColorSystem.terminalBg)
+
+                    Divider()
+                        .overlay(ColorSystem.terminalBgHighlight)
+
+                    // Actions
+                    actionBar
                 }
-
-                Divider()
-
-                // Actions
-                actionBar
             }
-            .background(ColorSystem.terminalBg)
             .navigationTitle("Git Setup")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(ColorSystem.terminalBgElevated, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundColor(ColorSystem.textSecondary)
                 }
             }
             .alert("Error", isPresented: $viewModel.showError) {
@@ -250,6 +275,7 @@ struct GitSetupWizard: View {
                 Text(viewModel.error ?? "An unknown error occurred")
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder
@@ -274,23 +300,42 @@ struct GitSetupWizard: View {
     }
 
     private var actionBar: some View {
-        HStack {
+        HStack(spacing: layout.contentSpacing) {
+            // Back button - secondary style
             if viewModel.canGoBack {
-                Button("Back") {
+                Button {
                     viewModel.goBack()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Back")
+                            .font(Typography.buttonLabel)
+                    }
+                    .foregroundColor(ColorSystem.textSecondary)
+                    .padding(.horizontal, layout.standardPadding)
+                    .frame(height: layout.buttonHeight)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
             }
 
             Spacer()
 
+            // Skip button - text only
             if viewModel.canSkip && viewModel.parsedRemoteURL == nil {
-                Button("Skip") {
+                Button {
                     viewModel.skip()
+                } label: {
+                    Text("Skip for Now")
+                        .font(Typography.buttonLabel)
+                        .foregroundColor(ColorSystem.textTertiary)
                 }
-                .foregroundStyle(ColorSystem.textSecondary)
+                .buttonStyle(.plain)
             }
 
+            // Primary action button - Cdev styled
             Button {
                 if viewModel.isLastStep {
                     dismiss()
@@ -298,17 +343,43 @@ struct GitSetupWizard: View {
                     Task { await viewModel.continueToNext() }
                 }
             } label: {
-                if viewModel.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                } else {
-                    Text(viewModel.continueButtonTitle)
+                HStack(spacing: Spacing.xs) {
+                    if viewModel.isLoading {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .tint(ColorSystem.terminalBg)
+                    } else {
+                        Image(systemName: primaryButtonIcon)
+                            .font(.system(size: layout.iconMedium))
+                        Text(viewModel.continueButtonTitle)
+                            .font(Typography.buttonLabel)
+                    }
                 }
+                .foregroundColor(ColorSystem.terminalBg)
+                .padding(.horizontal, layout.standardPadding)
+                .frame(height: layout.buttonHeight + 4)
+                .background(
+                    viewModel.canContinue && !viewModel.isLoading
+                        ? ColorSystem.success
+                        : ColorSystem.success.opacity(0.4)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
             .disabled(!viewModel.canContinue || viewModel.isLoading)
         }
-        .padding()
+        .padding(layout.standardPadding)
+        .background(ColorSystem.terminalBgElevated)
+    }
+
+    private var primaryButtonIcon: String {
+        switch viewModel.currentStep {
+        case .initGit: return "leaf.fill"
+        case .initialCommit: return "checkmark.circle.fill"
+        case .addRemote: return viewModel.parsedRemoteURL != nil ? "link" : "arrow.right"
+        case .push: return "arrow.up.circle.fill"
+        case .complete: return "checkmark"
+        }
     }
 }
 

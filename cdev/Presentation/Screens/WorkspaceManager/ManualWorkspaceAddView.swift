@@ -210,7 +210,7 @@ struct ManualWorkspaceAddView: View {
                 .fontWeight(.medium)
                 .foregroundStyle(ColorSystem.textSecondary)
 
-            // Input field
+            // Input field - fixed height for consistency
             HStack(spacing: layout.contentSpacing) {
                 Image(systemName: "folder")
                     .font(.system(size: layout.iconMedium))
@@ -230,23 +230,23 @@ struct ManualWorkspaceAddView: View {
                         }
                     }
 
-                // Clear button - use iconAction for better tap target
-                if !path.isEmpty {
-                    Button {
-                        path = ""
-                        Haptics.light()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: layout.iconAction))
-                            .foregroundStyle(ColorSystem.textTertiary)
-                            .frame(width: layout.buttonHeightSmall, height: layout.buttonHeightSmall)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                // Clear button - always reserve space for consistent height
+                Button {
+                    path = ""
+                    Haptics.light()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: layout.iconAction))
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .frame(width: layout.buttonHeightSmall, height: layout.buttonHeightSmall)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .opacity(path.isEmpty ? 0 : 1)
+                .disabled(path.isEmpty)
             }
             .padding(.horizontal, layout.contentSpacing)
-            .padding(.vertical, layout.contentSpacing)
+            .frame(height: layout.inputHeight)
             .background(ColorSystem.terminalBgHighlight)
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
             .overlay(
@@ -388,8 +388,10 @@ struct ManualWorkspaceAddView: View {
             Haptics.success()
 
             if let workspace = workspace {
-                // Use git state from response (no separate API calls needed)
-                let gitState = workspace.git?.workspaceGitState ?? .noGit
+                // Use new workspaceGitState computed property (checks both top-level gitState and nested git info)
+                let gitState = workspace.workspaceGitState
+
+                AppLogger.log("[ManualAdd] Workspace added: \(workspace.name), isGitRepo: \(workspace.isGitRepo ?? false), gitState: \(workspace.gitState ?? "nil"), resolved: \(gitState)")
 
                 // Show success view with git state
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -412,28 +414,23 @@ struct ManualWorkspaceAddView: View {
     private func extractErrorMessage(from error: Error) -> String {
         if let wsError = error as? WorkspaceManagerError {
             switch wsError {
-            case .rpcError(let code, let message):
+            case .rpcError(_, let message):
                 // Clean up common server error messages to be user-friendly
+                // Check message content FIRST before falling back to generic handling
                 let lowerMessage = message.lowercased()
 
-                // Path doesn't exist
-                if lowerMessage.contains("does not exist") ||
-                   lowerMessage.contains("no such file or directory") ||
-                   lowerMessage.contains("path not found") {
-                    return "This folder doesn't exist. Please check the path and try again."
-                }
-
-                // Not a git repository
-                if lowerMessage.contains("not a git repository") ||
-                   lowerMessage.contains("not a valid git") {
-                    return "This folder is not a git repository. Currently only git repositories can be added as workspaces."
-                }
-
-                // Already exists
+                // Already exists - most common error
                 if lowerMessage.contains("already exists") ||
                    lowerMessage.contains("already registered") ||
                    lowerMessage.contains("duplicate") {
                     return "This workspace has already been added."
+                }
+
+                // Path doesn't exist (shouldn't happen with createIfMissing)
+                if lowerMessage.contains("does not exist") ||
+                   lowerMessage.contains("no such file or directory") ||
+                   lowerMessage.contains("path not found") {
+                    return "Could not create folder. Please check the path is valid."
                 }
 
                 // Permission denied
@@ -442,21 +439,18 @@ struct ManualWorkspaceAddView: View {
                     return "Permission denied. Make sure you have access to this folder."
                 }
 
-                // Internal server error
-                if code == -32603 {
-                    // Internal error - make the message friendlier
-                    if lowerMessage.contains("path") {
-                        return "Could not access this path. Please verify it exists and is accessible."
-                    }
-                    return "Something went wrong on the server. Please try again."
+                // Not a git repository (this is OK now, shouldn't be an error)
+                if lowerMessage.contains("not a git repository") ||
+                   lowerMessage.contains("not a valid git") {
+                    return "Could not access this folder. Please check permissions."
                 }
 
-                // If message is technical/short, provide a generic friendly message
-                if message.count < 20 || message.contains("error") {
-                    return "Could not add workspace: \(message)"
+                // For any other server message, show it directly if it's descriptive enough
+                if message.count > 10 {
+                    return message
                 }
 
-                return message
+                return "Could not add workspace. Please try again."
 
             case .notConnected:
                 return "Not connected to the server. Please check your connection."
@@ -478,12 +472,7 @@ struct ManualWorkspaceAddView: View {
             }
         }
 
-        // Handle generic errors
-        let errorDescription = error.localizedDescription.lowercased()
-        if errorDescription.contains("protocol") || errorDescription.contains("decode") {
-            return "Communication error with server. Please try again."
-        }
-
+        // Handle generic errors - show actual message
         return error.localizedDescription
     }
 }
@@ -575,24 +564,13 @@ struct WorkspaceGitStatePreview: View {
                 .foregroundStyle(ColorSystem.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: layout.contentSpacing) {
-                Button {
-                    onOpen()
-                } label: {
-                    Text("Open Anyway")
-                        .font(Typography.buttonLabel)
-                        .foregroundStyle(ColorSystem.textSecondary)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    onSetupGit()
-                } label: {
-                    Label("Setup Git", systemImage: "leaf")
-                        .font(Typography.buttonLabel)
-                }
-                .buttonStyle(.borderedProminent)
+            Button {
+                onSetupGit()
+            } label: {
+                Label("Setup Git", systemImage: "leaf")
+                    .font(Typography.buttonLabel)
             }
+            .buttonStyle(.borderedProminent)
         }
     }
 

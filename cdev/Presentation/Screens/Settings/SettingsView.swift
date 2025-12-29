@@ -13,10 +13,7 @@ struct SettingsView: View {
     @AppStorage(Constants.UserDefaults.hapticFeedback) private var hapticFeedback = true
     @AppStorage(Constants.UserDefaults.autoReconnect) private var autoReconnect = true
 
-    var onDisconnect: (() -> Void)?
-    @State private var showDisconnectConfirm = false
     @State private var showClearDataConfirm = false
-    @State private var showWorkspaceManager = false
     @State private var showThemePicker = false
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
@@ -78,26 +75,6 @@ struct SettingsView: View {
                             )
                         }
 
-                        // Connection Section
-                        SettingsSection(title: "Connection", icon: "wifi") {
-                            SettingsButtonRow(
-                                icon: "laptopcomputer.and.iphone",
-                                title: "Remote Workspaces",
-                                style: .normal
-                            ) {
-                                showWorkspaceManager = true
-                            }
-
-                            SettingsButtonRow(
-                                icon: "xmark.circle",
-                                title: "Disconnect",
-                                style: .destructive,
-                                disabled: onDisconnect == nil
-                            ) {
-                                showDisconnectConfirm = true
-                            }
-                        }
-
                         // Data Section
                         SettingsSection(title: "Data", icon: "externaldrive") {
                             SettingsButtonRow(
@@ -108,6 +85,9 @@ struct SettingsView: View {
                                 showClearDataConfirm = true
                             }
                         }
+
+                        // Debug Logs Section
+                        DebugLogsSettingsSection()
 
                         // About Section
                         SettingsSection(title: "About", icon: "info.circle") {
@@ -147,20 +127,6 @@ struct SettingsView: View {
                 }
             }
             .confirmationDialog(
-                "Disconnect from workspace?",
-                isPresented: $showDisconnectConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Disconnect", role: .destructive) {
-                    // Call disconnect - RootView will handle navigation
-                    // Don't call dismiss() here - the view hierarchy change will dismiss this sheet
-                    onDisconnect?()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("You'll need to scan the QR code again to reconnect.")
-            }
-            .confirmationDialog(
                 "Clear all saved workspaces?",
                 isPresented: $showClearDataConfirm,
                 titleVisibility: .visible
@@ -172,14 +138,6 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This will remove all saved workspace connections. You'll need to scan QR codes again.")
-            }
-            .sheet(isPresented: $showWorkspaceManager) {
-                WorkspaceManagerView(
-                    onDisconnect: onDisconnect != nil ? {
-                        onDisconnect?()
-                    } : nil
-                )
-                    .responsiveSheet()
             }
             .sheet(isPresented: $showThemePicker) {
                 ThemePickerView(
@@ -825,6 +783,155 @@ private struct VoiceLanguagePickerView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Debug Logs Settings Section
+
+private struct DebugLogsSettingsSection: View {
+    @StateObject private var logStore = DebugLogStore.shared
+    @State private var showClearLogsConfirm = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            // Section Header
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 10))
+                Text("DEBUG LOGS")
+                    .font(Typography.badge)
+            }
+            .foregroundStyle(ColorSystem.textTertiary)
+            .padding(.horizontal, Spacing.xs)
+
+            // Section Content
+            VStack(spacing: 0.5) {
+                // Persist Logs Toggle
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 14))
+                        .foregroundStyle(ColorSystem.primary)
+                        .frame(width: 20)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Persist Logs to File")
+                            .font(Typography.body)
+                            .foregroundStyle(ColorSystem.textPrimary)
+
+                        Text("Save logs across app restarts")
+                            .font(Typography.caption2)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+
+                    Spacer()
+
+                    Toggle("", isOn: $logStore.persistenceEnabled)
+                        .labelsHidden()
+                        .tint(ColorSystem.primary)
+                        .scaleEffect(0.85)
+                        .onChange(of: logStore.persistenceEnabled) { _, newValue in
+                            Haptics.selection()
+                            if newValue {
+                                logStore.forceSave()
+                            }
+                        }
+                }
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
+                .background(ColorSystem.terminalBgElevated)
+
+                // File Info (only when persistence enabled)
+                if logStore.persistenceEnabled {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "doc.badge.clock")
+                            .font(.system(size: 14))
+                            .foregroundStyle(ColorSystem.textTertiary)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Log File Size")
+                                .font(Typography.body)
+                                .foregroundStyle(ColorSystem.textPrimary)
+
+                            if let lastSave = logStore.lastSaveTime {
+                                Text("Last saved: \(lastSave.formatted(.relative(presentation: .named)))")
+                                    .font(Typography.caption2)
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                            }
+                        }
+
+                        Spacer()
+
+                        Text(logStore.getFormattedFileSize())
+                            .font(Typography.terminal)
+                            .foregroundStyle(ColorSystem.textSecondary)
+                    }
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.vertical, Spacing.xs)
+                    .background(ColorSystem.terminalBgElevated)
+
+                    // Previous Session Logs count
+                    if logStore.previousSessionLogCount > 0 {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 14))
+                                .foregroundStyle(ColorSystem.textTertiary)
+                                .frame(width: 20)
+
+                            Text("Previous Sessions")
+                                .font(Typography.body)
+                                .foregroundStyle(ColorSystem.textPrimary)
+
+                            Spacer()
+
+                            Text("\(logStore.previousSessionLogCount) logs")
+                                .font(Typography.terminal)
+                                .foregroundStyle(ColorSystem.textSecondary)
+                        }
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .background(ColorSystem.terminalBgElevated)
+                    }
+
+                    // Clear Saved Logs button
+                    Button {
+                        showClearLogsConfirm = true
+                    } label: {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 14))
+                                .foregroundStyle(ColorSystem.error)
+                                .frame(width: 20)
+
+                            Text("Clear Saved Logs")
+                                .font(Typography.body)
+                                .foregroundStyle(ColorSystem.error)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .background(ColorSystem.terminalBgElevated)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+        }
+        .animation(.easeInOut(duration: 0.2), value: logStore.persistenceEnabled)
+        .confirmationDialog(
+            "Clear all saved logs?",
+            isPresented: $showClearLogsConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Logs", role: .destructive) {
+                logStore.clear(clearPersisted: true)
+                Haptics.warning()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will delete all saved debug logs. Current session logs will remain in memory.")
         }
     }
 }

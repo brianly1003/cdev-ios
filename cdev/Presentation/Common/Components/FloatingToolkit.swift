@@ -906,6 +906,56 @@ struct FloatingToolkitButton: View {
             addCornerLayerPositions(count: layer1Count, radius: innerRadius, startIndex: 0)
             addCornerLayerPositions(count: layer2Count, radius: outerRadius, startIndex: layer1Count)
 
+        } else if total == 2 {
+            // Special case for exactly 2 items: Settings and Debug
+            let radius: CGFloat = 75   // Distance from button center
+
+            // When near top or bottom edge, use horizontal layout (Settings left, Debug right)
+            // Otherwise use vertical layout (Settings above, Debug below)
+            let useHorizontalLayout = nearTop || nearBottom
+
+            if useHorizontalLayout {
+                // Horizontal layout: Settings on left, Debug on right
+                let leftAngle = 180.0 * .pi / 180.0   // Left
+                let rightAngle = 0.0 * .pi / 180.0   // Right
+
+                // Settings (index 0) positioned to the left
+                let rawX1 = currentPos.x + CGFloat(Darwin.cos(leftAngle)) * radius
+                let rawY1 = currentPos.y + CGFloat(Darwin.sin(leftAngle)) * radius
+                positions.append(CGPoint(
+                    x: max(minX, min(maxX, rawX1)),
+                    y: max(minY, min(maxY, rawY1))
+                ))
+
+                // Debug (index 1) positioned to the right
+                let rawX2 = currentPos.x + CGFloat(Darwin.cos(rightAngle)) * radius
+                let rawY2 = currentPos.y + CGFloat(Darwin.sin(rightAngle)) * radius
+                positions.append(CGPoint(
+                    x: max(minX, min(maxX, rawX2)),
+                    y: max(minY, min(maxY, rawY2))
+                ))
+            } else {
+                // Vertical layout: Settings above, Debug below
+                let upwardAngle = -90.0 * .pi / 180.0
+                let downwardAngle = 90.0 * .pi / 180.0
+
+                // Settings (index 0) positioned above the button
+                let rawX1 = currentPos.x + CGFloat(Darwin.cos(upwardAngle)) * radius
+                let rawY1 = currentPos.y + CGFloat(Darwin.sin(upwardAngle)) * radius
+                positions.append(CGPoint(
+                    x: max(minX, min(maxX, rawX1)),
+                    y: max(minY, min(maxY, rawY1))
+                ))
+
+                // Debug (index 1) positioned below the button
+                let rawX2 = currentPos.x + CGFloat(Darwin.cos(downwardAngle)) * radius
+                let rawY2 = currentPos.y + CGFloat(Darwin.sin(downwardAngle)) * radius
+                positions.append(CGPoint(
+                    x: max(minX, min(maxX, rawX2)),
+                    y: max(minY, min(maxY, rawY2))
+                ))
+            }
+
         } else {
             // Normal case: 180° fan, multi-layer if more than 5 buttons
             // Layer 1: up to 5 buttons at standard radius

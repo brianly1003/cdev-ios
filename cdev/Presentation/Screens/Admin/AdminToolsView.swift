@@ -61,6 +61,7 @@ struct AdminToolsView: View {
                     autoScroll: $logStore.autoScroll,
                     onClear: { logStore.clear(category: selectedCategory) },
                     onExport: exportLogs,
+                    onShare: shareLogs,
                     onReportIssue: generateIssueReport
                 )
 
@@ -181,6 +182,45 @@ struct AdminToolsView: View {
         }
     }
 
+    /// Share logs file via share sheet
+    private func shareLogs() {
+        // Force save current logs first
+        logStore.forceSave()
+
+        guard let fileURL = logStore.getLogsFileURL() else {
+            // Fallback to text export if file not available
+            exportLogs()
+            return
+        }
+
+        Haptics.success()
+
+        // Present share sheet
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = windowScene.windows.first?.rootViewController else {
+            return
+        }
+
+        var topVC = rootVC
+        while let presented = topVC.presentedViewController {
+            topVC = presented
+        }
+
+        let activityVC = UIActivityViewController(
+            activityItems: [fileURL],
+            applicationActivities: nil
+        )
+
+        // iPad popover configuration
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = topVC.view
+            popover.sourceRect = CGRect(x: topVC.view.bounds.midX, y: topVC.view.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+
+        topVC.present(activityVC, animated: true)
+    }
+
     /// Generate issue report and show share sheet
     private func generateIssueReport() {
         let markdown = IssueReportGenerator.shared.generateMarkdownReport()
@@ -299,6 +339,7 @@ private struct ControlBar: View {
     @Binding var autoScroll: Bool
     let onClear: () -> Void
     let onExport: () -> Void
+    let onShare: () -> Void
     let onReportIssue: () -> Void
 
     @FocusState private var isSearchFocused: Bool
@@ -353,13 +394,22 @@ private struct ControlBar: View {
                     Haptics.light()
                 }
 
-                // Export
+                // Copy to clipboard
                 ControlButton(
                     icon: "doc.on.clipboard",
                     color: ColorSystem.textSecondary,
                     isActive: false
                 ) {
                     onExport()
+                }
+
+                // Share logs file
+                ControlButton(
+                    icon: "square.and.arrow.up",
+                    color: ColorSystem.primary,
+                    isActive: false
+                ) {
+                    onShare()
                 }
 
                 // Report Issue

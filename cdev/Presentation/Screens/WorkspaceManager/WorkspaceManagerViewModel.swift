@@ -180,23 +180,23 @@ final class WorkspaceManagerViewModel: ObservableObject {
     // MARK: - Initialization
 
     init(
-        managerService: WorkspaceManagerService = .shared,
-        managerStore: ManagerStore = .shared,
-        webSocketService: WebSocketServiceProtocol = DependencyContainer.shared.webSocketService
+        managerService: WorkspaceManagerService? = nil,
+        managerStore: ManagerStore? = nil,
+        webSocketService: WebSocketServiceProtocol? = nil
     ) {
-        self.managerService = managerService
-        self.managerStore = managerStore
-        self.webSocketService = webSocketService
+        self.managerService = managerService ?? .shared
+        self.managerStore = managerStore ?? .shared
+        self.webSocketService = webSocketService ?? DependencyContainer.shared.webSocketService
 
         // Initialize currentWorkspaceId from the active workspace's remoteWorkspaceId
         // This ensures "Current" badge shows correctly when reopening the view
         self.currentWorkspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
 
         // Initialize serverStatus based on current WebSocket state
-        if webSocketService.isConnected {
+        if self.webSocketService.isConnected {
             self.serverStatus = .connected
             self.hasCheckedConnection = true
-        } else if !managerStore.hasManager {
+        } else if !self.managerStore.hasManager {
             self.serverStatus = .disconnected
             self.hasCheckedConnection = true
         } else {
@@ -689,11 +689,14 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Add a workspace manually by path
     /// Used as an alternative to Discovery Repos when user knows exact path
-    /// Returns the created workspace for git state detection
+    /// - Parameters:
+    ///   - path: Absolute path to the folder/repository
+    ///   - createIfMissing: If true, creates the directory if it doesn't exist
+    /// - Returns: The created workspace with git state for further setup
     @discardableResult
-    func addWorkspaceManually(path: String) async throws -> RemoteWorkspace {
-        let workspace = try await managerService.addWorkspace(path: path)
-        AppLogger.log("[WorkspaceManager] Manually added workspace: \(workspace.name)")
+    func addWorkspaceManually(path: String, createIfMissing: Bool = true) async throws -> RemoteWorkspace {
+        let workspace = try await managerService.addWorkspace(path: path, createIfMissing: createIfMissing)
+        AppLogger.log("[WorkspaceManager] Manually added workspace: \(workspace.name), isGitRepo: \(workspace.isGitRepo ?? false), gitState: \(workspace.gitState ?? "unknown")")
         return workspace
     }
 

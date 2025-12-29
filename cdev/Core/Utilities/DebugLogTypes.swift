@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Debug Log Types (Shared between AppLogger and DebugLogStore)
 
 /// Categories of debug logs
-enum DebugLogCategory: String, CaseIterable, Identifiable {
+enum DebugLogCategory: String, CaseIterable, Identifiable, Codable {
     case all = "All"
     case http = "HTTP"
     case websocket = "WS"
@@ -31,7 +31,7 @@ enum DebugLogCategory: String, CaseIterable, Identifiable {
 }
 
 /// Log severity level
-enum DebugLogLevel: String {
+enum DebugLogLevel: String, Codable {
     case info
     case success
     case warning

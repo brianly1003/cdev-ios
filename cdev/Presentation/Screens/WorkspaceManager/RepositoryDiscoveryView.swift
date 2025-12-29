@@ -15,6 +15,9 @@ struct RepositoryDiscoveryView: View {
     /// Show debug logs sheet (for FloatingToolkit)
     @State private var showDebugLogs: Bool = false
 
+    /// Show settings sheet (for FloatingToolkit)
+    @State private var showSettings: Bool = false
+
     /// Scroll request (from floating toolkit force touch)
     @State private var scrollRequest: ScrollDirection?
 
@@ -23,6 +26,7 @@ struct RepositoryDiscoveryView: View {
     /// Toolkit items - only Debug Logs button
     private var toolkitItems: [ToolkitItem] {
         ToolkitBuilder()
+            .add(.settings { showSettings = true })
             .add(.debugLogs { showDebugLogs = true })
             .build()
     }
@@ -97,6 +101,10 @@ struct RepositoryDiscoveryView: View {
                 }
                 .sheet(isPresented: $showDebugLogs) {
                     AdminToolsView()
+                        .responsiveSheet()
+                }
+                .sheet(isPresented: $showSettings) {
+                    SettingsView()
                         .responsiveSheet()
                 }
                 .task {

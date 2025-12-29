@@ -288,9 +288,7 @@ struct DashboardView: View {
                         .responsiveSheet()
                 }
                 .fullScreenCover(isPresented: $showSettings) {
-                    SettingsView(onDisconnect: {
-                        Task { await viewModel.disconnect() }
-                    })
+                    SettingsView()
                 }
                 .sheet(isPresented: $viewModel.showSessionPicker) {
                     SessionPickerView(
