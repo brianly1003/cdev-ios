@@ -517,7 +517,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             self.session = nil
 
             let errorMessage = Self.friendlyErrorMessage(from: error)
-            updateState(.failed(reason: errorMessage))
+            // Only update to failed state if NOT in reconnection loop
+            // During reconnection, the loop handles state transitions to avoid flickering
+            if !isReconnecting {
+                updateState(.failed(reason: errorMessage))
+            }
             AppLogger.webSocket("Connection failed: \(errorMessage)", type: .error)
             throw error
         }
@@ -536,7 +540,10 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             stopTimers()
 
             let errorMessage = "Server does not support JSON-RPC 2.0"
-            updateState(.failed(reason: errorMessage))
+            // Only update to failed state if NOT in reconnection loop
+            if !isReconnecting {
+                updateState(.failed(reason: errorMessage))
+            }
             throw AppError.connectionFailed(underlying: NSError(
                 domain: "WebSocketService",
                 code: -1,
