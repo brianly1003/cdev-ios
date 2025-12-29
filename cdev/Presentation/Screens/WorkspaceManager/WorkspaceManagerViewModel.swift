@@ -261,12 +261,18 @@ final class WorkspaceManagerViewModel: ObservableObject {
                         break
                     case .reconnecting(let attempt):
                         // Update UI to show reconnection progress (WebSocket auto-reconnect)
-                        self.serverStatus = .connecting(attempt: attempt, maxAttempts: Constants.Network.maxReconnectAttempts)
-                        AppLogger.log("[WorkspaceManager] Connection state synced: reconnecting (\(attempt))")
+                        // Only if ViewModel is not running its own retry loop
+                        if !self.isConnecting {
+                            self.serverStatus = .connecting(attempt: attempt, maxAttempts: Constants.Network.maxReconnectAttempts)
+                            AppLogger.log("[WorkspaceManager] Connection state synced: reconnecting (\(attempt))")
+                        }
                     case .failed(let reason):
-                        // Always update to failed state so UI reflects server down
-                        self.serverStatus = .unreachable(lastError: reason)
-                        AppLogger.log("[WorkspaceManager] Connection state synced: failed - \(reason)")
+                        // Only update to failed state if ViewModel is not running its own retry loop
+                        // ViewModel's connectWithRetry handles its own state transitions
+                        if !self.isConnecting {
+                            self.serverStatus = .unreachable(lastError: reason)
+                            AppLogger.log("[WorkspaceManager] Connection state synced: failed - \(reason)")
+                        }
                     }
                 }
             }
@@ -310,6 +316,9 @@ final class WorkspaceManagerViewModel: ObservableObject {
         isConnecting = true
         hasCheckedConnection = true  // Mark as checked immediately so UI doesn't show initial loading
 
+        // Tell WebSocket we're managing our own retry loop (prevents .failed state flickering)
+        webSocketService.isExternalRetryInProgress = true
+
         // Save the host and token early so UI can show it
         managerStore.saveHost(host, token: token)
         managerService.setCurrentHost(host)
@@ -326,6 +335,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
             do {
                 try await webSocketService.connect(to: connectionInfo)
                 // Success!
+                webSocketService.isExternalRetryInProgress = false
                 serverStatus = .connected
                 isConnecting = false
                 currentRetryAttempt = 0
@@ -339,6 +349,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 // Check if cancelled
                 if connectionCancelled {
                     AppLogger.log("[WorkspaceManager] Connection cancelled by user")
+                    webSocketService.isExternalRetryInProgress = false
                     serverStatus = .disconnected
                     isConnecting = false
                     return
@@ -359,6 +370,9 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 }
             }
         }
+
+        // Clear external retry flag and update final state
+        webSocketService.isExternalRetryInProgress = false
 
         // Final check if cancelled during loop
         if connectionCancelled {

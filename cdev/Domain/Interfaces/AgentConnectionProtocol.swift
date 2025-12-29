@@ -23,6 +23,10 @@ protocol AgentConnectionProtocol: AnyObject {
 
 /// Protocol for WebSocket-specific operations
 protocol WebSocketServiceProtocol: AgentConnectionProtocol {
+    /// Flag to indicate external retry loop is in progress (e.g., WorkspaceManagerViewModel)
+    /// When true, connect() won't update to .failed state on failure
+    var isExternalRetryInProgress: Bool { get set }
+
     /// Reconnect with exponential backoff
     func reconnect() async throws
 

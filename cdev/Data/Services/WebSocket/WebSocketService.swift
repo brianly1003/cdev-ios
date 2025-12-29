@@ -42,6 +42,10 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Track if we should attempt reconnection
     private var shouldAutoReconnect = true
 
+    /// Flag to indicate external retry loop is in progress (e.g., WorkspaceManagerViewModel)
+    /// When true, connect() won't update to .failed state on failure
+    @Atomic var isExternalRetryInProgress = false
+
     /// Cached JSON decoder/encoder to avoid repeated allocations
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
@@ -517,9 +521,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             self.session = nil
 
             let errorMessage = Self.friendlyErrorMessage(from: error)
-            // Only update to failed state if NOT in reconnection loop
-            // During reconnection, the loop handles state transitions to avoid flickering
-            if !isReconnecting {
+            // Only update to failed state if NOT in any retry loop (internal or external)
+            // During retry loops, the caller handles state transitions to avoid flickering
+            if !isReconnecting && !isExternalRetryInProgress {
                 updateState(.failed(reason: errorMessage))
             }
             AppLogger.webSocket("Connection failed: \(errorMessage)", type: .error)
@@ -540,8 +544,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             stopTimers()
 
             let errorMessage = "Server does not support JSON-RPC 2.0"
-            // Only update to failed state if NOT in reconnection loop
-            if !isReconnecting {
+            // Only update to failed state if NOT in any retry loop
+            if !isReconnecting && !isExternalRetryInProgress {
                 updateState(.failed(reason: errorMessage))
             }
             throw AppError.connectionFailed(underlying: NSError(
