@@ -91,6 +91,7 @@
 		C9F75B6B68914828B16B17EC /* CopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03AB217A32A048D89A525C16 /* CopyButton.swift */; };
 		CB296021DCE6C2F996819DF6 /* LogListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D96DFC5ABC029B228D12994D /* LogListView.swift */; };
 		CDAA96C006C0FDCFF4DBDC44 /* FileRepositoryProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AEEC23C7C04889710D4AE6D /* FileRepositoryProtocol.swift */; };
+		COMMITHISTORY02BLD00001 /* CommitHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = COMMITHISTORY01REF00001 /* CommitHistoryView.swift */; };
 		D0BEEC760BD88BC66D158CC1 /* SessionStorageProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E7BABB6049A94E961749D0 /* SessionStorageProtocol.swift */; };
 		D1077C80747F6966DC82B168 /* DiffListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148D2C4F5247025DA5A34C33 /* DiffListView.swift */; };
 		D4D58E4544C92B46BFD99428 /* SendPromptUseCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70C4DB513ACDBA9CDFF9AE0 /* SendPromptUseCase.swift */; };
@@ -111,6 +112,7 @@
 		EA1FA9C33F4A443AAA46FC64 /* VoiceInputViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75794D2C09305A7691F967F /* VoiceInputViewModel.swift */; };
 		EB18F48F89D3E65D2B084230 /* DirectoryListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C9ED053DB1AE2276F5542B /* DirectoryListView.swift */; };
 		EB386C27D4E0F48615E8F5C9 /* ChatMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8432BF51A96402805348C138 /* ChatMessageView.swift */; };
+		F438AD925FA2C9F2942165CE /* CdevAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = B462BCD16C55F8F76B020242 /* CdevAlert.swift */; };
 		F4E3F52FA7F59B20502A055A /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0506631280A96B48BA613082 /* Workspace.swift */; };
 		F5C18B949A1A493E8CC1659A /* WorkspaceManagerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */; };
 		F7573E08FFEB4527B6E36E6F /* WorkspaceManagerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5019239F1B9C45E19AB5F85C /* WorkspaceManagerService.swift */; };
@@ -118,14 +120,13 @@
 		FD706FF421944BBCB1F29F0A /* ExplorerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBD6C7852E50107F14A81DCC /* ExplorerViewModel.swift */; };
 		GITSETUP02COMPBLD0000001 /* GitSetupComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = GITSETUP01COMPREF0000001 /* GitSetupComponents.swift */; };
 		GITSETUP04WIZBLD00000001 /* GitSetupWizard.swift in Sources */ = {isa = PBXBuildFile; fileRef = GITSETUP03WIZREF00000001 /* GitSetupWizard.swift */; };
-		COMMITHISTORY02BLD00001 /* CommitHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = COMMITHISTORY01REF00001 /* CommitHistoryView.swift */; };
-		REMOTEMGMT02BLD000000001 /* RemoteManagementSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMOTEMGMT01REF000000001 /* RemoteManagementSheet.swift */; };
 		JSONRPC05BLD00000000001 /* JSONRPCMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */; };
 		JSONRPC06BLD00000000002 /* JSONRPCError.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC02ERR00000000002 /* JSONRPCError.swift */; };
 		JSONRPC07BLD00000000003 /* JSONRPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC03CLI00000000003 /* JSONRPCClient.swift */; };
 		JSONRPC08BLD00000000004 /* JSONRPCMethods.swift in Sources */ = {isa = PBXBuildFile; fileRef = JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */; };
 		MANUALWS001ABC123WORKSPACE /* ManualWorkspaceAddView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MANUALWS002ABC123WORKREF /* ManualWorkspaceAddView.swift */; };
 		RAINBOW01A2B3C4D5E6F789AB /* RainbowTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */; };
+		REMOTEMGMT02BLD000000001 /* RemoteManagementSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMOTEMGMT01REF000000001 /* RemoteManagementSheet.swift */; };
 		WEBSEARCH02BUILD00000001 /* WebSearchResultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WEBSEARCH01FILEREF00001 /* WebSearchResultView.swift */; };
 /* End PBXBuildFile section */
 
@@ -224,6 +225,7 @@
 		A84616A271D0B05DA1F1EB89 /* ConnectToAgentUseCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectToAgentUseCase.swift; sourceTree = "<group>"; };
 		AA90B1B2318D4B7AA8377914 /* MarkdownRendererView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRendererView.swift; sourceTree = "<group>"; };
 		B379AB4C13E24259A80875CF /* View+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Extensions.swift"; sourceTree = "<group>"; };
+		B462BCD16C55F8F76B020242 /* CdevAlert.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CdevAlert.swift; sourceTree = "<group>"; };
 		B55B413644061BC9A390F655 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B6BC02BC16D7CC3133DF7BDD /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
 		BCECB98BA86D946C305ED8A0 /* CardModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardModifier.swift; sourceTree = "<group>"; };
@@ -237,6 +239,7 @@
 		C364F0022EF9DECD00954454 /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
 		C89AEE307FF69A31769F7CA1 /* FileViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewerView.swift; sourceTree = "<group>"; };
 		CD8868ADD6804B4C22DFDE52 /* FileCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCache.swift; sourceTree = "<group>"; };
+		COMMITHISTORY01REF00001 /* CommitHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHistoryView.swift; sourceTree = "<group>"; };
 		D2BED9190DAD30ECF6A37DD5 /* cdevApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = cdevApp.swift; sourceTree = "<group>"; };
 		D5B08DD1153C235C6628A231 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
 		D69995EDA2545AF7EBBE76F7 /* SourceControlViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceControlViewModel.swift; sourceTree = "<group>"; };
@@ -262,14 +265,13 @@
 		FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManagerViewModel.swift; sourceTree = "<group>"; };
 		GITSETUP01COMPREF0000001 /* GitSetupComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitSetupComponents.swift; sourceTree = "<group>"; };
 		GITSETUP03WIZREF00000001 /* GitSetupWizard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitSetupWizard.swift; sourceTree = "<group>"; };
-		COMMITHISTORY01REF00001 /* CommitHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHistoryView.swift; sourceTree = "<group>"; };
-		REMOTEMGMT01REF000000001 /* RemoteManagementSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteManagementSheet.swift; sourceTree = "<group>"; };
 		JSONRPC01MSG00000000001 /* JSONRPCMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMessage.swift; sourceTree = "<group>"; };
 		JSONRPC02ERR00000000002 /* JSONRPCError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCError.swift; sourceTree = "<group>"; };
 		JSONRPC03CLI00000000003 /* JSONRPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCClient.swift; sourceTree = "<group>"; };
 		JSONRPC04MTD00000000004 /* JSONRPCMethods.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONRPCMethods.swift; sourceTree = "<group>"; };
 		MANUALWS002ABC123WORKREF /* ManualWorkspaceAddView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualWorkspaceAddView.swift; sourceTree = "<group>"; };
 		RAINBOW02A2B3C4D5E6F789AB /* RainbowTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RainbowTextField.swift; sourceTree = "<group>"; };
+		REMOTEMGMT01REF000000001 /* RemoteManagementSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteManagementSheet.swift; sourceTree = "<group>"; };
 		WEBSEARCH01FILEREF00001 /* WebSearchResultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSearchResultView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -829,6 +831,7 @@
 				WEBSEARCH01FILEREF00001 /* WebSearchResultView.swift */,
 				DBAD7E09A55C1C090C116BC5 /* VoiceInputButton.swift */,
 				251EF4A5CFD319549FF0522C /* VoiceInputOverlay.swift */,
+				B462BCD16C55F8F76B020242 /* CdevAlert.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -1072,6 +1075,7 @@
 				EA1FA9C33F4A443AAA46FC64 /* VoiceInputViewModel.swift in Sources */,
 				6545472317A45E0391D76588 /* VoiceInputButton.swift in Sources */,
 				1E45BA284C2D34F693D493C6 /* VoiceInputOverlay.swift in Sources */,
+				F438AD925FA2C9F2942165CE /* CdevAlert.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

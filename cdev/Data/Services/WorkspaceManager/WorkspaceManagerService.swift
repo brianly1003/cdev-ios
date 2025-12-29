@@ -175,7 +175,7 @@ final class WorkspaceManagerService: ObservableObject {
         let client = ws.getJSONRPCClient()
         let response: WorkspaceListResponse = try await client.request(
             method: JSONRPCMethod.workspaceList,
-            params: EmptyParams()
+            params: WorkspaceListParams(includeGit: true)
         )
 
         // Sort workspaces alphabetically by name (case-insensitive)
@@ -781,6 +781,26 @@ final class WorkspaceManagerService: ObservableObject {
         return response
     }
 
+    /// Set upstream tracking branch for a workspace
+    /// - Parameters:
+    ///   - workspaceId: The workspace ID
+    ///   - branch: Local branch name (e.g., "main")
+    ///   - upstream: Upstream branch (e.g., "origin/main")
+    @discardableResult
+    func gitUpstreamSet(workspaceId: String, branch: String, upstream: String) async throws -> WorkspaceGitUpstreamSetResult {
+        guard let ws = webSocketService else {
+            throw WorkspaceManagerError.notConnected
+        }
+
+        let client = ws.getJSONRPCClient()
+        let response: WorkspaceGitUpstreamSetResult = try await client.request(
+            method: JSONRPCMethod.workspaceGitUpstreamSet,
+            params: WorkspaceGitUpstreamSetParams(workspaceId: workspaceId, branch: branch, upstream: upstream)
+        )
+
+        return response
+    }
+
     /// Get branches for a workspace
     func getBranches(workspaceId: String) async throws -> WorkspaceGitBranchesResult {
         guard let ws = webSocketService else {
@@ -985,6 +1005,21 @@ final class WorkspaceManagerService: ObservableObject {
 }
 
 // MARK: - Request Parameter Types
+
+private struct WorkspaceListParams: Encodable {
+    let includeGit: Bool
+    let gitLimit: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case includeGit = "include_git"
+        case gitLimit = "git_limit"
+    }
+
+    init(includeGit: Bool = true, gitLimit: Int? = nil) {
+        self.includeGit = includeGit
+        self.gitLimit = gitLimit
+    }
+}
 
 private struct WorkspaceIdParams: Encodable {
     let id: String

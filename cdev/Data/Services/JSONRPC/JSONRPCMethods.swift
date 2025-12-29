@@ -39,6 +39,7 @@ enum JSONRPCMethod {
     static let workspaceGitCommit = "git/commit"
     static let workspaceGitPush = "git/push"
     static let workspaceGitPull = "git/pull"
+    static let workspaceGitUpstreamSet = "git/upstream/set"
     static let workspaceGitBranches = "git/branches"
     static let workspaceGitCheckout = "git/checkout"
     // Git setup operations (init, remote management)
@@ -885,10 +886,11 @@ struct WorkspaceGitPushParams: Codable, Sendable {
 struct WorkspaceGitPushResult: Codable, Sendable {
     let success: Bool?
     let message: String?
+    let error: String?
     let commitsPushed: Int?
 
     enum CodingKeys: String, CodingKey {
-        case success, message
+        case success, message, error
         case commitsPushed = "commits_pushed"
     }
 
@@ -924,6 +926,29 @@ struct WorkspaceGitPullResult: Codable, Sendable {
         case success, message, error
         case conflictedFiles = "conflicted_files"
     }
+
+    var isSuccess: Bool {
+        success == true
+    }
+}
+
+/// Workspace git upstream set request parameters
+struct WorkspaceGitUpstreamSetParams: Codable, Sendable {
+    let workspaceId: String
+    let branch: String
+    let upstream: String
+
+    enum CodingKeys: String, CodingKey {
+        case branch, upstream
+        case workspaceId = "workspace_id"
+    }
+}
+
+/// Workspace git upstream set response result
+struct WorkspaceGitUpstreamSetResult: Codable, Sendable {
+    let success: Bool?
+    let message: String?
+    let error: String?
 
     var isSuccess: Bool {
         success == true

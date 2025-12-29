@@ -227,31 +227,19 @@ struct WorkspaceRowView: View {
         // Use ColorSystem.warning (Golden Pulse #F6C85D) for noGit state per CDEV-COLOR-SYSTEM.md
         let badgeColor = gitState == .noGit ? ColorSystem.warning : ColorSystem.textTertiary
 
+        // Display-only badge (no tap action) - shows git state info
         // Match "Current" badge style: Typography.badge, padding(.horizontal, 6), padding(.vertical, 2)
         HStack(spacing: 3) {
             Image(systemName: gitState.icon)
                 .font(.system(size: 8))
             Text(gitState.shortText)
                 .font(Typography.badge)
-            // Chevron to indicate it's tappable
-            Image(systemName: "chevron.right")
-                .font(.system(size: 6, weight: .bold))
         }
         .foregroundColor(badgeColor)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(badgeColor.opacity(0.15))
         .clipShape(Capsule())
-        .contentShape(Capsule())
-        // Use highPriorityGesture to capture tap before the row's simultaneousGesture
-        .highPriorityGesture(
-            TapGesture().onEnded {
-                if let onSetupGit = onSetupGit {
-                    Haptics.light()
-                    onSetupGit()
-                }
-            }
-        )
     }
 
     // MARK: - Helpers
@@ -366,6 +354,18 @@ struct SwipeableWorkspaceRow: View {
                     }
                     .tint(ColorSystem.warning)
                 }
+            }
+        }
+        // Leading swipe (swipe right) for git setup
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if isServerConnected && workspace.needsGitSetup, let onSetupGit = onSetupGit {
+                Button {
+                    Haptics.medium()
+                    onSetupGit()
+                } label: {
+                    Label("Setup Git", systemImage: "arrow.triangle.branch")
+                }
+                .tint(ColorSystem.primary)
             }
         }
     }

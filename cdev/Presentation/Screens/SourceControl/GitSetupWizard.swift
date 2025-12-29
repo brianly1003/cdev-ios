@@ -8,8 +8,7 @@ final class GitSetupViewModel: ObservableObject {
 
     @Published var currentStep: SetupStep = .initGit
     @Published var isLoading: Bool = false
-    @Published var error: String?
-    @Published var showError: Bool = false
+    @Published var alertConfig: CdevAlertConfig?
 
     // Step-specific state
     @Published var remoteURL: String = ""
@@ -24,6 +23,13 @@ final class GitSetupViewModel: ObservableObject {
 
     private let workspaceManager: WorkspaceManagerService
     private let workspaceId: String
+
+    /// Workspace name derived from ID (last path component)
+    var workspaceName: String {
+        // Extract name from workspace ID (could be a path like /users/dev/myproject)
+        let name = URL(fileURLWithPath: workspaceId).lastPathComponent
+        return name.isEmpty ? "project" : name
+    }
 
     // MARK: - Computed Properties
 
@@ -71,13 +77,13 @@ final class GitSetupViewModel: ObservableObject {
 
     // MARK: - Init
 
-    init(workspaceId: String, workspaceManager: WorkspaceManagerService = .shared) {
+    init(workspaceId: String, workspaceManager: WorkspaceManagerService) {
         self.workspaceId = workspaceId
         self.workspaceManager = workspaceManager
     }
 
     /// Initialize with a specific starting step (for workspaces partially set up)
-    init(workspaceId: String, startingStep: SetupStep, workspaceManager: WorkspaceManagerService = .shared) {
+    init(workspaceId: String, startingStep: SetupStep, workspaceManager: WorkspaceManagerService) {
         self.workspaceId = workspaceId
         self.workspaceManager = workspaceManager
         self.currentStep = startingStep
@@ -86,6 +92,12 @@ final class GitSetupViewModel: ObservableObject {
         for step in SetupStep.allCases where step.rawValue < startingStep.rawValue {
             completedSteps.insert(step)
         }
+    }
+
+    /// Initialize based on workspace git state - starts at the appropriate step
+    convenience init(workspaceId: String, gitState: WorkspaceGitState, workspaceManager: WorkspaceManagerService) {
+        let startingStep = SetupStep.from(gitState: gitState)
+        self.init(workspaceId: workspaceId, startingStep: startingStep, workspaceManager: workspaceManager)
     }
 
     // MARK: - URL Validation
@@ -100,7 +112,7 @@ final class GitSetupViewModel: ObservableObject {
         guard canContinue else { return }
 
         isLoading = true
-        error = nil
+        alertConfig = nil
 
         do {
             switch currentStep {
@@ -118,12 +130,15 @@ final class GitSetupViewModel: ObservableObject {
                 break
             }
 
-            completedSteps.insert(currentStep)
-            moveToNextStep()
-            Haptics.success()
+            // Only mark as complete if no error was shown
+            // (pushToRemote may set alertConfig and return early)
+            if alertConfig == nil {
+                completedSteps.insert(currentStep)
+                moveToNextStep()
+                Haptics.success()
+            }
         } catch {
-            self.error = error.localizedDescription
-            self.showError = true
+            alertConfig = .error(error.localizedDescription)
             Haptics.error()
         }
 
@@ -152,66 +167,209 @@ final class GitSetupViewModel: ObservableObject {
     }
 
     private func initializeGit() async throws {
-        let result = try await workspaceManager.gitInit(
-            workspaceId: workspaceId,
-            initialBranch: "main"
-        )
+        do {
+            let result = try await workspaceManager.gitInit(
+                workspaceId: workspaceId,
+                initialBranch: "main"
+            )
+            // Success - check result for any additional info
+            if result.isSuccess {
+                AppLogger.log("[GitSetup] Git initialized successfully")
+            }
+        } catch {
+            // Handle JSON-RPC 2.0 standard errors
+            let errorMessage = error.localizedDescription.lowercased()
 
-        // Handle success or "already initialized" cases
-        if result.isSuccess {
-            AppLogger.log("[GitSetup] Git initialized successfully")
-            return
+            // "Already a git repository" - treat as success
+            if errorMessage.contains("already") && errorMessage.contains("git repository") {
+                AppLogger.log("[GitSetup] Directory already a git repository - continuing")
+                return
+            }
+
+            // Re-throw other errors
+            throw GitSetupError.initFailed(error.localizedDescription)
         }
-
-        // If already a git repository, treat as success and continue to next step
-        let errorMessage = (result.error ?? result.message ?? "").lowercased()
-        if errorMessage.contains("already") && errorMessage.contains("git repository") {
-            AppLogger.log("[GitSetup] Directory already a git repository - continuing to next step")
-            return
-        }
-
-        // Otherwise, throw the error
-        throw GitSetupError.initFailed(result.error ?? result.message ?? "Unknown error")
     }
 
     private func createInitialCommit() async throws {
         // Stage all files first
-        _ = try await workspaceManager.gitStage(workspaceId: workspaceId, paths: ["."])
+        do {
+            _ = try await workspaceManager.gitStage(workspaceId: workspaceId, paths: ["."])
+        } catch {
+            // Staging errors are usually not fatal, continue to commit
+            AppLogger.log("[GitSetup] Stage warning: \(error.localizedDescription)")
+        }
 
         // Create commit
-        let result = try await workspaceManager.gitCommit(
-            workspaceId: workspaceId,
-            message: commitMessage,
-            push: false
-        )
-        guard result.success else {
-            throw GitSetupError.commitFailed(result.error ?? result.message ?? "Unknown error")
+        do {
+            let result = try await workspaceManager.gitCommit(
+                workspaceId: workspaceId,
+                message: commitMessage,
+                push: false
+            )
+            AppLogger.log("[GitSetup] Initial commit created: \(result.sha ?? "unknown")")
+        } catch {
+            // Handle JSON-RPC 2.0 standard errors
+            let errorMessage = error.localizedDescription.lowercased()
+
+            // "Nothing to commit" - treat as success
+            if errorMessage.contains("nothing to commit") || errorMessage.contains("no staged changes") {
+                AppLogger.log("[GitSetup] Nothing to commit - skipping to next step")
+                return
+            }
+
+            // Re-throw other errors
+            throw GitSetupError.commitFailed(error.localizedDescription)
         }
-        AppLogger.log("[GitSetup] Initial commit created: \(result.sha ?? "unknown")")
     }
 
     private func addRemote(url: GitRemoteURL) async throws {
-        let result = try await workspaceManager.gitRemoteAdd(
-            workspaceId: workspaceId,
-            name: remoteName,
-            url: url.fullURL
-        )
-        guard result.isSuccess else {
-            throw GitSetupError.remoteAddFailed(result.error ?? result.message ?? "Unknown error")
+        do {
+            let result = try await workspaceManager.gitRemoteAdd(
+                workspaceId: workspaceId,
+                name: remoteName,
+                url: url.fullURL
+            )
+            AppLogger.log("[GitSetup] Remote added: \(remoteName) -> \(url.displayName)")
+
+            // Check result for warnings (backward compatibility)
+            if !result.isSuccess {
+                throw GitSetupError.remoteAddFailed(result.error ?? result.message ?? "Unknown error")
+            }
+        } catch let error as GitSetupError {
+            throw error
+        } catch {
+            // Handle JSON-RPC 2.0 standard errors
+            let errorMessage = error.localizedDescription.lowercased()
+
+            // "Remote already exists" - treat as success
+            if errorMessage.contains("already exists") || errorMessage.contains("remote.*exists") {
+                AppLogger.log("[GitSetup] Remote already exists - continuing")
+                return
+            }
+
+            throw GitSetupError.remoteAddFailed(error.localizedDescription)
         }
-        AppLogger.log("[GitSetup] Remote added: \(remoteName) -> \(url.displayName)")
     }
 
     private func pushToRemote() async throws {
-        let result = try await workspaceManager.gitPush(
-            workspaceId: workspaceId,
-            force: false,
-            setUpstream: true
-        )
-        guard result.isSuccess else {
-            throw GitSetupError.pushFailed(result.message ?? "Unknown error")
+        // Step 1: Set upstream tracking branch first
+        do {
+            _ = try await workspaceManager.gitUpstreamSet(
+                workspaceId: workspaceId,
+                branch: "main",
+                upstream: "\(remoteName)/main"
+            )
+            AppLogger.log("[GitSetup] Upstream set to \(remoteName)/main")
+        } catch {
+            // Check if this is a skippable error (e.g., already set)
+            let errorMessage = error.localizedDescription.lowercased()
+            if canSkipUpstreamError(errorMessage) {
+                AppLogger.log("[GitSetup] Upstream set skipped: \(error.localizedDescription)")
+            } else {
+                // Real error - show helpful guidance with code block
+                let errorInfo = formatUpstreamError(errorMessage)
+                alertConfig = .error(errorInfo.message, codeBlock: errorInfo.codeBlock)
+                Haptics.error()
+                return  // Don't proceed to push
+            }
         }
-        AppLogger.log("[GitSetup] Pushed to remote successfully")
+
+        // Step 2: Push to remote (only reached if upstream set succeeded or was skipped)
+        do {
+            let result = try await workspaceManager.gitPush(
+                workspaceId: workspaceId,
+                force: false,
+                setUpstream: true
+            )
+            AppLogger.log("[GitSetup] Pushed to remote successfully")
+
+            // Check result for warnings (backward compatibility)
+            if !result.isSuccess {
+                let errorMessage = (result.error ?? result.message ?? "").lowercased()
+                if !canSkipPushError(errorMessage) {
+                    throw GitSetupError.pushFailed(result.error ?? result.message ?? "Unknown error")
+                }
+            }
+        } catch let error as GitSetupError {
+            throw error
+        } catch {
+            // Handle JSON-RPC 2.0 standard errors
+            let errorMessage = error.localizedDescription.lowercased()
+
+            // Check if this error can be skipped
+            if canSkipPushError(errorMessage) {
+                AppLogger.log("[GitSetup] Push skipped: \(error.localizedDescription)")
+                return
+            }
+
+            throw GitSetupError.pushFailed(error.localizedDescription)
+        }
+    }
+
+    /// Check if an upstream set error can be safely skipped
+    private func canSkipUpstreamError(_ errorMessage: String) -> Bool {
+        // "Already tracking" or similar
+        if errorMessage.contains("already") {
+            return true
+        }
+        // "Up to date"
+        if errorMessage.contains("up-to-date") || errorMessage.contains("up to date") {
+            return true
+        }
+        return false
+    }
+
+    /// Format upstream error with helpful guidance for users
+    /// Format upstream error with message and code block
+    /// Returns: (message, codeBlock) tuple
+    private func formatUpstreamError(_ errorMessage: String) -> (message: String, codeBlock: String) {
+        // Branch does not exist - need to create initial commit first
+        if errorMessage.contains("does not exist") || errorMessage.contains("refspec") {
+            return (
+                message: "Branch 'main' does not exist yet.\n\nThis usually means no commits have been made. Please try running these commands on your PC/laptop:",
+                codeBlock: "git add .\ngit commit -m \"Initial commit\"\ngit push -u origin main"
+            )
+        }
+
+        // Authentication or permission error
+        if errorMessage.contains("permission") || errorMessage.contains("denied") || errorMessage.contains("authentication") {
+            return (
+                message: "Authentication failed.\n\nPlease check your credentials and try running this command on your PC/laptop:",
+                codeBlock: "git push -u origin main"
+            )
+        }
+
+        // Remote not found
+        if errorMessage.contains("repository not found") || errorMessage.contains("does not appear to be a git repository") {
+            return (
+                message: "Remote repository not found.\n\nPlease verify the repository URL exists and you have access. Try running on your PC/laptop:",
+                codeBlock: "git remote -v\ngit push -u origin main"
+            )
+        }
+
+        // Default guidance
+        return (
+            message: "Failed to set upstream branch.\n\nPlease try running this command on your PC/laptop to troubleshoot:",
+            codeBlock: "git push -u origin main"
+        )
+    }
+
+    /// Check if a push error can be safely skipped
+    private func canSkipPushError(_ errorMessage: String) -> Bool {
+        // "No upstream branch" - already tried with setUpstream
+        if errorMessage.contains("no upstream branch") || errorMessage.contains("set-upstream") {
+            return true
+        }
+        // "Everything up-to-date" - nothing to push
+        if errorMessage.contains("up-to-date") || errorMessage.contains("up to date") {
+            return true
+        }
+        // "Nothing to push"
+        if errorMessage.contains("nothing to push") {
+            return true
+        }
+        return false
     }
 }
 
@@ -222,7 +380,19 @@ struct GitSetupWizard: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    // Floating toolkit state
+    @State private var showSettings: Bool = false
+    @State private var showDebugLogs: Bool = false
+
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    /// Toolkit items for FloatingToolkitButton
+    private var toolkitItems: [ToolkitItem] {
+        ToolkitBuilder()
+            .add(.settings { showSettings = true })
+            .add(.debugLogs { showDebugLogs = true })
+            .build()
+    }
 
     var body: some View {
         NavigationStack {
@@ -257,6 +427,9 @@ struct GitSetupWizard: View {
                     // Actions
                     actionBar
                 }
+
+                // Floating toolkit button
+                FloatingToolkitButton(items: toolkitItems)
             }
             .navigationTitle("Git Setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -269,10 +442,14 @@ struct GitSetupWizard: View {
                         .foregroundColor(ColorSystem.textSecondary)
                 }
             }
-            .alert("Error", isPresented: $viewModel.showError) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(viewModel.error ?? "An unknown error occurred")
+            .cdevAlert($viewModel.alertConfig)
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+                    .responsiveSheet()
+            }
+            .sheet(isPresented: $showDebugLogs) {
+                AdminToolsView()
+                    .responsiveSheet()
             }
         }
         .preferredColorScheme(.dark)
@@ -284,7 +461,7 @@ struct GitSetupWizard: View {
         case .initGit:
             InitGitStepView()
         case .initialCommit:
-            InitialCommitStepView(commitMessage: $viewModel.commitMessage)
+            InitialCommitStepView(commitMessage: $viewModel.commitMessage, workspaceName: viewModel.workspaceName)
         case .addRemote:
             AddRemoteStepView(
                 remoteURL: $viewModel.remoteURL,
@@ -409,6 +586,10 @@ private struct InitGitStepView: View {
 
 private struct InitialCommitStepView: View {
     @Binding var commitMessage: String
+    let workspaceName: String
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
@@ -431,6 +612,36 @@ private struct InitialCommitStepView: View {
                     .background(ColorSystem.terminalBgElevated)
                     .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
             }
+
+            // GitHub-like tip for empty repos
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                HStack(spacing: Spacing.xxs) {
+                    Image(systemName: "lightbulb.fill")
+                        .font(.system(size: layout.iconSmall))
+                        .foregroundStyle(ColorSystem.warning)
+                    Text("Tip: Empty folder?")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                }
+
+                Text("If your folder is empty, create a README.md file first on your PC/laptop:")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textTertiary)
+
+                // Code block with README creation command
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("echo \"# \(workspaceName)\" >> README.md")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(layout.smallPadding)
+                .background(ColorSystem.terminalBg)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+            }
+            .padding(layout.smallPadding)
+            .background(ColorSystem.warning.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -647,7 +858,7 @@ struct QuickAddRemoteSheet: View {
 // MARK: - Previews
 
 #Preview("Git Setup Wizard") {
-    GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: "test-workspace"))
+    GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: "test-workspace", workspaceManager: .shared))
 }
 
 #Preview("Quick Add Remote") {

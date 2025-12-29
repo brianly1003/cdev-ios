@@ -2,6 +2,8 @@ import Foundation
 
 /// Dependency injection container - Service Locator pattern
 /// Following CleanerApp architecture
+/// @MainActor ensures safe access to MainActor-isolated singletons
+@MainActor
 final class DependencyContainer {
     static let shared = DependencyContainer()
 
@@ -77,7 +79,6 @@ final class DependencyContainer {
 
     // MARK: - ViewModel Factories
 
-    @MainActor
     func makeAppState() -> AppState {
         // Configure session awareness manager with agent repository
         sessionAwarenessManager.configure(agentRepository: agentRepository)

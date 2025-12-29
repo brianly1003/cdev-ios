@@ -30,8 +30,7 @@ struct WorkspaceManagerView: View {
     /// Scroll request (from floating toolkit force touch)
     @State private var scrollRequest: ScrollDirection?
 
-    /// Git setup sheet state
-    @State private var showGitSetup: Bool = false
+    /// Git setup sheet state (uses sheet(item:) pattern)
     @State private var gitSetupWorkspace: RemoteWorkspace?
 
     /// No Git alert state (shown when tapping workspace without git)
@@ -183,12 +182,13 @@ struct WorkspaceManagerView: View {
                             }
                         }
                     },
-                    onSetupGit: { _ in
-                        // Git setup would be handled in SourceControl view
-                        // For now just dismiss - user can setup from SourceControl
+                    onSetupGit: { workspace in
+                        // Trigger GitSetupWizard sheet
+                        gitSetupWorkspace = workspace
                     },
-                    onAddRemote: { _ in
-                        // Remote setup would be handled in SourceControl view
+                    onAddRemote: { workspace in
+                        // Trigger GitSetupWizard for remote setup (starts at addRemote step)
+                        gitSetupWorkspace = workspace
                     }
                 )
                 .presentationDetents([.medium, .large])
@@ -221,24 +221,22 @@ struct WorkspaceManagerView: View {
                 SettingsView()
                     .responsiveSheet()
             }
-            .sheet(isPresented: $showGitSetup, onDismiss: {
-                gitSetupWorkspace = nil
+            .sheet(item: $gitSetupWorkspace, onDismiss: {
                 // Refresh workspace list to update git state
                 Task { await viewModel.refreshWorkspaces() }
-            }) {
-                if let workspace = gitSetupWorkspace {
-                    GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: workspace.id))
-                        .presentationDetents([.large])
-                        .presentationDragIndicator(.visible)
-                        .presentationBackground(ColorSystem.terminalBg)
-                }
+            }) { workspace in
+                GitSetupWizard(viewModel: GitSetupViewModel(
+                    workspaceId: workspace.id,
+                    gitState: workspace.workspaceGitState,
+                    workspaceManager: .shared
+                ))
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(ColorSystem.terminalBg)
             }
             .sheet(isPresented: $showNoGitAlert, onDismiss: {
-                // Handle post-dismiss actions
-                if let workspace = noGitAlertWorkspace, gitSetupWorkspace != nil {
-                    // GitSetup was requested - will be shown via showGitSetup binding
-                }
                 noGitAlertWorkspace = nil
+                // Note: If gitSetupWorkspace was set, the git setup sheet shows automatically
             }) {
                 if let workspace = noGitAlertWorkspace {
                     NoGitAlertSheet(
@@ -266,15 +264,8 @@ struct WorkspaceManagerView: View {
                     .presentationBackground(ColorSystem.terminalBgElevated)
                 }
             }
-            .onChange(of: showNoGitAlert) { _, isPresented in
-                // When NoGitAlert dismisses, check if we need to show GitSetup
-                if !isPresented && gitSetupWorkspace != nil {
-                    // Delay to ensure sheet dismiss animation completes
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        showGitSetup = true
-                    }
-                }
-            }
+            // Note: GitSetup sheet uses sheet(item:) so it presents automatically
+            // when gitSetupWorkspace is set (no onChange handler needed)
             .sheet(isPresented: $viewModel.showRemovalSheet) {
                 if let info = viewModel.removalInfo {
                     WorkspaceRemovalSheet(
@@ -423,7 +414,6 @@ struct WorkspaceManagerView: View {
                         },
                         onSetupGit: workspace.needsGitSetup ? {
                             gitSetupWorkspace = workspace
-                            showGitSetup = true
                         } : nil
                     )
                     .listRowBackground(Color.clear)

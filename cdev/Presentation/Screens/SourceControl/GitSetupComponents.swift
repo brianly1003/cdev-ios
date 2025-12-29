@@ -84,28 +84,27 @@ struct RemoteURLInputField: View {
                 }
                 .buttonStyle(.plain)
 
-                // Clear button
-                if !urlString.isEmpty {
-                    Button {
-                        urlString = ""
-                        parsedURL = nil
-                        isValid = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: layout.iconMedium))
-                            .foregroundStyle(ColorSystem.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-
-                    // Validation indicator
-                    Image(systemName: isValid ? "checkmark.circle.fill" : "xmark.circle.fill")
+                // Clear button (always in layout for consistent height, hidden when empty)
+                Button {
+                    urlString = ""
+                    parsedURL = nil
+                    isValid = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
                         .font(.system(size: layout.iconMedium))
-                        .foregroundStyle(isValid ? ColorSystem.success : ColorSystem.error)
+                        .foregroundStyle(ColorSystem.textTertiary)
                 }
+                .buttonStyle(.plain)
+                .opacity(urlString.isEmpty ? 0 : 1)
+                .disabled(urlString.isEmpty)
             }
             .padding(Spacing.sm)
             .background(ColorSystem.terminalBgElevated)
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(borderColor, lineWidth: urlString.isEmpty ? 0 : 1.5)
+            )
 
             // Parsed URL preview or error message
             if let parsed = parsedURL {
@@ -125,6 +124,14 @@ struct RemoteURLInputField: View {
     private func validateURL(_ value: String) {
         parsedURL = GitRemoteURL.parse(value)
         isValid = parsedURL != nil
+    }
+
+    /// Border color based on validation state
+    private var borderColor: Color {
+        if urlString.isEmpty {
+            return .clear
+        }
+        return isValid ? ColorSystem.success : ColorSystem.error
     }
 }
 
@@ -265,6 +272,27 @@ enum SetupStep: Int, Comparable, CaseIterable, Hashable {
     static func < (lhs: SetupStep, rhs: SetupStep) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
+
+    /// Map WorkspaceGitState to the appropriate starting step
+    /// - noGit → initGit (Step 1)
+    /// - gitInitialized → initialCommit (Step 2)
+    /// - noRemote → addRemote (Step 3)
+    /// - noPush → push (Step 4)
+    static func from(gitState: WorkspaceGitState) -> SetupStep {
+        switch gitState {
+        case .noGit:
+            return .initGit
+        case .gitInitialized:
+            return .initialCommit
+        case .noRemote:
+            return .addRemote
+        case .noPush:
+            return .push
+        case .synced, .diverged, .conflict:
+            // These states don't need setup, but default to complete
+            return .complete
+        }
+    }
 }
 
 // MARK: - Git Setup Error
@@ -274,6 +302,7 @@ enum GitSetupError: LocalizedError {
     case initFailed(String)
     case commitFailed(String)
     case remoteAddFailed(String)
+    case upstreamFailed(String)
     case pushFailed(String)
     case noWorkspace
 
@@ -282,6 +311,7 @@ enum GitSetupError: LocalizedError {
         case .initFailed(let msg): return "Failed to initialize git: \(msg)"
         case .commitFailed(let msg): return "Failed to create commit: \(msg)"
         case .remoteAddFailed(let msg): return "Failed to add remote: \(msg)"
+        case .upstreamFailed(let msg): return msg
         case .pushFailed(let msg): return "Failed to push: \(msg)"
         case .noWorkspace: return "No workspace selected"
         }

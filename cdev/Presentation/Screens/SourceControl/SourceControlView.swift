@@ -57,7 +57,7 @@ struct SourceControlView: View {
         }
         .sheet(isPresented: $showGitSetupWizard) {
             if let workspaceId = currentWorkspaceId {
-                GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: workspaceId))
+                GitSetupWizard(viewModel: GitSetupViewModel(workspaceId: workspaceId, workspaceManager: .shared))
                     .onDisappear {
                         Task { await onRefresh() }
                     }

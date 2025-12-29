@@ -182,11 +182,11 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     /// Convert gitState string to WorkspaceGitState enum
     /// Prefers top-level gitState, falls back to nested git.workspaceGitState
     var workspaceGitState: WorkspaceGitState {
-        // Prefer top-level gitState (from workspace/add enhancement)
+        // Prefer top-level gitState (from workspace/list with include_git: true)
         if let stateString = gitState {
             switch stateString.lowercased() {
             case "no_git": return .noGit
-            case "git_initialized": return .gitInitialized
+            case "git_init": return .gitInitialized  // Server uses "git_init"
             case "no_remote": return .noRemote
             case "no_push": return .noPush
             case "synced": return .synced
