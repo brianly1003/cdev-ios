@@ -468,10 +468,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // Build WebSocket URL with optional auth token
         var wsURL = connectionInfo.webSocketURL
         if let token = connectionInfo.token {
+            let originalURL = wsURL.absoluteString
             wsURL = wsURL.appendingQueryItem("token", value: token)
-            AppLogger.webSocket("Connecting with auth token")
+            AppLogger.webSocket("Auth token present, URL: \(originalURL) -> \(wsURL.absoluteString)")
+        } else {
+            AppLogger.webSocket("No auth token in connection info")
         }
 
+        AppLogger.webSocket("Connecting to: \(wsURL.absoluteString)")
         webSocket = session.webSocketTask(with: wsURL)
         webSocket?.resume()
 

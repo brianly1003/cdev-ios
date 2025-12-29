@@ -71,31 +71,34 @@ extension URL {
     ///   - value: Query parameter value
     /// - Returns: New URL with the query item appended
     func appendingQueryItem(_ name: String, value: String) -> URL {
-        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else {
-            return self
+        // URL-encode the value to handle special characters
+        let encodedValue = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+
+        // Build the query string
+        let queryParam = "\(name)=\(encodedValue)"
+
+        // Get the absolute string
+        var urlString = self.absoluteString
+
+        // Check if URL already has query parameters
+        if urlString.contains("?") {
+            urlString += "&\(queryParam)"
+        } else {
+            urlString += "?\(queryParam)"
         }
 
-        var queryItems = components.queryItems ?? []
-        queryItems.append(URLQueryItem(name: name, value: value))
-        components.queryItems = queryItems
-
-        return components.url ?? self
+        // Return new URL or fallback to original
+        return URL(string: urlString) ?? self
     }
 
     /// Append multiple query items to the URL
     /// - Parameter items: Dictionary of query parameters
     /// - Returns: New URL with the query items appended
     func appendingQueryItems(_ items: [String: String]) -> URL {
-        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else {
-            return self
-        }
-
-        var queryItems = components.queryItems ?? []
+        var result = self
         for (name, value) in items {
-            queryItems.append(URLQueryItem(name: name, value: value))
+            result = result.appendingQueryItem(name, value: value)
         }
-        components.queryItems = queryItems
-
-        return components.url ?? self
+        return result
     }
 }
