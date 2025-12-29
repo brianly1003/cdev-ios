@@ -465,7 +465,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             throw AppError.connectionFailed(underlying: nil)
         }
 
-        webSocket = session.webSocketTask(with: connectionInfo.webSocketURL)
+        // Build WebSocket URL with optional auth token
+        var wsURL = connectionInfo.webSocketURL
+        if let token = connectionInfo.token {
+            wsURL = wsURL.appendingQueryItem("token", value: token)
+            AppLogger.webSocket("Connecting with auth token")
+        }
+
+        webSocket = session.webSocketTask(with: wsURL)
         webSocket?.resume()
 
         // Wait for connection with timeout

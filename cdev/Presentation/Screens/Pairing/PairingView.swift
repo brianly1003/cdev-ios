@@ -78,6 +78,13 @@ struct PairingView: View {
                 }
             }
             .errorAlert($viewModel.error)
+            .alert("QR Code Expired", isPresented: $viewModel.showTokenExpiredAlert) {
+                Button("Scan Again") {
+                    viewModel.dismissTokenExpiredAlert()
+                }
+            } message: {
+                Text(viewModel.tokenExpiredMessage)
+            }
         }
     }
 

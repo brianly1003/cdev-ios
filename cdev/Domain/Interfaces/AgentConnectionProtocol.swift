@@ -78,6 +78,10 @@ protocol HTTPServiceProtocol: AnyObject {
     /// Base URL for HTTP requests
     var baseURL: URL? { get set }
 
+    /// Authentication token for API requests (from QR code pairing)
+    /// When set, adds `Authorization: Bearer <token>` header to all requests
+    var authToken: String? { get set }
+
     /// GET request
     func get<T: Decodable>(path: String, queryItems: [URLQueryItem]?) async throws -> T
 

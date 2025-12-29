@@ -12,6 +12,11 @@ final class HTTPService: HTTPServiceProtocol {
             }
         }
     }
+
+    /// Authentication token for API requests (from QR code pairing)
+    /// When set, adds `Authorization: Bearer <token>` header to all requests
+    var authToken: String?
+
     private var session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
@@ -40,6 +45,13 @@ final class HTTPService: HTTPServiceProtocol {
         self.encoder = JSONEncoder()
         self.maxRetries = maxRetries
         self.baseRetryDelay = retryDelay
+    }
+
+    /// Apply authorization header to request if token is available
+    private func applyAuthorization(to request: inout URLRequest) {
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
     }
 
     /// Update session configuration based on connection type
@@ -78,6 +90,7 @@ final class HTTPService: HTTPServiceProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyAuthorization(to: &request)
 
         // Capture headers for cURL generation
         let headers = request.allHTTPHeaderFields
@@ -144,6 +157,7 @@ final class HTTPService: HTTPServiceProtocol {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyAuthorization(to: &request)
 
         // Capture headers for cURL generation
         let headers = request.allHTTPHeaderFields
@@ -214,6 +228,7 @@ final class HTTPService: HTTPServiceProtocol {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyAuthorization(to: &request)
 
         var bodyString: String?
         if let body = body {
@@ -310,7 +325,15 @@ final class HTTPService: HTTPServiceProtocol {
                 )
             }
 
-            throw AppError.httpRequestFailed(statusCode: statusCode, message: responseBody)
+            // Throw specific error for authentication failures
+            switch statusCode {
+            case 401:
+                throw AppError.tokenInvalid
+            case 403:
+                throw AppError.tokenExpired
+            default:
+                throw AppError.httpRequestFailed(statusCode: statusCode, message: responseBody)
+            }
         }
     }
 

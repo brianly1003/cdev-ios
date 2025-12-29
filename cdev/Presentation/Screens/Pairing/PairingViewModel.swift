@@ -10,6 +10,8 @@ final class PairingViewModel: ObservableObject {
     @Published var isConnecting = false
     @Published var isConnected = false
     @Published var error: AppError?
+    @Published var showTokenExpiredAlert = false
+    @Published var tokenExpiredMessage = ""
 
     // MARK: - Dependencies
 
@@ -129,10 +131,14 @@ final class PairingViewModel: ObservableObject {
 
     private func connect(to connectionInfo: ConnectionInfo) async {
         do {
-            // Set HTTP base URL
+            // Set HTTP base URL and auth token
             httpService.baseURL = connectionInfo.httpURL
+            httpService.authToken = connectionInfo.token
+            if connectionInfo.token != nil {
+                AppLogger.log("[Pairing] Auth token configured for HTTP requests")
+            }
 
-            // Connect via WebSocket
+            // Connect via WebSocket (token is appended to URL in WebSocketService)
             try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
 
             // Save workspace for quick reconnection
@@ -147,8 +153,44 @@ final class PairingViewModel: ObservableObject {
             isConnected = true
             Haptics.success()
         } catch {
-            self.error = error as? AppError ?? .connectionFailed(underlying: error)
+            let appError = error as? AppError ?? .connectionFailed(underlying: error)
+
+            // Handle authentication errors specially
+            if appError.isAuthenticationError {
+                handleAuthenticationError(appError)
+            } else {
+                self.error = appError
+            }
             Haptics.error()
         }
+    }
+
+    // MARK: - Authentication Error Handling
+
+    /// Handle authentication errors by showing a re-scan prompt
+    private func handleAuthenticationError(_ error: AppError) {
+        switch error {
+        case .tokenExpired:
+            tokenExpiredMessage = "The QR code has expired. QR codes are valid for 60 seconds.\n\nPlease refresh the QR code on your computer and scan again."
+            showTokenExpiredAlert = true
+        case .tokenInvalid:
+            tokenExpiredMessage = "The authentication token is invalid.\n\nPlease refresh the QR code on your computer and scan again."
+            showTokenExpiredAlert = true
+        case .httpRequestFailed(let statusCode, _) where statusCode == 401 || statusCode == 403:
+            tokenExpiredMessage = "Authentication failed (HTTP \(statusCode)).\n\nPlease refresh the QR code on your computer and scan again."
+            showTokenExpiredAlert = true
+        default:
+            self.error = error
+        }
+
+        // Clear the HTTP auth token on auth failure
+        httpService.authToken = nil
+    }
+
+    /// Dismiss token expired alert and prepare for re-scan
+    func dismissTokenExpiredAlert() {
+        showTokenExpiredAlert = false
+        tokenExpiredMessage = ""
+        appState?.clearScanHistory()  // Allow immediate re-scan
     }
 }

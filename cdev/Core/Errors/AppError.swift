@@ -27,8 +27,14 @@ enum AppError: LocalizedError {
 
     // Pairing errors
     case invalidQRCode
+    case invalidQRCodeDetail(reason: String)
     case pairingFailed(reason: String)
     case sessionExpired
+
+    // Authentication errors
+    case tokenExpired
+    case tokenInvalid
+    case authorizationFailed(statusCode: Int)
 
     // Data errors
     case decodingFailed(underlying: Error)
@@ -87,10 +93,18 @@ enum AppError: LocalizedError {
             return "Workspace ID is required for this operation"
         case .invalidQRCode:
             return "Invalid QR code"
+        case .invalidQRCodeDetail(let reason):
+            return "Invalid QR code: \(reason)"
         case .pairingFailed(let reason):
             return "Pairing failed: \(reason)"
         case .sessionExpired:
             return "Session has expired"
+        case .tokenExpired:
+            return "Authentication token has expired"
+        case .tokenInvalid:
+            return "Authentication token is invalid"
+        case .authorizationFailed(let statusCode):
+            return "Authorization failed (\(statusCode))"
         case .decodingFailed(let error):
             return "Failed to decode data: \(error.localizedDescription)"
         case .encodingFailed(let error):
@@ -122,14 +136,28 @@ enum AppError: LocalizedError {
             return "Check that the agent is running and you're on the same network"
         case .webSocketDisconnected, .connectionClosed:
             return "Try reconnecting to the agent"
-        case .invalidQRCode:
+        case .invalidQRCode, .invalidQRCodeDetail:
             return "Scan the QR code displayed by the agent"
-        case .sessionExpired:
-            return "Reconnect using a new QR code"
+        case .sessionExpired, .tokenExpired:
+            return "Please scan a new QR code to reconnect"
+        case .tokenInvalid, .authorizationFailed:
+            return "The QR code may have expired. Please scan a fresh QR code."
         case .authenticationRequired, .biometricFailed:
             return "Please authenticate to continue"
         default:
             return nil
+        }
+    }
+
+    /// Check if this error indicates authentication/token issues
+    var isAuthenticationError: Bool {
+        switch self {
+        case .tokenExpired, .tokenInvalid, .authorizationFailed, .sessionExpired:
+            return true
+        case .httpRequestFailed(let statusCode, _):
+            return statusCode == 401 || statusCode == 403
+        default:
+            return false
         }
     }
 }

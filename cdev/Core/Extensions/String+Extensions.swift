@@ -61,3 +61,41 @@ extension String {
         self.hasPrefix("@@") || self.hasPrefix("---") || self.hasPrefix("+++") || self.hasPrefix("diff")
     }
 }
+
+// MARK: - URL Extensions
+
+extension URL {
+    /// Append a query item to the URL
+    /// - Parameters:
+    ///   - name: Query parameter name
+    ///   - value: Query parameter value
+    /// - Returns: New URL with the query item appended
+    func appendingQueryItem(_ name: String, value: String) -> URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else {
+            return self
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: name, value: value))
+        components.queryItems = queryItems
+
+        return components.url ?? self
+    }
+
+    /// Append multiple query items to the URL
+    /// - Parameter items: Dictionary of query parameters
+    /// - Returns: New URL with the query items appended
+    func appendingQueryItems(_ items: [String: String]) -> URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else {
+            return self
+        }
+
+        var queryItems = components.queryItems ?? []
+        for (name, value) in items {
+            queryItems.append(URLQueryItem(name: name, value: value))
+        }
+        components.queryItems = queryItems
+
+        return components.url ?? self
+    }
+}
