@@ -9,11 +9,12 @@ struct ManagerSetupView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
 
-    /// Callback when user enters a host to connect
-    let onConnect: (String) -> Void
+    /// Callback when user enters a host to connect (host, optional token)
+    let onConnect: (String, String?) -> Void
 
     // State
     @State private var hostInput: String = ""
+    @State private var tokenInput: String? = nil  // Auth token from QR code
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var hasCameraPermission: Bool = false
@@ -345,6 +346,7 @@ struct ManagerSetupView: View {
         // 5. WebSocket URL: "ws://192.168.1.100:8766/ws"
 
         var host: String?
+        var token: String?
 
         // First, try to parse as JSON (PairingInfo format from cdev server)
         if let jsonData = code.data(using: .utf8),
@@ -355,7 +357,9 @@ struct ManagerSetupView: View {
             // Extract just the host (without port) - port will be added by connect function
             // For dev tunnels, the full hostname is used (e.g., abc123x4-8766.devtunnels.ms)
             host = wsHost
-            AppLogger.log("[ManagerSetup] Parsed JSON QR code, host: \(host ?? "nil")")
+            // Extract auth token if present
+            token = json["token"] as? String
+            AppLogger.log("[ManagerSetup] Parsed JSON QR code, host: \(host ?? "nil"), token: \(token != nil ? "present" : "none")")
         }
 
         // If not JSON, try plain URL/host formats
@@ -393,9 +397,10 @@ struct ManagerSetupView: View {
             return
         }
 
-        // Connect
+        // Connect - store token for connection
         Haptics.success()
         hostInput = finalHost
+        tokenInput = token  // Store the extracted token
         connectWithHost()
     }
 
@@ -440,7 +445,7 @@ struct ManagerSetupView: View {
         saveLastHost(host)
 
         Haptics.medium()
-        onConnect(host)
+        onConnect(host, tokenInput)  // Pass both host and token
         dismiss()
     }
 
@@ -936,7 +941,7 @@ private struct ManagerConnectingOverlay: View {
 // MARK: - Preview
 
 #Preview {
-    ManagerSetupView { host in
-        print("Connect to: \(host)")
+    ManagerSetupView { host, token in
+        print("Connect to: \(host), token: \(token != nil ? "present" : "none")")
     }
 }

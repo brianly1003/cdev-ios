@@ -164,7 +164,7 @@ actor JSONRPCClient: JSONRPCClientProtocol {
                     try await webSocket.sendRaw(data)
                 } catch {
                     // Cancel pending and rethrow
-                    await removePending(id: requestId.stringValue)
+                    removePending(id: requestId.stringValue)
                     throw JSONRPCClientError.encodingFailed(underlying: error)
                 }
 
@@ -180,7 +180,7 @@ actor JSONRPCClient: JSONRPCClientProtocol {
             }
         } catch {
             // Clean up pending request on ANY error (timeout, cancellation, etc.)
-            await removePendingAndCancel(id: requestId.stringValue)
+            removePendingAndCancel(id: requestId.stringValue)
             AppLogger.webSocket("RPC request failed: \(method) - \(error.localizedDescription)", type: .error)
             throw error
         }

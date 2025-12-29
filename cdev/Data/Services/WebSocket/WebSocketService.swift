@@ -466,13 +466,25 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         // Build WebSocket URL with optional auth token
-        var wsURL = connectionInfo.webSocketURL
+        // Use direct string concatenation to ensure token is appended correctly
+        var wsURLString = connectionInfo.webSocketURL.absoluteString
         if let token = connectionInfo.token {
-            let originalURL = wsURL.absoluteString
-            wsURL = wsURL.appendingQueryItem("token", value: token)
-            AppLogger.webSocket("Auth token present, URL: \(originalURL) -> \(wsURL.absoluteString)")
+            // Append token as query parameter
+            if wsURLString.contains("?") {
+                wsURLString += "&token=\(token)"
+            } else {
+                wsURLString += "?token=\(token)"
+            }
+            AppLogger.webSocket("Auth token appended to URL")
+            AppLogger.webSocket("  Original: \(connectionInfo.webSocketURL.absoluteString)")
+            AppLogger.webSocket("  With token: \(wsURLString)")
         } else {
-            AppLogger.webSocket("No auth token in connection info")
+            AppLogger.webSocket("WARNING: No auth token in connection info!")
+        }
+
+        guard let wsURL = URL(string: wsURLString) else {
+            AppLogger.webSocket("ERROR: Failed to create URL from: \(wsURLString)", type: .error)
+            throw AppError.connectionFailed(underlying: nil)
         }
 
         AppLogger.webSocket("Connecting to: \(wsURL.absoluteString)")

@@ -144,9 +144,9 @@ struct WorkspaceManagerView: View {
                 }
             }
             .sheet(isPresented: $viewModel.showSetupSheet) {
-                ManagerSetupView { host in
+                ManagerSetupView { host, token in
                     Task {
-                        await viewModel.connect(to: host)
+                        await viewModel.connect(to: host, token: token)
                     }
                 }
                 .presentationDetents([.large])

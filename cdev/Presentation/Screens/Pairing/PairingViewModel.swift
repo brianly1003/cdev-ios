@@ -72,10 +72,18 @@ final class PairingViewModel: ObservableObject {
         isConnecting = true
         Haptics.success()
 
+        AppLogger.log("[Pairing] QR code scanned, length: \(code.count)")
+        AppLogger.log("[Pairing] QR data preview: \(String(code.prefix(100)))...")
+
         do {
             let connectionInfo = try parseQRCodeUseCase.execute(qrData: code)
+            AppLogger.log("[Pairing] Parsed ConnectionInfo:")
+            AppLogger.log("[Pairing]   ws: \(connectionInfo.webSocketURL)")
+            AppLogger.log("[Pairing]   http: \(connectionInfo.httpURL)")
+            AppLogger.log("[Pairing]   token: \(connectionInfo.token != nil ? "YES (\(connectionInfo.token!.prefix(15))...)" : "NO")")
             await connect(to: connectionInfo)
         } catch {
+            AppLogger.log("[Pairing] Parse error: \(error)", type: .error)
             self.error = error as? AppError ?? .invalidQRCode
             Haptics.error()
         }

@@ -486,15 +486,24 @@ struct ServerConnection: Codable, Identifiable, Equatable {
     let host: String            // IP address or hostname
     var name: String?           // User-given name (e.g., "MacBook Pro")
     var lastConnected: Date     // For sorting recent connections
+    var token: String?          // Auth token from QR code pairing (transient, not persisted)
 
     /// Server port (always 8766 in single-port architecture)
     static let serverPort: Int = 8766
 
-    init(id: UUID = UUID(), host: String, name: String? = nil, lastConnected: Date = Date()) {
+    init(id: UUID = UUID(), host: String, name: String? = nil, lastConnected: Date = Date(), token: String? = nil) {
         self.id = id
         self.host = host
         self.name = name
         self.lastConnected = lastConnected
+        self.token = token
+    }
+
+    // MARK: - Codable (exclude token for security)
+
+    enum CodingKeys: String, CodingKey {
+        case id, host, name, lastConnected
+        // Note: token is intentionally excluded - never persist tokens
     }
 
     /// Display name (user-given or host)

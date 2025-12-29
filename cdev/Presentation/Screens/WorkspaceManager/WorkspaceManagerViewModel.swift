@@ -282,12 +282,13 @@ final class WorkspaceManagerViewModel: ObservableObject {
             return
         }
 
-        await connectWithRetry(to: host)
+        // Use saved token if available
+        await connectWithRetry(to: host, token: managerStore.lastToken)
     }
 
     /// Connect to server with automatic retry
     /// Shows progress in serverStatus
-    func connectWithRetry(to host: String) async {
+    func connectWithRetry(to host: String, token: String? = nil) async {
         // Skip if already connected (prevents duplicate connections from AppState + WorkspaceManagerView race)
         if webSocketService.isConnected {
             AppLogger.log("[WorkspaceManager] Skipping connect - already connected")
@@ -305,12 +306,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
         isConnecting = true
         hasCheckedConnection = true  // Mark as checked immediately so UI doesn't show initial loading
 
-        // Save the host early so UI can show it
-        managerStore.saveHost(host)
+        // Save the host and token early so UI can show it
+        managerStore.saveHost(host, token: token)
         managerService.setCurrentHost(host)
 
-        // Build connection info
-        let connectionInfo = buildConnectionInfo(for: host)
+        // Build connection info with token
+        let connectionInfo = buildConnectionInfo(for: host, token: token)
 
         // Retry loop
         while currentRetryAttempt < maxRetryAttempts && !connectionCancelled {
@@ -363,8 +364,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
     }
 
     /// Single connection attempt (for manual retry)
-    func connect(to host: String) async {
-        await connectWithRetry(to: host)
+    func connect(to host: String, token: String? = nil) async {
+        await connectWithRetry(to: host, token: token)
     }
 
     /// Retry connection to current saved host
@@ -373,7 +374,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
             showSetupSheet = true
             return
         }
-        await connectWithRetry(to: host)
+        // Use saved token if available
+        await connectWithRetry(to: host, token: managerStore.lastToken)
     }
 
     /// Cancel ongoing connection attempts
@@ -388,7 +390,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
     }
 
     /// Build connection info for a host
-    private func buildConnectionInfo(for host: String) -> ConnectionInfo {
+    private func buildConnectionInfo(for host: String, token: String? = nil) -> ConnectionInfo {
         let isLocal = isLocalHost(host)
         let wsScheme = isLocal ? "ws" : "wss"
         let httpScheme = isLocal ? "http" : "https"
@@ -404,11 +406,14 @@ final class WorkspaceManagerViewModel: ObservableObject {
             httpURL = URL(string: "\(httpScheme)://\(host)")!
         }
 
+        AppLogger.log("[WorkspaceManager] Building ConnectionInfo with token: \(token != nil ? "present" : "none")")
+
         return ConnectionInfo(
             webSocketURL: wsURL,
             httpURL: httpURL,
             sessionId: "",
-            repoName: "Workspaces"
+            repoName: "Workspaces",
+            token: token  // Include auth token from QR code
         )
     }
 
