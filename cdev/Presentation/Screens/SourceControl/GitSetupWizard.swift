@@ -321,9 +321,16 @@ final class GitSetupViewModel: ObservableObject {
     }
 
     /// Format upstream error with helpful guidance for users
-    /// Format upstream error with message and code block
-    /// Returns: (message, codeBlock) tuple
+    /// - Returns: (message, codeBlock) tuple for display
     private func formatUpstreamError(_ errorMessage: String) -> (message: String, codeBlock: String) {
+        // No commits yet - can't push to remote
+        if errorMessage.contains("no commit") || errorMessage.contains("doesn't have any commits") {
+            return (
+                message: "No commits exist on this branch yet.\n\nYou need to create at least one commit before pushing. Please run these commands on your PC/laptop:",
+                codeBlock: "git add .\ngit commit -m \"Initial commit\"\ngit push -u origin main"
+            )
+        }
+
         // Branch does not exist - need to create initial commit first
         if errorMessage.contains("does not exist") || errorMessage.contains("refspec") {
             return (
@@ -348,9 +355,9 @@ final class GitSetupViewModel: ObservableObject {
             )
         }
 
-        // Default guidance
+        // Default guidance - include actual error for debugging
         return (
-            message: "Failed to set upstream branch.\n\nPlease try running this command on your PC/laptop to troubleshoot:",
+            message: "Failed to set upstream branch.\n\nError: \(errorMessage)\n\nPlease try running this command on your PC/laptop to troubleshoot:",
             codeBlock: "git push -u origin main"
         )
     }
