@@ -256,13 +256,17 @@ final class WorkspaceManagerViewModel: ObservableObject {
                             self.serverStatus = .disconnected
                             AppLogger.log("[WorkspaceManager] Connection state synced: disconnected")
                         }
-                    case .connecting, .reconnecting:
+                    case .connecting:
                         // Don't override detailed connecting status from our own retry loop
                         break
-                    case .failed:
-                        if !self.isConnecting {
-                            self.serverStatus = .unreachable(lastError: "Connection failed")
-                        }
+                    case .reconnecting(let attempt):
+                        // Update UI to show reconnection progress (WebSocket auto-reconnect)
+                        self.serverStatus = .connecting(attempt: attempt, maxAttempts: Constants.Network.maxReconnectAttempts)
+                        AppLogger.log("[WorkspaceManager] Connection state synced: reconnecting (\(attempt))")
+                    case .failed(let reason):
+                        // Always update to failed state so UI reflects server down
+                        self.serverStatus = .unreachable(lastError: reason)
+                        AppLogger.log("[WorkspaceManager] Connection state synced: failed - \(reason)")
                     }
                 }
             }
