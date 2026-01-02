@@ -683,8 +683,10 @@ private struct ElementsScrollView: View {
                 }
                 .onChange(of: isStreaming) { _, streaming in
                     // Auto-scroll when streaming starts to show indicator
+                    // NOTE: Use non-animated scroll to prevent AttributeGraph cycle
+                    // The streaming indicator has its own transition animation
                     guard streaming else { return }
-                    scheduleScroll(proxy: proxy, animated: true)
+                    scheduleScroll(proxy: proxy, animated: false)
                 }
                 .onChange(of: currentMatchIndex) { _, _ in
                     // Scroll to current search match
@@ -704,12 +706,13 @@ private struct ElementsScrollView: View {
             }
 
             // Streaming indicator - fixed at bottom
+            // NOTE: Removed .animation() modifier to prevent AttributeGraph cycle
+            // The transition handles the appear/disappear animation
             if isStreaming {
                 StreamingIndicatorView(startTime: streamingStartTime, message: spinnerMessage)
                     .padding(.horizontal, Spacing.sm)
                     .padding(.bottom, Spacing.xs)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.2), value: isStreaming)
             }
         }
     }
