@@ -1109,6 +1109,7 @@ final class DashboardViewModel: ObservableObject {
             claudeState = .idle
             isStreaming = false
             streamingStartTime = nil
+            spinnerMessage = nil
             hasActiveConversation = false
             AppLogger.log("[Dashboard] Claude stopped via stopClaude()")
             Haptics.success()
@@ -1121,6 +1122,7 @@ final class DashboardViewModel: ObservableObject {
                 claudeState = .idle
                 isStreaming = false
                 streamingStartTime = nil
+                spinnerMessage = nil
                 hasActiveConversation = false
                 Haptics.light()
             } else {
