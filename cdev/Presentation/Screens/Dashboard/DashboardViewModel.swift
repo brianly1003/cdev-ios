@@ -1737,6 +1737,12 @@ final class DashboardViewModel: ObservableObject {
                     AppLogger.log("[Dashboard] Reconnected - syncing workspace IDs")
                     _ = try? await WorkspaceManagerService.shared.listWorkspaces()
 
+                    // Re-subscribe to workspace events
+                    if let workspaceId = self.currentWorkspaceId {
+                        AppLogger.log("[Dashboard] Reconnected - re-subscribing to workspace: \(workspaceId)")
+                        try? await WorkspaceManagerService.shared.subscribe(workspaceId: workspaceId)
+                    }
+
                     AppLogger.log("[Dashboard] Reconnected - starting loadRecentSessionHistory")
                     await self.loadRecentSessionHistory(isReconnection: true)
                     // refreshStatus() calls refreshGitStatus() internally when hasCompletedInitialLoad is true
