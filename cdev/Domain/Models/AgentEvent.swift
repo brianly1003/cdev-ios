@@ -359,6 +359,7 @@ struct ClaudeMessagePayload: Codable {
     let message: MessageContent?
     let role: String?           // cdev-agent sends role at payload level
     let content: ContentValue?  // cdev-agent sends content at payload level
+    let model: String?          // Model name (e.g., "claude-opus-4-5-20251101")
     let stopReason: String?     // cdev-agent sends stop_reason
     let isContextCompaction: Bool?  // Context compaction marker
 
@@ -371,6 +372,7 @@ struct ClaudeMessagePayload: Codable {
         case message
         case role
         case content
+        case model
         case stopReason = "stop_reason"
         case isContextCompaction = "is_context_compaction"
     }
@@ -384,6 +386,7 @@ struct ClaudeMessagePayload: Codable {
         message = try container.decodeIfPresent(MessageContent.self, forKey: .message)
         role = try container.decodeIfPresent(String.self, forKey: .role)
         content = try container.decodeIfPresent(ContentValue.self, forKey: .content)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
         stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
         isContextCompaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompaction)
 
@@ -406,6 +409,7 @@ struct ClaudeMessagePayload: Codable {
         try container.encodeIfPresent(message, forKey: .message)
         try container.encodeIfPresent(role, forKey: .role)
         try container.encodeIfPresent(content, forKey: .content)
+        try container.encodeIfPresent(model, forKey: .model)
         try container.encodeIfPresent(stopReason, forKey: .stopReason)
         try container.encodeIfPresent(isContextCompaction, forKey: .isContextCompaction)
     }
@@ -418,6 +422,11 @@ struct ClaudeMessagePayload: Codable {
     /// Unified access to content (from message or payload level)
     var effectiveContent: ContentValue? {
         content ?? message?.content
+    }
+
+    /// Unified access to model (from message or payload level)
+    var effectiveModel: String? {
+        model ?? message?.model
     }
 
     /// Message content with role and content blocks

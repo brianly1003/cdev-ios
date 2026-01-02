@@ -689,8 +689,8 @@ extension ChatElement {
         let effectiveRole = payload.effectiveRole
         guard let effectiveContent = payload.effectiveContent else { return elements }
 
-        // Get model from message if available
-        let model = payload.message?.model
+        // Get model from payload or message level
+        let model = payload.effectiveModel
 
         // Parse timestamp
         let timestamp: Date
