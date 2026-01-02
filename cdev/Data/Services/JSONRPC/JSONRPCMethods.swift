@@ -18,6 +18,9 @@ enum JSONRPCMethod {
     static let sessionState = "session/state"
     static let sessionActive = "session/active"
 
+    // Permission operations (hook bridge mode)
+    static let permissionRespond = "permission/respond"  // Respond to hook bridge permission request
+
     // Workspace operations
     static let workspaceList = "workspace/list"
     static let workspaceGet = "workspace/get"
@@ -96,6 +99,7 @@ enum JSONRPCMethod {
     static let workspaceSessionWatch = "workspace/session/watch"
     static let workspaceSessionUnwatch = "workspace/session/unwatch"
     static let workspaceSessionActivate = "workspace/session/activate"
+    static let workspaceSessionDelete = "workspace/session/delete"
 
     // Client operations (multi-device awareness)
     static let clientSessionFocus = "client/session/focus"
@@ -553,9 +557,9 @@ struct SessionElementsResult: Codable, Sendable {
     }
 }
 
-// MARK: - Session Delete
+// MARK: - Session Delete (Legacy)
 
-/// Session delete request parameters
+/// Session delete request parameters (LEGACY - use WorkspaceSessionDeleteParams)
 struct SessionDeleteParams: Codable, Sendable {
     let sessionId: String?
     let agentType: String?
@@ -566,10 +570,41 @@ struct SessionDeleteParams: Codable, Sendable {
     }
 }
 
-/// Session delete response result
+/// Session delete response result (LEGACY)
 struct SessionDeleteResult: Codable, Sendable {
     let status: String?
     let deleted: Int?
+}
+
+// MARK: - Workspace Session Delete (NEW - workspace-aware)
+
+/// Workspace session delete request parameters
+/// Deletes a session's .jsonl file from ~/.claude/projects/<encoded-path>/
+struct WorkspaceSessionDeleteParams: Codable, Sendable {
+    let workspaceId: String
+    let sessionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
+    }
+}
+
+/// Workspace session delete response result
+struct WorkspaceSessionDeleteResult: Codable, Sendable {
+    let status: String?       // "deleted"
+    let workspaceId: String?
+    let sessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case workspaceId = "workspace_id"
+        case sessionId = "session_id"
+    }
+
+    var isDeleted: Bool {
+        status == "deleted"
+    }
 }
 
 // MARK: - Session Control (Multi-Workspace)
@@ -621,8 +656,9 @@ enum SessionPermissionMode: String, Codable, Sendable {
 }
 
 /// Session send request parameters (send prompt to Claude)
+/// Note: session_id should NOT be included when mode is "new"
 struct SessionSendParams: Codable, Sendable {
-    let sessionId: String
+    let sessionId: String?  // Optional - omit for "new" mode
     let prompt: String
     let mode: String?  // "new" or "continue"
     let permissionMode: SessionPermissionMode?  // Permission handling mode
@@ -633,11 +669,25 @@ struct SessionSendParams: Codable, Sendable {
         case permissionMode = "permission_mode"
     }
 
-    init(sessionId: String, prompt: String, mode: String? = "continue", permissionMode: SessionPermissionMode? = nil) {
-        self.sessionId = sessionId
+    init(sessionId: String?, prompt: String, mode: String? = "continue", permissionMode: SessionPermissionMode? = nil) {
+        // For "new" mode, don't include session_id even if provided
+        if mode == "new" {
+            self.sessionId = nil
+        } else {
+            self.sessionId = sessionId
+        }
         self.prompt = prompt
         self.mode = mode
         self.permissionMode = permissionMode
+    }
+
+    /// Custom encoder to omit nil session_id (important for "new" mode)
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encodeIfPresent(mode, forKey: .mode)
+        try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        try container.encodeIfPresent(permissionMode, forKey: .permissionMode)
     }
 }
 
@@ -2234,6 +2284,51 @@ struct WorkspaceGitBranchDeleteResult: Codable, Sendable {
         case success, branch, message, error
         case deletedRemote = "deleted_remote"
     }
+
+    var isSuccess: Bool {
+        success == true
+    }
+}
+
+// MARK: - Permission Respond (Hook Bridge Mode)
+
+/// Permission decision scope for hook bridge mode
+enum PermissionScope: String, Codable, Sendable {
+    case once = "once"           // Allow/deny just this one request
+    case session = "session"     // Remember for the rest of this session
+}
+
+/// Permission decision for hook bridge mode
+enum PermissionDecision: String, Codable, Sendable {
+    case allow = "allow"
+    case deny = "deny"
+}
+
+/// Permission respond request parameters (hook bridge mode)
+/// Used when responding to permission requests from Claude Code hooks
+struct PermissionRespondParams: Codable, Sendable {
+    let toolUseId: String        // Tool use ID from the permission event
+    let decision: PermissionDecision  // "allow" or "deny"
+    let scope: PermissionScope   // "once" or "session"
+
+    enum CodingKeys: String, CodingKey {
+        case toolUseId = "tool_use_id"
+        case decision
+        case scope
+    }
+
+    init(toolUseId: String, decision: PermissionDecision, scope: PermissionScope = .once) {
+        self.toolUseId = toolUseId
+        self.decision = decision
+        self.scope = scope
+    }
+}
+
+/// Permission respond response result
+struct PermissionRespondResult: Codable, Sendable {
+    let success: Bool?
+    let message: String?
+    let error: String?
 
     var isSuccess: Bool {
         success == true

@@ -433,6 +433,7 @@ struct LanguagePickerSheet: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundStyle(ColorSystem.primary)
                 }
             }
         }

@@ -52,7 +52,10 @@ struct CommitHistoryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(ColorSystem.primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -590,7 +593,10 @@ struct CommitDetailSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(ColorSystem.primary)
                 }
             }
         }

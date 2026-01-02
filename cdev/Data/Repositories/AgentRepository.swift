@@ -69,31 +69,40 @@ final class AgentRepository: AgentRepositoryProtocol {
     // MARK: - Claude Control
 
     func runClaude(prompt: String, mode: SessionMode, sessionId: String?) async throws {
-        // Get session ID - use provided sessionId or get from active workspace
-        let effectiveSessionId = await MainActor.run { () -> String? in
-            if let sid = sessionId, !sid.isEmpty {
-                return sid
+        // For "new" mode, don't use any session ID - start fresh
+        // For "continue" mode, use provided sessionId or fallback to currentSessionId
+        let effectiveSessionId: String?
+        if mode == .new {
+            // New session - don't include session_id in request
+            effectiveSessionId = nil
+            AppLogger.log("[AgentRepository] Mode is 'new' - will not include session_id")
+        } else {
+            // Continue mode - use provided or current session
+            effectiveSessionId = await MainActor.run { () -> String? in
+                if let sid = sessionId, !sid.isEmpty {
+                    return sid
+                }
+                return self.currentSessionId
             }
-            return self.currentSessionId
         }
 
         if let sid = effectiveSessionId {
-            AppLogger.log("[AgentRepository] Using session/send API with session: \(sid)")
+            AppLogger.log("[AgentRepository] Using session/send API with session: \(sid), mode: continue")
             try await WorkspaceManagerService.shared.sendPrompt(
                 sessionId: sid,
                 prompt: prompt,
-                mode: mode == .new ? "new" : "continue"
+                mode: "continue"
             )
             return
         }
 
-        // If no session exists, try to start one
+        // No session ID (either mode is "new" or no session exists)
+        // Use session/send with mode "new" and no session_id
         let workspaceId = await MainActor.run { self.currentWorkspaceId }
-        if let wsId = workspaceId {
-            AppLogger.log("[AgentRepository] Starting new session for workspace: \(wsId)")
-            let session = try await WorkspaceManagerService.shared.startSession(workspaceId: wsId)
+        if workspaceId != nil {
+            AppLogger.log("[AgentRepository] Sending prompt with mode 'new' (no session_id)")
             try await WorkspaceManagerService.shared.sendPrompt(
-                sessionId: session.id,
+                sessionId: nil,  // No session_id for new sessions
                 prompt: prompt,
                 mode: "new"
             )
@@ -104,9 +113,16 @@ final class AgentRepository: AgentRepositoryProtocol {
         throw AgentRepositoryError.noWorkspaceContext
     }
 
-    func stopClaude() async throws {
-        let sessionId = await MainActor.run { self.currentSessionId }
-        guard let sid = sessionId else {
+    func stopClaude(sessionId: String?) async throws {
+        // Use provided sessionId or fallback to current session from workspace
+        let effectiveSessionId: String?
+        if let sid = sessionId, !sid.isEmpty {
+            effectiveSessionId = sid
+        } else {
+            effectiveSessionId = await MainActor.run { self.currentSessionId }
+        }
+
+        guard let sid = effectiveSessionId else {
             AppLogger.log("[AgentRepository] No session context for stop", type: .warning)
             throw AgentRepositoryError.noSessionContext
         }
@@ -162,6 +178,31 @@ final class AgentRepository: AgentRepositoryProtocol {
             method: JSONRPCMethod.sessionInput,
             params: params
         )
+    }
+
+    // MARK: - Hook Bridge Mode (Permission Respond)
+
+    func respondToPermission(
+        toolUseId: String,
+        decision: PermissionDecision,
+        scope: PermissionScope
+    ) async throws {
+        AppLogger.log("[AgentRepository] Responding to hook bridge permission: toolUseId=\(toolUseId), decision=\(decision.rawValue), scope=\(scope.rawValue)")
+        let params = PermissionRespondParams(
+            toolUseId: toolUseId,
+            decision: decision,
+            scope: scope
+        )
+        let result: PermissionRespondResult = try await rpcClient.request(
+            method: JSONRPCMethod.permissionRespond,
+            params: params
+        )
+        if !result.isSuccess {
+            let errorMsg = result.error ?? result.message ?? "Unknown error"
+            AppLogger.log("[AgentRepository] Permission respond failed: \(errorMsg)", type: .error)
+            throw AgentRepositoryError.permissionRespondFailed(errorMsg)
+        }
+        AppLogger.log("[AgentRepository] Permission respond succeeded", type: .success)
     }
 
     // MARK: - File Operations
@@ -484,28 +525,17 @@ final class AgentRepository: AgentRepositoryProtocol {
         )
     }
 
-    func deleteSession(sessionId: String) async throws -> DeleteSessionResponse {
-        let params = SessionDeleteParams(sessionId: sessionId, agentType: nil)
-        let result: SessionDeleteResult = try await rpcClient.request(
-            method: JSONRPCMethod.sessionDelete,
+    func deleteSession(sessionId: String, workspaceId: String) async throws -> DeleteSessionResponse {
+        AppLogger.log("[AgentRepository] Deleting session: \(sessionId) from workspace: \(workspaceId)")
+        let params = WorkspaceSessionDeleteParams(workspaceId: workspaceId, sessionId: sessionId)
+        let result: WorkspaceSessionDeleteResult = try await rpcClient.request(
+            method: JSONRPCMethod.workspaceSessionDelete,
             params: params
         )
+        AppLogger.log("[AgentRepository] Session delete result: \(result.status ?? "unknown")")
         return DeleteSessionResponse(
             message: result.status ?? "deleted",
             sessionId: sessionId
-        )
-    }
-
-    func deleteAllSessions() async throws -> DeleteAllSessionsResponse {
-        // Delete all by not providing a session_id
-        let params = SessionDeleteParams(sessionId: nil, agentType: nil)
-        let result: SessionDeleteResult = try await rpcClient.request(
-            method: JSONRPCMethod.sessionDelete,
-            params: params
-        )
-        return DeleteAllSessionsResponse(
-            message: result.status ?? "deleted",
-            deleted: result.deleted ?? 0
         )
     }
 
@@ -570,6 +600,7 @@ enum AgentRepositoryError: LocalizedError {
     case workspaceIdRequired
     case noWorkspaceContext
     case noSessionContext
+    case permissionRespondFailed(String)  // Hook bridge permission respond failed
 
     var errorDescription: String? {
         switch self {
@@ -579,6 +610,8 @@ enum AgentRepositoryError: LocalizedError {
             return "No workspace context available. Please select a workspace first."
         case .noSessionContext:
             return "No session context available. Please start or resume a session first."
+        case .permissionRespondFailed(let message):
+            return "Permission response failed: \(message)"
         }
     }
 }

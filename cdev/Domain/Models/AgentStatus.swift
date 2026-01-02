@@ -103,6 +103,7 @@ struct PendingInteraction: Identifiable, Equatable {
     let options: [QuestionOption]?
     let ptyOptions: [PTYPromptOption]?  // PTY mode options with key shortcuts
     let sessionId: String?  // Session ID from the event (for PTY responses after session_id_failed)
+    let toolUseId: String?  // Tool use ID for hook bridge mode (NEW)
     let timestamp: Date
 
     enum InteractionType: Equatable {
@@ -119,6 +120,7 @@ struct PendingInteraction: Identifiable, Equatable {
         options: [QuestionOption]? = nil,
         ptyOptions: [PTYPromptOption]? = nil,
         sessionId: String? = nil,
+        toolUseId: String? = nil,
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -128,6 +130,7 @@ struct PendingInteraction: Identifiable, Equatable {
         self.options = options
         self.ptyOptions = ptyOptions
         self.sessionId = sessionId
+        self.toolUseId = toolUseId
         self.timestamp = timestamp
     }
 
@@ -135,6 +138,12 @@ struct PendingInteraction: Identifiable, Equatable {
     var isPTYMode: Bool {
         if case .ptyPermission = type { return true }
         return false
+    }
+
+    /// Whether this is a hook bridge mode interaction (requires permission/respond RPC)
+    /// Hook bridge mode is indicated by having a toolUseId
+    var isHookBridgeMode: Bool {
+        toolUseId != nil && !toolUseId!.isEmpty
     }
 
     /// Create from waiting event
@@ -167,6 +176,7 @@ struct PendingInteraction: Identifiable, Equatable {
     }
 
     /// Create from PTY permission event (interactive terminal mode)
+    /// Supports both PTY mode (session/input) and hook bridge mode (permission/respond)
     static func fromPTYPermission(event: AgentEvent) -> PendingInteraction? {
         guard case .ptyPermission(let payload) = event.payload else { return nil }
 
@@ -177,6 +187,10 @@ struct PendingInteraction: Identifiable, Equatable {
         // This is crucial for responding after session_id_failed clears userSelectedSessionId
         let sessionId = event.sessionId ?? payload.sessionId
 
+        // Extract toolUseId for hook bridge mode (NEW)
+        // When toolUseId is present, use permission/respond RPC instead of PTY input
+        let toolUseId = payload.toolUseId
+
         return PendingInteraction(
             id: event.id,
             type: .ptyPermission(type: permissionType, toolName: toolName),
@@ -185,6 +199,7 @@ struct PendingInteraction: Identifiable, Equatable {
             options: nil,
             ptyOptions: payload.options,
             sessionId: sessionId,
+            toolUseId: toolUseId,  // NEW: for hook bridge mode
             timestamp: event.timestamp
         )
     }

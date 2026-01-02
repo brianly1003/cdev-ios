@@ -343,23 +343,38 @@ final class WorkspaceManagerService: ObservableObject {
 
     /// Send a prompt to a session
     /// Uses permission_mode: "interactive" to enable PTY mode for terminal-like permission prompts
-    func sendPrompt(sessionId: String, prompt: String, mode: String = "new") async throws {
+    /// - Parameters:
+    ///   - sessionId: Optional session ID. Pass nil for "new" mode to start fresh.
+    ///   - workspaceId: Optional workspace ID. Required for "new" mode to specify which workspace.
+    ///   - prompt: The prompt text to send
+    ///   - mode: "new" or "continue"
+    func sendPrompt(sessionId: String?, workspaceId: String? = nil, prompt: String, mode: String = "new") async throws {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
+        }
+
+        // For "new" mode, try to get workspaceId if not provided
+        // Get from first workspace with active session or first workspace
+        let effectiveWorkspaceId: String?
+        if mode == "new" && workspaceId == nil {
+            effectiveWorkspaceId = workspaces.first(where: { $0.hasActiveSession })?.id ?? workspaces.first?.id
+        } else {
+            effectiveWorkspaceId = workspaceId
         }
 
         let client = ws.getJSONRPCClient()
         let _: SessionSendResponse = try await client.request(
             method: JSONRPCMethod.sessionSend,
             params: WMSessionSendParams(
-                sessionId: sessionId,
+                sessionId: sessionId,  // nil for "new" mode, will be omitted from JSON
+                workspaceId: effectiveWorkspaceId,  // Required for "new" mode
                 prompt: prompt,
                 mode: mode,
                 permissionMode: "interactive"
             )
         )
 
-        AppLogger.log("[WorkspaceManager] Sent prompt to session: \(sessionId) (interactive mode)")
+        AppLogger.log("[WorkspaceManager] Sent prompt (mode: \(mode), sessionId: \(sessionId ?? "nil"), workspaceId: \(effectiveWorkspaceId ?? "nil")) (interactive mode)")
     }
 
     /// Respond to a permission request or question
@@ -1062,16 +1077,28 @@ private struct SessionIdParams: Encodable {
 }
 
 private struct WMSessionSendParams: Encodable {
-    let sessionId: String
+    let sessionId: String?  // Optional - omit for "new" mode
+    let workspaceId: String?  // Required for "new" mode to specify which workspace
     let prompt: String
     let mode: String
     let permissionMode: String
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
+        case workspaceId = "workspace_id"
         case prompt
         case mode
         case permissionMode = "permission_mode"
+    }
+
+    /// Custom encoder to omit nil fields
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        try container.encodeIfPresent(workspaceId, forKey: .workspaceId)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(permissionMode, forKey: .permissionMode)
     }
 }
 

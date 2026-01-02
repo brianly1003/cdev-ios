@@ -975,7 +975,10 @@ struct BranchSwitcherSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(ColorSystem.primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {

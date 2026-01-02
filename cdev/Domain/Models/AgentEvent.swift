@@ -983,6 +983,7 @@ struct PTYOutputPayload: Codable {
 
 /// Payload for pty_permission events
 /// Permission prompt from PTY mode with structured options
+/// Enhanced for hook bridge mode with toolUseId for RPC-based responses
 struct PTYPermissionPayload: Codable {
     let type: PTYPermissionType?   // Type of permission being requested
     let target: String?            // Target of the operation (file path, command, etc.)
@@ -990,6 +991,10 @@ struct PTYPermissionPayload: Codable {
     let preview: String?           // Code preview for file operations
     let options: [PTYPromptOption]? // Available options for user to choose
     let sessionId: String?         // Session ID for event context
+
+    // Hook bridge mode fields (NEW - for permission/respond RPC)
+    let toolUseId: String?         // Tool use ID for RPC-based response (hook bridge mode)
+    let workspaceId: String?       // Workspace ID for context
 
     // Legacy fields (may be sent by older server versions)
     let toolName: String?          // Name of the tool requesting permission
@@ -1003,9 +1008,17 @@ struct PTYPermissionPayload: Codable {
         case preview
         case options
         case sessionId = "session_id"
+        case toolUseId = "tool_use_id"
+        case workspaceId = "workspace_id"
         case toolName = "tool_name"
         case filePath = "file_path"
         case command
+    }
+
+    /// Whether this permission request came from hook bridge mode
+    /// When true, use permission/respond RPC instead of PTY input
+    var isHookBridgeMode: Bool {
+        toolUseId != nil && !toolUseId!.isEmpty
     }
 
     /// Get the primary target for display (supports new and legacy fields)
@@ -1080,23 +1093,41 @@ struct PTYPermissionResolvedPayload: Codable {
     let sessionId: String?      // Session where permission was resolved
     let workspaceId: String?    // Workspace containing the session
     let resolvedBy: String?     // Client ID of the device that responded
-    let input: String?          // The input that was sent: "1", "2", "3", "enter", "escape"
+    let input: String?          // The input that was sent: "1", "2", "3", "enter", "escape" (PTY mode)
+
+    // Hook bridge mode fields (NEW)
+    let toolUseId: String?      // Tool use ID for correlation (hook bridge mode)
+    let decision: String?       // Decision made: "allow" or "deny" (hook bridge mode)
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case workspaceId = "workspace_id"
         case resolvedBy = "resolved_by"
         case input
+        case toolUseId = "tool_use_id"
+        case decision
     }
 
-    /// Check if permission was approved (input "1" or "2" typically means yes/yes-all)
+    /// Check if permission was approved
+    /// Supports both PTY mode (input) and hook bridge mode (decision)
     var wasApproved: Bool {
+        // Hook bridge mode uses decision field
+        if let decision = decision {
+            return decision.lowercased() == "allow"
+        }
+        // PTY mode uses input field
         guard let input = input else { return false }
         return input == "1" || input == "2" || input.lowercased() == "enter"
     }
 
-    /// Check if permission was denied (input "3" or escape typically means no/cancel)
+    /// Check if permission was denied
+    /// Supports both PTY mode (input) and hook bridge mode (decision)
     var wasDenied: Bool {
+        // Hook bridge mode uses decision field
+        if let decision = decision {
+            return decision.lowercased() == "deny"
+        }
+        // PTY mode uses input field
         guard let input = input else { return false }
         return input == "3" || input.lowercased() == "escape" || input.lowercased() == "n"
     }

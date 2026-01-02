@@ -1004,12 +1004,24 @@ final class DashboardViewModel: ObservableObject {
         Haptics.success()
     }
 
-    /// Delete a specific session
-    func deleteSession(_ sessionId: String) async {
+    /// Delete a specific session using workspace/session/delete
+    /// - Parameters:
+    ///   - sessionId: Session ID to delete
+    ///   - workspaceId: Workspace ID containing the session (uses currentWorkspaceId if nil)
+    func deleteSession(_ sessionId: String, workspaceId: String? = nil) async {
+        // Use provided workspaceId or fallback to current
+        guard let wsId = workspaceId ?? currentWorkspaceId else {
+            AppLogger.log("[Dashboard] Cannot delete session - no workspace ID", type: .error)
+            self.error = .commandFailed(reason: "No workspace context for session deletion")
+            Haptics.error()
+            return
+        }
+
         do {
-            _ = try await _agentRepository.deleteSession(sessionId: sessionId)
+            _ = try await _agentRepository.deleteSession(sessionId: sessionId, workspaceId: wsId)
             // Remove from local list
             sessions.removeAll { $0.sessionId == sessionId }
+            AppLogger.log("[Dashboard] Deleted session: \(sessionId) from workspace: \(wsId)")
             Haptics.success()
         } catch {
             AppLogger.error(error, context: "Delete session")
@@ -1018,31 +1030,52 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Delete all sessions
+    /// Delete all sessions in the current workspace
     func deleteAllSessions() async {
-        do {
-            let response = try await _agentRepository.deleteAllSessions()
-            sessions = []
-            AppLogger.log("[Dashboard] Deleted \(response.deleted) sessions")
-
-            // Also clear current logs, elements, and session state
-            await logCache.clear()
-            logs = []
-            chatElements = []
-            setSelectedSession(nil)
-            hasActiveConversation = false
-
-            let entry = LogEntry(
-                content: "🗑️ Deleted all sessions",
-                stream: .system
-            )
-            await logCache.add(entry)
-            await forceLogUpdate()
-            Haptics.success()
-        } catch {
-            AppLogger.error(error, context: "Delete all sessions")
-            self.error = error as? AppError ?? .unknown(underlying: error)
+        guard let wsId = currentWorkspaceId else {
+            AppLogger.log("[Dashboard] Cannot delete all sessions - no workspace ID", type: .error)
+            self.error = .commandFailed(reason: "No workspace context for session deletion")
             Haptics.error()
+            return
+        }
+
+        var deletedCount = 0
+        var errors: [Error] = []
+
+        // Delete each session individually using workspace/session/delete
+        for session in sessions {
+            do {
+                _ = try await _agentRepository.deleteSession(sessionId: session.sessionId, workspaceId: wsId)
+                deletedCount += 1
+            } catch {
+                AppLogger.log("[Dashboard] Failed to delete session \(session.sessionId): \(error)", type: .error)
+                errors.append(error)
+            }
+        }
+
+        // Clear local state
+        sessions = []
+        AppLogger.log("[Dashboard] Deleted \(deletedCount) sessions")
+
+        // Also clear current logs, elements, and session state
+        await logCache.clear()
+        logs = []
+        chatElements = []
+        setSelectedSession(nil)
+        hasActiveConversation = false
+
+        let entry = LogEntry(
+            content: "🗑️ Deleted \(deletedCount) sessions",
+            stream: .system
+        )
+        await logCache.add(entry)
+        await forceLogUpdate()
+
+        if errors.isEmpty {
+            Haptics.success()
+        } else {
+            Haptics.warning()
+            self.error = .commandFailed(reason: "Failed to delete \(errors.count) sessions")
         }
     }
 
@@ -1069,7 +1102,8 @@ final class DashboardViewModel: ObservableObject {
         Haptics.medium()
 
         do {
-            try await _agentRepository.stopClaude()
+            // Use userSelectedSessionId which is updated by session_id_resolved
+            try await _agentRepository.stopClaude(sessionId: userSelectedSessionId)
             // Update state immediately after successful stop
             // (don't wait for WebSocket event which may be delayed or missing)
             claudeState = .idle
@@ -1184,25 +1218,101 @@ final class DashboardViewModel: ObservableObject {
 
     // MARK: - PTY Mode Helpers
 
-    /// Validate that a PTY option key is a valid keyboard shortcut
-    /// Valid keys: numbers (1-9), letters (n, y, etc.), special keys (esc, enter, tab)
+    /// Validate that a PTY option key is valid
+    /// PTY mode keys: numbers (1-9), letters (n, y, etc.), special keys (esc, enter, tab)
+    /// Hook bridge mode keys: allow_once, allow_session, deny
     private func isValidPTYOptionKey(_ key: String) -> Bool {
-        let validKeys = Set(["1", "2", "3", "4", "5", "6", "7", "8", "9",
-                             "n", "y", "esc", "escape", "enter", "return", "tab"])
-        return validKeys.contains(key.lowercased()) || key.count == 1
+        // PTY mode keys (keyboard shortcuts)
+        let ptyKeys = Set(["1", "2", "3", "4", "5", "6", "7", "8", "9",
+                           "n", "y", "esc", "escape", "enter", "return", "tab"])
+        // Hook bridge mode keys (semantic actions)
+        let hookBridgeKeys = Set(["allow_once", "allow_session", "deny"])
+
+        let lowercasedKey = key.lowercased()
+        return ptyKeys.contains(lowercasedKey) ||
+               hookBridgeKeys.contains(lowercasedKey) ||
+               key.count == 1
     }
 
     // MARK: - PTY Mode Permission Responses
 
     /// Respond to PTY permission by navigating to the selected option and pressing enter.
-    /// The PTY terminal uses arrow key navigation:
-    /// - Find the currently selected option (selected == true)
-    /// - Navigate "down" to reach the target option
-    /// - Send "enter" to confirm
+    /// Supports both PTY mode (session/input) and hook bridge mode (permission/respond).
+    ///
+    /// PTY mode: Uses arrow key navigation to reach target option and press enter.
+    /// Hook bridge mode: Uses permission/respond RPC with toolUseId.
     func respondToPTYPermission(key: String) async {
         guard let interaction = pendingInteraction, interaction.isPTYMode else { return }
         Haptics.light()
 
+        // Check if this is hook bridge mode (toolUseId present)
+        if interaction.isHookBridgeMode {
+            await respondToHookBridgePermission(interaction: interaction, key: key)
+            return
+        }
+
+        // PTY mode: Use session/input with arrow key navigation
+        await respondToPTYModePermission(interaction: interaction, key: key)
+    }
+
+    /// Respond to hook bridge permission using permission/respond RPC
+    private func respondToHookBridgePermission(interaction: PendingInteraction, key: String) async {
+        guard let toolUseId = interaction.toolUseId else {
+            AppLogger.log("[Dashboard] Hook bridge mode but no toolUseId", type: .error)
+            return
+        }
+
+        // Map key to decision and scope
+        // Options typically are: "allow_once", "allow_session", "deny"
+        let (decision, scope) = mapKeyToDecisionAndScope(key: key, options: interaction.ptyOptions)
+
+        AppLogger.log("[Dashboard] Hook bridge permission: toolUseId=\(toolUseId), key=\(key), decision=\(decision.rawValue), scope=\(scope.rawValue)")
+
+        do {
+            try await _agentRepository.respondToPermission(
+                toolUseId: toolUseId,
+                decision: decision,
+                scope: scope
+            )
+            pendingInteraction = nil
+            AppLogger.log("[Dashboard] Hook bridge permission responded successfully", type: .success)
+        } catch {
+            self.error = error as? AppError ?? .unknown(underlying: error)
+            AppLogger.log("[Dashboard] Hook bridge permission response failed: \(error)", type: .error)
+        }
+    }
+
+    /// Map option key to permission decision and scope for hook bridge mode
+    private func mapKeyToDecisionAndScope(key: String, options: [PTYPromptOption]?) -> (PermissionDecision, PermissionScope) {
+        // Find the option by key to check its label
+        let option = options?.first { $0.key == key }
+        let label = option?.label.lowercased() ?? ""
+
+        // Check option key patterns from hook bridge
+        // Common keys: "allow_once", "allow_session", "deny"
+        switch key.lowercased() {
+        case "allow_once", "1":
+            return (.allow, .once)
+        case "allow_session", "2":
+            return (.allow, .session)
+        case "deny", "n", "3":
+            return (.deny, .once)
+        default:
+            // Infer from label if key doesn't match standard patterns
+            if label.contains("session") {
+                return (.allow, .session)
+            } else if label.contains("yes") || label.contains("allow") {
+                return (.allow, .once)
+            } else if label.contains("no") || label.contains("deny") {
+                return (.deny, .once)
+            }
+            // Default to allow once
+            return (.allow, .once)
+        }
+    }
+
+    /// Respond to PTY mode permission using session/input with arrow key navigation
+    private func respondToPTYModePermission(interaction: PendingInteraction, key: String) async {
         // Get session ID: prefer interaction's sessionId (for PTY after session_id_failed),
         // then userSelectedSessionId, then agentStatus
         let sessionId = interaction.sessionId ?? userSelectedSessionId ?? agentStatus.sessionId
@@ -1266,19 +1376,19 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Approve PTY permission (sends "1" for Yes)
+    /// Approve PTY permission (sends "1" for Yes / allow_once)
     func approvePTYPermission() async {
         await respondToPTYPermission(key: "1")
         Haptics.success()
     }
 
-    /// Approve all PTY permissions (sends "2" for Yes All)
+    /// Approve all PTY permissions (sends "2" for Yes All / allow_session)
     func approveAllPTYPermissions() async {
         await respondToPTYPermission(key: "2")
         Haptics.success()
     }
 
-    /// Deny PTY permission (sends "n" for No)
+    /// Deny PTY permission (sends "n" for No / deny)
     func denyPTYPermission() async {
         await respondToPTYPermission(key: "n")
         Haptics.warning()
@@ -1910,11 +2020,31 @@ final class DashboardViewModel: ObservableObject {
             // Permission was resolved by another device - dismiss our permission UI
             if case .ptyPermissionResolved(let payload) = event.payload {
                 let resolvedBy = payload.resolvedBy ?? "unknown"
-                let input = payload.input ?? "unknown"
-                AppLogger.log("[Dashboard] PTY permission resolved by another device: resolvedBy=\(resolvedBy), input=\(input)")
+                let input = payload.input ?? payload.decision ?? "unknown"
+                let toolUseId = payload.toolUseId
+                AppLogger.log("[Dashboard] PTY permission resolved by another device: resolvedBy=\(resolvedBy), input=\(input), toolUseId=\(toolUseId ?? "nil")")
 
-                // Clear the pending permission UI if we have one
-                if pendingInteraction?.isPTYMode == true {
+                // Clear the pending permission UI if it matches
+                // For hook bridge mode: match by toolUseId for accurate correlation
+                // For PTY mode: match any pending PTY permission
+                var shouldDismiss = false
+                if let pending = pendingInteraction, pending.isPTYMode {
+                    if let eventToolUseId = toolUseId, !eventToolUseId.isEmpty {
+                        // Hook bridge mode: match by toolUseId
+                        if pending.toolUseId == eventToolUseId {
+                            shouldDismiss = true
+                            AppLogger.log("[Dashboard] Hook bridge permission matched by toolUseId")
+                        } else {
+                            AppLogger.log("[Dashboard] Hook bridge permission toolUseId mismatch: pending=\(pending.toolUseId ?? "nil"), event=\(eventToolUseId)")
+                        }
+                    } else {
+                        // PTY mode: dismiss any pending PTY permission
+                        shouldDismiss = true
+                        AppLogger.log("[Dashboard] PTY mode permission resolved")
+                    }
+                }
+
+                if shouldDismiss {
                     pendingInteraction = nil
                     Haptics.light()
                     AppLogger.log("[Dashboard] Dismissed local permission popup - resolved by another device")
@@ -2158,15 +2288,29 @@ final class DashboardViewModel: ObservableObject {
 
         case .sessionIdResolved:
             // Temporary session ID resolved to real Claude session ID
-            // This happens after user accepts trust_folder for a new workspace
+            // This happens after:
+            // 1. User accepts trust_folder for a new workspace
+            // 2. Starting a new session with mode="new" (no session_id sent)
             if case .sessionIdResolved(let payload) = event.payload,
                let tempId = payload.temporaryId,
                let realId = payload.realId {
-                AppLogger.log("[Dashboard] Session ID resolved: temp=\(tempId) → real=\(realId)")
+                let workspaceId = payload.workspaceId
+                AppLogger.log("[Dashboard] Session ID resolved: temp=\(tempId) → real=\(realId), workspace=\(workspaceId ?? "nil")")
+                AppLogger.log("[Dashboard] Current state: userSelectedSessionId=\(userSelectedSessionId ?? "nil"), claudeState=\(claudeState), watchingSessionId=\(watchingSessionId ?? "nil")")
 
-                // Check if this resolution is for our current session
-                if userSelectedSessionId == tempId {
-                    AppLogger.log("[Dashboard] Updating session tracking from temp to real ID")
+                // Determine if we should accept this session ID:
+                // 1. If our current session matches the temp ID
+                // 2. If Claude is running - this means we just started a session
+                //    Accept the real_id even if userSelectedSessionId has an old value
+                //    (happens when starting new session while already having a previous session)
+                // 3. If we have no session selected AND Claude is running
+                let shouldAccept = userSelectedSessionId == tempId ||
+                                   claudeState == .running ||
+                                   (userSelectedSessionId == nil) ||
+                                   (userSelectedSessionId?.isEmpty == true)
+
+                if shouldAccept {
+                    AppLogger.log("[Dashboard] Updating session tracking to real ID: \(realId)")
 
                     // Clear pending temp session flag - we now have real ID
                     isPendingTempSession = false
@@ -2174,16 +2318,50 @@ final class DashboardViewModel: ObservableObject {
                     // Update session tracking to use real ID
                     setSelectedSession(realId)
 
-                    // Re-watch the session with the real ID to receive claude_message events
-                    // from the actual session file
+                    // Update WorkspaceManagerService to keep session state consistent
+                    // This ensures stopClaude and other operations use the correct session ID
+                    let effectiveWorkspaceId = workspaceId ?? currentWorkspaceId
+                    if let wsId = effectiveWorkspaceId {
+                        let newSession = Session(
+                            id: realId,
+                            workspaceId: wsId,
+                            status: .running,
+                            startedAt: Date(),
+                            lastActive: nil,
+                            summary: nil,
+                            messageCount: nil,
+                            lastUpdated: nil,
+                            claudeState: "running",
+                            claudeSessionId: nil,
+                            isRunning: true,
+                            waitingForInput: false,
+                            pendingToolUseId: nil,
+                            pendingToolName: nil,
+                            viewers: nil
+                        )
+                        WorkspaceManagerService.shared.updateWorkspaceSession(workspaceId: wsId, session: newSession)
+                        AppLogger.log("[Dashboard] Updated WorkspaceManagerService with new session: \(realId)")
+                    }
+
+                    // Watch the session with the real ID to receive claude_message events
+                    // Use workspace_id from event for proper routing
                     Task {
-                        AppLogger.log("[Dashboard] Re-watching session with real ID: \(realId)")
+                        AppLogger.log("[Dashboard] Watching session with real ID: \(realId), workspace: \(effectiveWorkspaceId ?? "nil")")
+                        // Stop any existing watch first
                         await stopWatchingSession()
-                        await startWatchingCurrentSession(force: true)
-                        AppLogger.log("[Dashboard] Session re-watch complete with real ID")
+
+                        // Watch the new session with workspace_id from event (or fallback to currentWorkspaceId)
+                        do {
+                            try await webSocketService.watchSession(realId, workspaceId: effectiveWorkspaceId)
+                            isWatchingSession = true
+                            watchingSessionId = realId
+                            AppLogger.log("[Dashboard] Now watching session: \(realId)")
+                        } catch {
+                            AppLogger.log("[Dashboard] Failed to watch session \(realId): \(error)", type: .error)
+                        }
                     }
                 } else {
-                    AppLogger.log("[Dashboard] Session ID resolution for different session (current=\(userSelectedSessionId ?? "nil"), temp=\(tempId))")
+                    AppLogger.log("[Dashboard] Session ID resolution for different session (current=\(userSelectedSessionId ?? "nil"), temp=\(tempId), claudeState=\(claudeState))")
                 }
             }
 

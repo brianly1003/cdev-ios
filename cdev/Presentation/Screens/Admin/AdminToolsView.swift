@@ -122,7 +122,7 @@ struct AdminToolsView: View {
                     Button("Done") {
                         dismiss()
                     }
-                    .font(Typography.buttonLabel)
+                    .foregroundStyle(ColorSystem.primary)
                 }
             }
             .sheet(item: $selectedLog) { log in

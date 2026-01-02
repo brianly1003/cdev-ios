@@ -124,6 +124,7 @@ struct SettingsView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundStyle(ColorSystem.primary)
                 }
             }
             .confirmationDialog(
@@ -540,6 +541,7 @@ private struct ThemePickerView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundStyle(ColorSystem.primary)
                 }
             }
         }
@@ -781,6 +783,7 @@ private struct VoiceLanguagePickerView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundStyle(ColorSystem.primary)
                 }
             }
         }

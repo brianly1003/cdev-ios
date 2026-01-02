@@ -396,17 +396,25 @@ struct PTYPermissionPanel: View {
     }
 
     /// Shared color logic for PTY options
+    /// Supports both PTY mode keys (1, 2, n) and hook bridge keys (allow_once, allow_session, deny)
     static func buttonColor(for option: PTYPromptOption) -> Color {
         let label = option.label.lowercased()
         let key = option.key.lowercased()
 
         // Approval options - green
-        if label.contains("yes") || key == "1" || key == "2" || key == "y" {
+        // PTY keys: 1, 2, y
+        // Hook bridge keys: allow_once, allow_session
+        if label.contains("yes") || label.contains("allow") ||
+           key == "1" || key == "2" || key == "y" ||
+           key == "allow_once" || key == "allow_session" {
             return Color.accentGreen
         }
 
         // Denial options - red
-        if label.contains("no") || label.contains("deny") || key == "n" || key == "esc" {
+        // PTY keys: n, esc
+        // Hook bridge keys: deny
+        if label.contains("no") || label.contains("deny") ||
+           key == "n" || key == "esc" || key == "deny" {
             return Color.errorRed
         }
 
@@ -490,12 +498,25 @@ private struct PTYOptionRow: View {
     }
 
     /// Format special keys for display
+    /// Supports both PTY mode keys and hook bridge keys
     private func formatKey(_ key: String) -> String {
         switch key.lowercased() {
+        // PTY mode special keys
         case "esc", "escape": return "⎋"
         case "enter", "return": return "↵"
         case "tab": return "⇥"
-        default: return key.uppercased()
+        // Hook bridge mode keys - use intuitive symbols
+        case "allow_once": return "✓"
+        case "allow_session": return "✓+"
+        case "deny": return "✗"
+        // Default: show key as-is (uppercased if short, or first letter)
+        default:
+            if key.count <= 2 {
+                return key.uppercased()
+            } else {
+                // For long keys, just show first letter
+                return String(key.prefix(1)).uppercased()
+            }
         }
     }
 }

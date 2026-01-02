@@ -12,7 +12,8 @@ protocol AgentRepositoryProtocol {
     func runClaude(prompt: String, mode: SessionMode, sessionId: String?) async throws
 
     /// Stop Claude
-    func stopClaude() async throws
+    /// - Parameter sessionId: Optional session ID to stop. If nil, uses current session from workspace.
+    func stopClaude(sessionId: String?) async throws
 
     /// Respond to Claude (answer question or approve/deny permission)
     func respondToClaude(response: String, requestId: String?, approved: Bool?) async throws
@@ -30,6 +31,20 @@ protocol AgentRepositoryProtocol {
     ///   - sessionId: Session ID to send key to
     ///   - key: Special key (e.g., .enter, .escape)
     func sendKey(sessionId: String, key: SessionInputKey) async throws
+
+    // MARK: - Hook Bridge Mode (Permission Respond)
+
+    /// Respond to a permission request from hook bridge mode
+    /// Used when Claude Code is running externally and using hooks to request permissions
+    /// - Parameters:
+    ///   - toolUseId: Tool use ID from the permission event
+    ///   - decision: Whether to allow or deny the permission
+    ///   - scope: Scope of the decision (once or session)
+    func respondToPermission(
+        toolUseId: String,
+        decision: PermissionDecision,
+        scope: PermissionScope
+    ) async throws
 
     /// Get file content
     func getFile(path: String) async throws -> FileContentPayload
@@ -100,11 +115,11 @@ protocol AgentRepositoryProtocol {
         order: String
     ) async throws -> SessionMessagesResponse
 
-    /// Delete a specific session
-    func deleteSession(sessionId: String) async throws -> DeleteSessionResponse
-
-    /// Delete all sessions
-    func deleteAllSessions() async throws -> DeleteAllSessionsResponse
+    /// Delete a specific session using workspace/session/delete
+    /// - Parameters:
+    ///   - sessionId: Session ID to delete
+    ///   - workspaceId: Workspace ID containing the session
+    func deleteSession(sessionId: String, workspaceId: String) async throws -> DeleteSessionResponse
 
     // MARK: - Workspace Status
 

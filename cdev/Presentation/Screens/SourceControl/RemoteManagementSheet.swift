@@ -41,6 +41,7 @@ struct RemoteManagementSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { isPresented = false }
+                        .foregroundStyle(ColorSystem.primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {

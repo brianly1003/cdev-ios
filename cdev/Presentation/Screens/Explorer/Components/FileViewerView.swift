@@ -72,13 +72,10 @@ struct FileViewerView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button {
+                    Button("Done") {
                         onDismiss()
-                    } label: {
-                        Text("Done")
-                            .font(Typography.buttonLabel)
-                            .foregroundStyle(ColorSystem.primary)
                     }
+                    .foregroundStyle(ColorSystem.primary)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {

@@ -257,7 +257,7 @@ struct DiffDetailView: View {
                     Button("Done") {
                         dismiss()
                     }
-                    .font(Typography.buttonLabel)
+                    .foregroundStyle(ColorSystem.primary)
                 }
 
                 ToolbarItem(placement: .principal) {
