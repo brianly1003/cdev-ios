@@ -26,7 +26,7 @@
 		<string>_https._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is needed to scan QR codes for connecting to cdev-agent</string>
+	<string>Camera access is needed to scan QR codes for connecting to Cdev</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is needed to connect to cdev-agent on your computer</string>
 	<key>NSMicrophoneUsageDescription</key>

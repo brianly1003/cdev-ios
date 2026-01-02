@@ -206,12 +206,26 @@ final class AppState: ObservableObject {
         // Set connection state to reconnecting
         connectionState = .reconnecting(attempt: 1)
 
+        // Retrieve stored token for this host (if available)
+        var accessToken: String?
+        if let host = workspace.webSocketURL.host,
+           let storedHost = TokenManager.shared.getStoredHost(),
+           storedHost == host {
+            accessToken = await TokenManager.shared.getValidAccessToken()
+            if accessToken != nil {
+                AppLogger.log("[AppState] Retrieved stored token for reconnection")
+            } else {
+                AppLogger.log("[AppState] No valid token available for reconnection", type: .warning)
+            }
+        }
+
         // Create connection info from saved workspace
         let connectionInfo = ConnectionInfo(
             webSocketURL: workspace.webSocketURL,
             httpURL: workspace.httpURL,
             sessionId: workspace.sessionId ?? "",
-            repoName: workspace.name
+            repoName: workspace.name,
+            token: accessToken
         )
 
         // Restore HTTP base URL
@@ -289,11 +303,22 @@ final class AppState: ObservableObject {
                 httpURL = URL(string: "\(httpScheme)://\(managerHost)")!
             }
 
+            // Retrieve stored token for this host (if available)
+            var accessToken: String?
+            if let storedHost = TokenManager.shared.getStoredHost(),
+               storedHost == managerHost {
+                accessToken = await TokenManager.shared.getValidAccessToken()
+                if accessToken != nil {
+                    AppLogger.log("[AppState] Retrieved stored token for auto-reconnect")
+                }
+            }
+
             let connectionInfo = ConnectionInfo(
                 webSocketURL: wsURL,
                 httpURL: httpURL,
                 sessionId: "",
-                repoName: "Workspaces"
+                repoName: "Workspaces",
+                token: accessToken
             )
 
             httpService.baseURL = httpURL
@@ -362,12 +387,23 @@ final class AppState: ObservableObject {
         WorkspaceStore.shared.saveWorkspace(workspace)
         WorkspaceStore.shared.setActive(workspace)
 
+        // Retrieve stored token for this host (if available)
+        var accessToken: String?
+        if let storedHost = TokenManager.shared.getStoredHost(),
+           storedHost == host {
+            accessToken = await TokenManager.shared.getValidAccessToken()
+            if accessToken != nil {
+                AppLogger.log("[AppState] Retrieved stored token for agent connection")
+            }
+        }
+
         // Create connection info
         let connectionInfo = ConnectionInfo(
             webSocketURL: wsURL,
             httpURL: httpURL,
             sessionId: "",
-            repoName: workspace.name
+            repoName: workspace.name,
+            token: accessToken
         )
 
         // Set HTTP base URL
@@ -481,12 +517,23 @@ final class AppState: ObservableObject {
         WorkspaceStore.shared.setActive(savedWorkspace)
         AppLogger.log("[AppState] Saved workspace: \(savedWorkspace.name), id: \(savedWorkspace.id)")
 
+        // Retrieve stored token for this host (if available)
+        var accessToken: String?
+        if let storedHost = TokenManager.shared.getStoredHost(),
+           storedHost == host {
+            accessToken = await TokenManager.shared.getValidAccessToken()
+            if accessToken != nil {
+                AppLogger.log("[AppState] Retrieved stored token for remote workspace connection")
+            }
+        }
+
         // Create connection info
         let connectionInfo = ConnectionInfo(
             webSocketURL: wsURL,
             httpURL: httpURL,
             sessionId: remoteWorkspace.activeSession?.id ?? "",
-            repoName: remoteWorkspace.name
+            repoName: remoteWorkspace.name,
+            token: accessToken
         )
 
         // Set HTTP base URL

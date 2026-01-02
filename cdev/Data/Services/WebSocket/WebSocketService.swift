@@ -836,7 +836,27 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             }
 
             do {
-                try await connect(to: connectionInfo)
+                // Refresh token from TokenManager before each reconnection attempt
+                // This ensures we have a valid token even if the original connectionInfo didn't have one
+                var connectionInfoWithToken = connectionInfo
+                if let host = connectionInfo.webSocketURL.host,
+                   let storedHost = TokenManager.shared.getStoredHost(),
+                   storedHost == host {
+                    if let freshToken = await TokenManager.shared.getValidAccessToken() {
+                        connectionInfoWithToken = ConnectionInfo(
+                            webSocketURL: connectionInfo.webSocketURL,
+                            httpURL: connectionInfo.httpURL,
+                            sessionId: connectionInfo.sessionId,
+                            repoName: connectionInfo.repoName,
+                            token: freshToken
+                        )
+                        AppLogger.webSocket("Refreshed token for reconnection attempt")
+                    } else {
+                        AppLogger.webSocket("WARNING: No valid token available for reconnection", type: .warning)
+                    }
+                }
+
+                try await connect(to: connectionInfoWithToken)
                 reconnectAttempts = 0
                 AppLogger.webSocket("Reconnection successful", type: .success)
                 return  // Success - exit loop

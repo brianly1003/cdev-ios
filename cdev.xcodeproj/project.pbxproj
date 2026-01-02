@@ -800,7 +800,6 @@
 			children = (
 				CD7D86FA8355B3BFB5FC8D03 /* TokenManager.swift */,
 			);
-			name = Token;
 			path = Token;
 			sourceTree = "<group>";
 		};
@@ -922,11 +921,7 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
-					68BAA84DF15AA7581A41A733 = {
-						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
-					};
 					6E923D81BF1AA3B0D3339B82 = {
-						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
 						TestTargetID = BB43E3207F0D6974D78925BE;
 					};
 					BB43E3207F0D6974D78925BE = {
@@ -1130,12 +1125,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = DPXVLNJJH4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.brianly.cdevUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = tech.blavy.cdevUITests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = cdev;
@@ -1210,13 +1206,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 9WUL8874TC;
+				DEVELOPMENT_TEAM = DPXVLNJJH4;
 				INFOPLIST_FILE = cdev/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.brianly.cdev;
+				PRODUCT_BUNDLE_IDENTIFIER = tech.blavy.cdev;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1226,12 +1222,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = DPXVLNJJH4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.brianly.cdevTests;
+				PRODUCT_BUNDLE_IDENTIFIER = tech.blavy.cdevTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/cdev.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/cdev";
@@ -1244,13 +1241,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 9WUL8874TC;
+				DEVELOPMENT_TEAM = DPXVLNJJH4;
 				INFOPLIST_FILE = cdev/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.brianly.cdev;
+				PRODUCT_BUNDLE_IDENTIFIER = tech.blavy.cdev;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1260,12 +1257,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = DPXVLNJJH4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.brianly.cdevUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = tech.blavy.cdevUITests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = cdev;
@@ -1276,12 +1274,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = DPXVLNJJH4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.brianly.cdevTests;
+				PRODUCT_BUNDLE_IDENTIFIER = tech.blavy.cdevTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/cdev.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/cdev";

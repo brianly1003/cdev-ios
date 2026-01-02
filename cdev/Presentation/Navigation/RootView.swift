@@ -61,12 +61,11 @@ struct RootView: View {
             // Migration: Clear old saved workspaces from previous architecture
             migrateToNewArchitecture()
 
-            // Restore connection if user was on Dashboard
+            // Mark as restoring if user was on Dashboard - WebSocketService handles reconnection
+            // via AppState.attemptAutoReconnect() called during init
             if userOnDashboard && workspaceStore.activeWorkspace != nil {
-                AppLogger.log("[RootView] onAppear: Restoring connection for active workspace")
-                Task {
-                    await restoreConnectionIfNeeded()
-                }
+                AppLogger.log("[RootView] onAppear: User was on dashboard, marking restoration mode")
+                isRestoringConnection = true
             }
         }
     }
@@ -77,11 +76,12 @@ struct RootView: View {
         switch newPhase {
         case .active:
             // App came to foreground
+            // NOTE: Don't trigger reconnection here - cdevApp.handleScenePhaseChange calls
+            // webSocketService.handleAppDidBecomeActive() which handles reconnection with
+            // proper exponential backoff. Triggering here causes race conditions.
             AppLogger.log("[RootView] Scene became active")
             if userOnDashboard && workspaceStore.activeWorkspace != nil {
-                Task {
-                    await restoreConnectionIfNeeded()
-                }
+                isRestoringConnection = true  // Mark as restoring so we keep dashboard visible
             }
 
         case .background:
@@ -111,11 +111,10 @@ struct RootView: View {
                 userOnDashboard = false
                 WorkspaceStore.shared.clearActive()
             } else {
-                AppLogger.log("[RootView] Connection failed but in restoration mode - keeping dashboard")
-                // Try to restore connection
-                Task {
-                    await restoreConnectionIfNeeded()
-                }
+                // Keep dashboard visible during restoration - WebSocketService handles retries
+                // with exponential backoff. Don't trigger another restoreConnectionIfNeeded()
+                // here as it causes a rapid retry loop.
+                AppLogger.log("[RootView] Connection failed during restoration - waiting for WebSocket retry")
             }
 
         case .disconnected:
