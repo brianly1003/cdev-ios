@@ -605,12 +605,12 @@ struct TaskGroupContent: Codable, Equatable, Identifiable {
 // MARK: - Factory Methods
 
 extension ChatElement {
-    /// Create from user prompt
-    /// Uses content-based ID for deduplication with WebSocket events
+    /// Create from user prompt (optimistic display)
+    /// Uses UUID for unique identification - server echoes are already skipped
+    /// by isOurOwnPrompt() in DashboardViewModel, so content-based dedup is unnecessary
     static func userInput(_ text: String, sessionId: String? = nil) -> ChatElement {
-        let contentBasedId = generateContentBasedId(role: "user", text: text, sessionId: sessionId)
         return ChatElement(
-            id: contentBasedId,
+            id: UUID().uuidString,
             type: .userInput,
             content: .userInput(UserInputContent(text: text))
         )
@@ -726,7 +726,10 @@ extension ChatElement {
 
         // User message - may be simple text or contain tool_result blocks
         if effectiveRole == "user" {
-            let baseId = payload.uuid ?? generateContentBasedId(role: "user", text: textContent, sessionId: payload.sessionId)
+            // Use timestamp-based ID for deduplication when uuid is nil
+            // Same content + same timestamp = deduplicated (streaming duplicates)
+            // Same content + different timestamp = both shown (repeated commands)
+            let baseId = payload.uuid ?? generateTimestampBasedId(role: "user", text: textContent, timestamp: payload.timestamp)
 
             switch effectiveContent {
             case .text(let text):
@@ -779,8 +782,10 @@ extension ChatElement {
         }
 
         // Assistant message - may have multiple content blocks
-        // Generate deterministic ID based on content when uuid is nil
-        let baseId = payload.uuid ?? generateContentBasedId(role: "assistant", text: effectiveContent.textContent, sessionId: payload.sessionId)
+        // Use timestamp-based ID for deduplication when uuid is nil
+        // Same content + same timestamp = deduplicated (streaming duplicates)
+        // Same content + different timestamp = both shown (different responses)
+        let baseId = payload.uuid ?? generateTimestampBasedId(role: "assistant", text: effectiveContent.textContent, timestamp: payload.timestamp)
 
         switch effectiveContent {
         case .text(let text):
@@ -1182,17 +1187,14 @@ extension ChatElement {
     }
 }
 
-/// Generate a deterministic ID based on message content
+/// Generate a deterministic ID based on message content and timestamp
 /// Used when WebSocket events don't include a uuid field
-/// This enables deduplication of messages that arrive from multiple sources
-private func generateContentBasedId(role: String, text: String, sessionId: String?) -> String {
-    // Use first 100 chars of content to create a stable hash
-    // Combined with role and sessionId for uniqueness across sessions
+/// Deduplicates: same content + same timestamp = same ID (streaming duplicates)
+/// Differentiates: same content + different timestamp = different ID (repeated commands)
+private func generateTimestampBasedId(role: String, text: String, timestamp: String?) -> String {
     let contentPrefix = String(text.prefix(100))
-    let hashInput = "\(role):\(sessionId ?? ""):\(contentPrefix)"
-
-    // Simple hash using hashValue (consistent within app session)
-    // For cross-session consistency, we'd need a proper hash like SHA256
+    // Include timestamp in hash so same content at different times gets different IDs
+    let hashInput = "\(role):\(timestamp ?? ""):\(contentPrefix)"
     let hash = abs(hashInput.hashValue)
-    return "content-\(role)-\(hash)"
+    return "ts-\(role)-\(hash)"
 }

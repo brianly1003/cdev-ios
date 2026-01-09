@@ -18,6 +18,9 @@ struct DashboardView: View {
     @State private var showDebugLogs = false
     @State private var showWorkspaceSwitcher = false
     @State private var showReconnectedToast = false
+    @State private var showPhotoPicker = false
+    @State private var showCamera = false
+    @State private var showCameraPermissionAlert = false
     @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
     @State private var isTextFieldEditing: Bool = false  // Tracks actual editing state from UITextView
@@ -147,6 +150,12 @@ struct DashboardView: View {
                             currentMatchIndex: matchIndex,
                             scrollRequest: viewModel.scrollRequest
                         )
+                        // Extra bottom inset when attachment strip is visible (uses safeAreaInset for transparent overlay)
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            if !viewModel.attachedImages.isEmpty {
+                                Color.clear.frame(height: 80)  // Invisible spacer for scroll content
+                            }
+                        }
                         .tag(DashboardTab.logs)
 
                         // Source Control (Mini Repo Management)
@@ -183,6 +192,16 @@ struct DashboardView: View {
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .dismissKeyboardOnTap()
                     .background(ColorSystem.terminalBg)
+                    // Tap-outside-to-dismiss backdrop for attachment menu
+                    .overlay {
+                        if viewModel.showAttachmentMenu {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewModel.showAttachmentMenu = false
+                                }
+                        }
+                    }
 
                     // Action bar - only show on logs tab
                     // Uses manual keyboard handling, so ignore SwiftUI's automatic keyboard avoidance
@@ -220,7 +239,26 @@ struct DashboardView: View {
                                     isTextFieldEditing = focused
                                 },
                                 // Voice input (beta feature - only passed when enabled)
-                                voiceInputViewModel: voiceInputSettings.isEnabled ? voiceInputViewModel : nil
+                                voiceInputViewModel: voiceInputSettings.isEnabled ? voiceInputViewModel : nil,
+                                // Image attachments
+                                attachedImages: $viewModel.attachedImages,
+                                showAttachmentMenu: $viewModel.showAttachmentMenu,
+                                onAttachImage: { viewModel.showAttachmentMenu = true },
+                                onRemoveImage: { id in viewModel.removeAttachedImage(id) },
+                                onRetryUpload: { id in Task { await viewModel.retryUpload(id) } },
+                                onCameraCapture: {
+                                    AppLogger.log("[Dashboard] Camera capture requested")
+                                    Task { await handleCameraRequest() }
+                                },
+                                onPhotoLibrary: {
+                                    AppLogger.log("[Dashboard] Photo library requested")
+                                    showPhotoPicker = true
+                                },
+                                onScreenshotCapture: {
+                                    AppLogger.log("[Dashboard] Screenshot capture requested")
+                                    captureScreenshot()
+                                },
+                                canAttachMoreImages: viewModel.canAttachMoreImages
                             )
                             // Track action bar height for keyboard dismiss button positioning
                             .background(
@@ -234,6 +272,7 @@ struct DashboardView: View {
                             .onPreferenceChange(ActionBarHeightKey.self) { height in
                                 actionBarHeight = height
                             }
+
                         }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -243,10 +282,12 @@ struct DashboardView: View {
                 .ignoresSafeArea(.keyboard, edges: isInputFocused ? .bottom : [])
                 .background(ColorSystem.terminalBg)
                 // Floating keyboard dismiss button - tracks keyboard and positions itself
+                // Only add action bar height offset on logs tab (which has the action bar)
                 .overlay(alignment: .trailing) {
                     FloatingKeyboardDismissButton(
-                        inputBarHeight: actionBarHeight,
-                        promptText: viewModel.promptText
+                        inputBarHeight: viewModel.selectedTab == .logs ? actionBarHeight : 0,
+                        promptText: viewModel.selectedTab == .logs ? viewModel.promptText : "",
+                        isBashMode: viewModel.selectedTab == .logs && viewModel.isBashMode
                     )
                     .padding(.trailing, Spacing.md)
                 }
@@ -312,6 +353,40 @@ struct DashboardView: View {
                         },
                         onDismiss: { viewModel.showSessionPicker = false }
                     )
+                }
+                // Photo Library Picker
+                .sheet(isPresented: $showPhotoPicker) {
+                    PhotoLibraryPicker(
+                        maxSelections: max(0, AttachedImageState.Constants.maxImages - viewModel.attachedImages.count),
+                        onImagesSelected: { images in
+                            showPhotoPicker = false
+                            for image in images {
+                                Task { await viewModel.attachImage(image, source: .photoLibrary) }
+                            }
+                        },
+                        onDismiss: { showPhotoPicker = false }
+                    )
+                }
+                // Camera Capture
+                .fullScreenCover(isPresented: $showCamera) {
+                    CameraImagePicker(
+                        onImageCaptured: { image in
+                            showCamera = false
+                            Task { await viewModel.attachImage(image, source: .camera) }
+                        },
+                        onDismiss: { showCamera = false }
+                    )
+                }
+                // Camera Permission Alert
+                .alert("Camera Access Required", isPresented: $showCameraPermissionAlert) {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Please allow camera access in Settings to take photos.")
                 }
                 .fullScreenCover(isPresented: $showWorkspaceSwitcher) {
                     WorkspaceManagerView(
@@ -532,6 +607,63 @@ struct DashboardView: View {
                     claudeState: newState
                 )
             }
+        }
+    }
+
+    // MARK: - Image Attachment Helpers
+
+    /// Handle camera request with permission check
+    private func handleCameraRequest() async {
+        // Check if camera is available
+        guard CameraImagePicker.isAvailable else {
+            AppLogger.log("[Dashboard] Camera not available on this device")
+            return
+        }
+
+        // Check permission status
+        let status = CameraImagePicker.authorizationStatus
+        switch status {
+        case .authorized:
+            await MainActor.run {
+                showCamera = true
+            }
+        case .notDetermined:
+            let granted = await CameraImagePicker.requestPermission()
+            if granted {
+                await MainActor.run {
+                    showCamera = true
+                }
+            }
+        case .denied, .restricted:
+            await MainActor.run {
+                showCameraPermissionAlert = true
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    /// Capture a screenshot of the current screen
+    private func captureScreenshot() {
+        // Get the key window
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = windowScene.windows.first else {
+            AppLogger.log("[Dashboard] Could not get window for screenshot")
+            return
+        }
+
+        // Render the window to an image
+        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+        let screenshot = renderer.image { context in
+            window.layer.render(in: context.cgContext)
+        }
+
+        AppLogger.log("[Dashboard] Screenshot captured: \(screenshot.size)")
+        Haptics.success()
+
+        // Attach the screenshot
+        Task {
+            await viewModel.attachImage(screenshot, source: .screenshot)
         }
     }
 }
@@ -907,8 +1039,28 @@ struct ActionBarView: View {
     // Voice input (optional - beta feature)
     var voiceInputViewModel: VoiceInputViewModel?
 
+    // Image attachments (optional - beta feature)
+    @Binding var attachedImages: [AttachedImageState]
+    var showAttachmentMenu: Binding<Bool>?
+    var onAttachImage: (() -> Void)?
+    var onRemoveImage: ((UUID) -> Void)?
+    var onRetryUpload: ((UUID) -> Void)?
+    // Individual image source callbacks
+    var onCameraCapture: (() -> Void)?
+    var onPhotoLibrary: (() -> Void)?
+    var onScreenshotCapture: (() -> Void)?
+    var canAttachMoreImages: Bool = true
+
     // Keyboard height tracking for proper positioning
     @State private var keyboardHeight: CGFloat = 0
+
+    // Messenger-style action buttons collapse when focused
+    // When focused: show only chevron button, hide action buttons
+    // When user taps chevron: expand to show action buttons temporarily
+    @State private var areActionsExpanded: Bool = false
+    // Auto-show buttons after 5 seconds when text is empty and still focused
+    @State private var shouldAutoShowButtons: Bool = false
+    @State private var autoShowTask: Task<Void, Never>?
 
     // Responsive layout for iPhone/iPad
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -968,36 +1120,129 @@ struct ActionBarView: View {
         return isBashMode ? "Run bash command..." : "Ask Claude..."
     }
 
+    /// Whether any images are being uploaded
+    private var isUploadingImages: Bool {
+        attachedImages.contains { $0.isUploading }
+    }
+
+    /// Whether any uploads have failed
+    private var hasFailedUploads: Bool {
+        attachedImages.contains { $0.canRetry }
+    }
+
+    /// Messenger-style: Show action buttons when:
+    /// - NOT focused (default state)
+    /// - Manually expanded via chevron tap
+    /// - Empty text AND 5-second timer has elapsed (auto-show)
+    private var shouldShowActionButtons: Bool {
+        !isEditing || areActionsExpanded || (promptText.isEmpty && shouldAutoShowButtons)
+    }
+
+    /// Show expand chevron when focused and actions are collapsed
+    /// Hide chevron when buttons are visible (manually expanded or auto-shown)
+    private var shouldShowExpandChevron: Bool {
+        isEditing && !areActionsExpanded && !(promptText.isEmpty && shouldAutoShowButtons)
+    }
+
+    /// Dynamic offset for floating popups - accounts for bash mode indicator height
+    private var popupOffset: CGFloat {
+        let baseOffset: CGFloat = -64  // Input row height (~56pt) + gap (~8pt)
+        let bashIndicatorHeight: CGFloat = isBashMode ? -20 : 0  // Extra height when bash mode shown
+        return baseOffset + bashIndicatorHeight
+    }
+
+    // MARK: - Timer Helpers
+
+    /// Start 5-second timer to auto-show buttons when text is empty
+    private func startAutoShowTimer() {
+        cancelAutoShowTimer()
+        autoShowTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5 seconds
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(Animations.stateChange) {
+                    shouldAutoShowButtons = true
+                }
+            }
+        }
+    }
+
+    /// Cancel the auto-show timer
+    private func cancelAutoShowTimer() {
+        autoShowTask?.cancel()
+        autoShowTask = nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: elementSpacing) {
-                // Voice input button (beta feature - only shown when enabled)
-                if let voiceVM = voiceInputViewModel {
-                    VoiceInputButton(viewModel: voiceVM)
-                        .transition(Animations.fadeScale)
+                // Messenger-style: Expand chevron when focused (shows ">" to expand action buttons)
+                if shouldShowExpandChevron {
+                    Button {
+                        withAnimation(Animations.stateChange) {
+                            areActionsExpanded = true
+                            // Close attachment menu when expanding (reset to default state)
+                            showAttachmentMenu?.wrappedValue = false
+                        }
+                        Haptics.light()
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: bashIconSize, weight: .semibold))
+                            .foregroundStyle(ColorSystem.primary)
+                            .frame(width: bashButtonSize, height: bashButtonSize)
+                            .background(ColorSystem.terminalBgHighlight)
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
                 }
 
-                // Bash mode toggle button - compact on iPhone
-                Button {
-                    onToggleBashMode()
-                } label: {
-                    Image(systemName: "terminal.fill")
-                        .font(.system(size: bashIconSize, weight: .semibold))
-                        .foregroundStyle(isBashMode ? ColorSystem.success : ColorSystem.textTertiary)
-                        .frame(width: bashButtonSize, height: bashButtonSize)
-                        .background(isBashMode ? ColorSystem.success.opacity(0.15) : ColorSystem.terminalBgHighlight)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .strokeBorder(
-                                    isBashMode ? ColorSystem.success.opacity(0.3) : .clear,
-                                    lineWidth: 1.5
-                                )
+                // Action buttons group - hidden when focused (Messenger-style)
+                if shouldShowActionButtons {
+                    // Image attach button (shown when onAttachImage is provided)
+                    if let menuBinding = showAttachmentMenu {
+                        ImageAttachButton(
+                            attachedCount: attachedImages.count,
+                            isUploading: isUploadingImages,
+                            hasError: hasFailedUploads,
+                            isMenuOpen: menuBinding,
+                            onTap: {
+                                // Toggle the menu
+                                menuBinding.wrappedValue.toggle()
+                            },
+                            onLongPress: { onAttachImage?() }
                         )
-                        .shadow(color: isBashMode ? ColorSystem.success.opacity(0.3) : .clear, radius: 4)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
+                    // Voice input button (beta feature - only shown when enabled)
+                    if let voiceVM = voiceInputViewModel {
+                        VoiceInputButton(viewModel: voiceVM)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+
+                    // Bash mode toggle button - compact on iPhone
+                    Button {
+                        onToggleBashMode()
+                    } label: {
+                        Image(systemName: "terminal.fill")
+                            .font(.system(size: bashIconSize, weight: .semibold))
+                            .foregroundStyle(isBashMode ? ColorSystem.success : ColorSystem.textTertiary)
+                            .frame(width: bashButtonSize, height: bashButtonSize)
+                            .background(isBashMode ? ColorSystem.success.opacity(0.15) : ColorSystem.terminalBgHighlight)
+                            .clipShape(Circle())
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(
+                                        isBashMode ? ColorSystem.success.opacity(0.3) : .clear,
+                                        lineWidth: 1.5
+                                    )
+                            )
+                            .shadow(color: isBashMode ? ColorSystem.success.opacity(0.3) : .clear, radius: 4)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
                 }
-                .buttonStyle(.plain)
-                .transition(Animations.fadeScale)
 
                 // Stop button with loading animation when active
                 // Hidden when PTY permission panel is showing (user needs to respond first)
@@ -1079,27 +1324,94 @@ struct ActionBarView: View {
             }
             .padding(.horizontal, containerPadding)
             .padding(.vertical, layout.smallPadding)
-            .background(ColorSystem.terminalBgElevated)
+
+            // Bash mode indicator - simple text with icon
+            if isBashMode {
+                HStack(spacing: Spacing.xxs) {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("bash mode enabled")
+                        .font(Typography.terminalSmall)
+                }
+                .foregroundStyle(ColorSystem.success)
+                .padding(.horizontal, containerPadding)
+                .padding(.bottom, Spacing.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .background(ColorSystem.terminalBgElevated)
         // Only add keyboard padding when THIS input is focused (not search bar)
         .padding(.bottom, isFocused.wrappedValue ? keyboardHeight : 0)
         // Background for keyboard padding area (prevents black gap)
         .background(ColorSystem.terminalBg)
-        // Command suggestions floating above (no background interference)
+        // Command suggestions floating above (hidden when attachment menu is open)
         .overlay(alignment: .bottom) {
-            if showSuggestions {
+            let isAttachmentMenuOpen = showAttachmentMenu?.wrappedValue ?? false
+            // Only show suggestions when attachment menu is NOT open
+            if showSuggestions && !isAttachmentMenuOpen {
                 CommandSuggestionsView(commands: suggestedCommands) { command in
                     promptText = command
                 }
                 .padding(.horizontal, containerPadding)
                 .padding(.trailing, 58)  // Space for floating toolkit
-                // Position just above input bar (input bar height ~56pt + small gap)
-                .offset(y: -64)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                // Position just above ActionBar (dynamic - accounts for bash mode indicator)
+                .offset(y: popupOffset)
+                // Slide up from just below final position (feels like emerging from ActionBar top)
+                .transition(.offset(y: 20).combined(with: .opacity))
+                // Prevent tap-through during exit animation
+                .allowsHitTesting(showSuggestions && !isAttachmentMenuOpen)
+            }
+        }
+        // Image attachment strip floating above ActionBar (semi-transparent like popup)
+        .overlay(alignment: .bottom) {
+            if !attachedImages.isEmpty {
+                ImageAttachmentStrip(
+                    attachedImages: $attachedImages,
+                    onRemove: { id in onRemoveImage?(id) },
+                    onAddMore: { onAttachImage?() },
+                    onRetry: { id in onRetryUpload?(id) },
+                    canAddMore: canAttachMoreImages
+                )
+                .padding(.horizontal, containerPadding)  // Match other popup padding
+                // Position just above ActionBar (same offset as other popups)
+                .offset(y: popupOffset)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(Animations.stateChange, value: attachedImages.count)  // Animate strip appearance
+        // Attachment menu popup floating above (takes priority - shows when open AND buttons visible)
+        .overlay(alignment: .bottomLeading) {
+            if let menuBinding = showAttachmentMenu, menuBinding.wrappedValue && shouldShowActionButtons {
+                AttachmentMenuPopup(
+                    onCamera: {
+                        menuBinding.wrappedValue = false
+                        onCameraCapture?()
+                    },
+                    onPhotoLibrary: {
+                        menuBinding.wrappedValue = false
+                        onPhotoLibrary?()
+                    },
+                    onScreenshot: {
+                        menuBinding.wrappedValue = false
+                        onScreenshotCapture?()
+                    }
+                )
+                .padding(.leading, containerPadding)
+                // Position just above ActionBar (dynamic - accounts for bash mode indicator)
+                .offset(y: popupOffset)
+                // Slide up from just below final position (consistent with Command suggestions)
+                .transition(.offset(y: 20).combined(with: .opacity))
             }
         }
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
+        .animation(Animations.stateChange, value: showAttachmentMenu?.wrappedValue)
+        .animation(Animations.stateChange, value: areActionsExpanded)  // Animate manual expand/collapse
+        .animation(Animations.stateChange, value: shouldAutoShowButtons)  // Animate auto-show after 5s
+        .animation(Animations.stateChange, value: isEditing)  // Animate when focus changes
+        .animation(Animations.stateChange, value: isBashMode)  // Animate bash mode indicator
+        .animation(Animations.stateChange, value: popupOffset)  // Animate popup position when bash mode changes
         .animation(.easeOut(duration: 0.25), value: keyboardHeight)
         // Dismiss keyboard when Claude starts running - don't auto-focus when done
         .onChange(of: claudeState) { _, newState in
@@ -1112,6 +1424,46 @@ struct ActionBarView: View {
             // Reset keyboard height when losing focus
             if !newValue {
                 keyboardHeight = 0
+            }
+        }
+        // Messenger-style: Collapse action buttons when input gains focus
+        .onChange(of: isEditing) { oldValue, newValue in
+            AppLogger.log("[ActionBar] isEditing changed: \(oldValue) -> \(newValue)")
+            if newValue {
+                // Focus gained - collapse action buttons (show chevron)
+                // Close attachment menu immediately when chevron appears
+                withAnimation(Animations.stateChange) {
+                    areActionsExpanded = false
+                    shouldAutoShowButtons = false
+                    showAttachmentMenu?.wrappedValue = false
+                }
+                AppLogger.log("[ActionBar] Focus gained - reset states, promptText.isEmpty=\(promptText.isEmpty)")
+                // Start timer if text is already empty
+                if promptText.isEmpty {
+                    startAutoShowTimer()
+                    AppLogger.log("[ActionBar] Started 5-second timer")
+                }
+            } else {
+                // Focus lost - cancel timer and reset states
+                cancelAutoShowTimer()
+                shouldAutoShowButtons = false
+                // Also close menu when focus is lost
+                showAttachmentMenu?.wrappedValue = false
+                AppLogger.log("[ActionBar] Focus lost - reset states")
+            }
+        }
+        // Messenger-style: Start/cancel 5-second timer based on text content
+        .onChange(of: promptText) { oldValue, newValue in
+            guard isEditing else { return }
+
+            if newValue.isEmpty && !oldValue.isEmpty {
+                // Text became empty - start 5-second timer to show buttons
+                startAutoShowTimer()
+            } else if !newValue.isEmpty {
+                // Text has content - cancel timer and hide buttons
+                cancelAutoShowTimer()
+                shouldAutoShowButtons = false
+                areActionsExpanded = false
             }
         }
         // Track keyboard height for positioning above keyboard

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 /// Main dashboard view model - central hub for all agent interactions
 @MainActor
@@ -120,6 +121,31 @@ final class DashboardViewModel: ObservableObject {
     private var messagesNextOffset: Int = 0
     private let messagesPageSize: Int = 20
 
+    // Image Attachments (for sending images to Claude)
+    @Published var attachedImages: [AttachedImageState] = []
+    @Published var showAttachmentMenu: Bool = false
+
+    /// Whether new images can be attached (max 4)
+    var canAttachMoreImages: Bool { attachedImages.count < AttachedImageState.Constants.maxImages }
+
+    /// Whether any images are attached
+    var hasAttachedImages: Bool { !attachedImages.isEmpty }
+
+    /// Whether any images are currently uploading
+    var isUploadingImages: Bool {
+        attachedImages.contains { $0.isUploading }
+    }
+
+    /// Whether all attached images have been uploaded successfully
+    var allImagesUploaded: Bool {
+        attachedImages.allSatisfy { $0.isUploaded }
+    }
+
+    /// Whether any uploads have failed
+    var hasFailedUploads: Bool {
+        attachedImages.contains { $0.canRetry }
+    }
+
     // MARK: - Dependencies
 
     private let webSocketService: WebSocketServiceProtocol
@@ -233,8 +259,8 @@ final class DashboardViewModel: ObservableObject {
             self.agentStatus = AgentStatus(sessionId: storedId)
         }
 
-        // Load persisted bash mode state
-        self.isBashMode = UserDefaults.standard.bool(forKey: "dashboardBashMode")
+        // Bash mode starts as false (normal mode) on each app launch
+        // No persistence - resets when app is closed
 
         // Initialize with current connection state
         self.connectionState = webSocketService.connectionState
@@ -532,7 +558,6 @@ final class DashboardViewModel: ObservableObject {
         if userMessage.hasPrefix("!") && !isBashMode {
             // Auto-enable bash mode when user types ! in normal mode
             isBashMode = true
-            UserDefaults.standard.set(true, forKey: "dashboardBashMode")
             Haptics.light()
             // Remove ! prefix since we'll track it's a bash command
             userMessage = String(userMessage.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -561,9 +586,9 @@ final class DashboardViewModel: ObservableObject {
         await forceLogUpdate() // Immediate for user action
 
         // Also add as ChatElement for sophisticated UI
-        // Use content-based ID with sessionId for deduplication with WebSocket events
+        // Uses UUID for unique ID - server echoes are skipped by isOurOwnPrompt()
         let userElement = ChatElement.userInput(userMessage, sessionId: userSelectedSessionId)
-        addElementIfNew(userElement)  // Use deduplication method
+        addElementIfNew(userElement)
 
         do {
             // If Claude is waiting for a response, use respondToClaude
@@ -629,11 +654,26 @@ final class DashboardViewModel: ObservableObject {
                     }
                 }
 
+                // Append image paths to prompt if any images are uploaded
+                var finalPrompt = userMessage
+                let uploadedPaths = getUploadedImagePaths()
+                if !uploadedPaths.isEmpty {
+                    // Append image paths in a format Claude understands
+                    let pathsText = uploadedPaths.joined(separator: ", ")
+                    finalPrompt += "\n\n[Attached images: \(pathsText)]"
+                    AppLogger.log("[Dashboard] Sending prompt with \(uploadedPaths.count) images: \(pathsText)")
+                }
+
                 try await sendPromptUseCase.execute(
-                    prompt: userMessage,
+                    prompt: finalPrompt,
                     mode: mode,
                     sessionId: sessionIdToSend
                 )
+
+                // Clear attached images after successful send
+                if !uploadedPaths.isEmpty {
+                    clearAttachedImages()
+                }
             }
             showPromptSheet = false
             Haptics.success()
@@ -663,10 +703,9 @@ final class DashboardViewModel: ObservableObject {
         isLoading = false
     }
 
-    /// Toggle bash mode on/off with haptic feedback and persistence
+    /// Toggle bash mode on/off with haptic feedback (resets on app restart)
     func toggleBashMode() {
         isBashMode.toggle()
-        UserDefaults.standard.set(isBashMode, forKey: "dashboardBashMode")
         Haptics.selection()
         AppLogger.log("[Dashboard] Bash mode toggled: \(isBashMode ? "ON" : "OFF")")
     }
@@ -3184,6 +3223,119 @@ final class DashboardViewModel: ObservableObject {
     /// Create a PairingViewModel for the pairing sheet
     func makePairingViewModel() -> PairingViewModel? {
         appState?.makePairingViewModel()
+    }
+
+    // MARK: - Image Attachment Methods
+
+    /// Attach an image from the given source
+    /// Processes the image and starts upload immediately
+    func attachImage(_ image: UIImage, source: AttachedImageState.ImageSource) async {
+        guard canAttachMoreImages else {
+            AppLogger.log("[Dashboard] Cannot attach more images - max \(AttachedImageState.Constants.maxImages) reached")
+            return
+        }
+
+        do {
+            // Process image (resize, compress, generate thumbnail)
+            let processingService = ImageProcessingService.shared
+            var attachedImage = try await processingService.process(image, source: source)
+
+            // Add to list immediately with pending state
+            attachedImages.append(attachedImage)
+            Haptics.light()
+
+            // Start upload in background
+            Task {
+                await uploadImage(id: attachedImage.id)
+            }
+        } catch {
+            AppLogger.log("[Dashboard] Failed to process image: \(error)")
+            // Show error toast or alert
+        }
+    }
+
+    /// Remove an attached image
+    func removeAttachedImage(_ id: UUID) {
+        attachedImages.removeAll { $0.id == id }
+        Haptics.light()
+    }
+
+    /// Retry uploading a failed image
+    func retryUpload(_ id: UUID) async {
+        guard let index = attachedImages.firstIndex(where: { $0.id == id }),
+              attachedImages[index].canRetry else {
+            return
+        }
+
+        // Reset state to pending
+        attachedImages[index].uploadState = .pending
+
+        // Retry upload
+        await uploadImage(id: id)
+    }
+
+    /// Upload a specific image to the server
+    private func uploadImage(id: UUID) async {
+        guard let index = attachedImages.firstIndex(where: { $0.id == id }) else { return }
+
+        // Update state to uploading
+        attachedImages[index].uploadState = .uploading(progress: 0)
+
+        do {
+            // Use shared upload service (gets connection info from WorkspaceStore)
+            let response = try await ImageUploadService.shared.upload(attachedImages[index]) { progress in
+                Task { @MainActor in
+                    if let idx = self.attachedImages.firstIndex(where: { $0.id == id }) {
+                        self.attachedImages[idx].uploadState = .uploading(progress: progress)
+                    }
+                }
+            }
+
+            // Update state to uploaded
+            if let idx = attachedImages.firstIndex(where: { $0.id == id }) {
+                attachedImages[idx].uploadState = .uploaded(imageId: response.id, localPath: response.localPath)
+                attachedImages[idx].serverImageId = response.id
+                attachedImages[idx].serverLocalPath = response.localPath
+            }
+
+            AppLogger.log("[Dashboard] Image uploaded: \(response.id) -> \(response.localPath)")
+
+        } catch {
+            AppLogger.log("[Dashboard] Image upload failed: \(error)")
+
+            // Update state to failed
+            if let idx = attachedImages.firstIndex(where: { $0.id == id }) {
+                let errorMessage = (error as? ImageUploadError)?.localizedDescription ?? error.localizedDescription
+                attachedImages[idx].uploadState = .failed(error: errorMessage)
+            }
+        }
+    }
+
+    /// Clear all attached images
+    func clearAttachedImages() {
+        attachedImages.removeAll()
+    }
+
+    /// Get uploaded image paths for sending to Claude
+    func getUploadedImagePaths() -> [String] {
+        attachedImages
+            .filter { $0.isUploaded }
+            .compactMap { $0.serverLocalPath }
+    }
+
+    /// Check if clipboard has an image
+    func clipboardHasImage() -> Bool {
+        UIPasteboard.general.hasImages
+    }
+
+    /// Paste image from clipboard
+    func pasteImageFromClipboard() async {
+        guard let image = UIPasteboard.general.image else {
+            AppLogger.log("[Dashboard] No image in clipboard")
+            return
+        }
+
+        await attachImage(image, source: .clipboard)
     }
 
     // MARK: - Prompt Deduplication Helpers

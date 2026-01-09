@@ -10,9 +10,12 @@ import SwiftUI
 /// ```
 struct FloatingKeyboardDismissButton: View {
     /// Dynamic offset to position button above input bar (accounts for multi-line expansion)
-    var inputBarHeight: CGFloat = 60
+    /// Default is 0 - pass actual height only for views with an action bar (e.g., DashboardView)
+    var inputBarHeight: CGFloat = 0
     /// Prompt text to calculate dynamic height based on line count
     var promptText: String = ""
+    /// Whether bash mode is enabled (adds extra height for bash mode indicator)
+    var isBashMode: Bool = false
 
     @State private var isKeyboardVisible = false
     @State private var keyboardTopScreen: CGFloat = 0  // Keyboard top in screen coordinates
@@ -25,15 +28,20 @@ struct FloatingKeyboardDismissButton: View {
         return CGFloat(extraLines) * 16  // 16pt per extra line
     }
 
+    /// Extra offset for bash mode indicator
+    private var bashModeOffset: CGFloat {
+        isBashMode ? 20 : 0  // Height of "bash mode enabled" text + padding
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let globalFrame = geometry.frame(in: .global)
             // Convert keyboard screen position to local coordinates
             let keyboardTopLocal = keyboardTopScreen - globalFrame.minY
             // Position button above the input bar
-            // Base gap of 20pt for single line, plus textHeightOffset for multi-line
-            let totalOffset = inputBarHeight + textHeightOffset + 20
-            let buttonY = min(keyboardTopLocal - 8, geometry.size.height - 30) - totalOffset
+            // Base offset of 22 accounts for button center (44pt button / 2) plus small gap
+            let totalOffset = inputBarHeight + textHeightOffset + bashModeOffset + 22 + 4 //4pt gap between button and keyboard
+            let buttonY = keyboardTopLocal - totalOffset
 
             if isKeyboardVisible && buttonY > 0 {
                 Button {
@@ -60,6 +68,7 @@ struct FloatingKeyboardDismissButton: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isKeyboardVisible)
         .animation(.easeOut(duration: 0.15), value: inputBarHeight)
         .animation(.easeOut(duration: 0.1), value: textHeightOffset)
+        .animation(.easeOut(duration: 0.15), value: isBashMode)  // Animate when bash mode toggles
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                 keyboardTopScreen = frame.origin.y
