@@ -157,4 +157,33 @@ struct ElementsScrollView: View {
 
 ## Fixed In
 
-Commit `d218b25` - fix: prevent AttributeGraph cycle when streaming starts
+- Commit `d218b25` - fix: prevent AttributeGraph cycle when streaming starts
+- January 2026 - Removed unused Timer from StreamingIndicatorView (caused @State writes during view updates)
+
+## Additional Root Cause (January 2026)
+
+The original fix addressed animation conflicts but didn't remove the Timer-based elapsed time tracking.
+The Timer was still running even though the elapsed time display was commented out:
+
+```swift
+// ❌ PROBLEMATIC - Timer still runs and writes to @State
+struct StreamingIndicatorView: View {
+    @State private var elapsedSeconds: Int = 0  // UNUSED but still written
+    @State private var timer: Timer?  // UNUSED but still managed
+
+    var body: some View {
+        // ... elapsed seconds display is commented out ...
+    }
+    .onAppear {
+        startTimer()  // Starts timer that writes to @State during view update
+    }
+}
+```
+
+The Timer's `updateElapsed()` was called synchronously in `onAppear`:
+1. View appears (because `isStreaming` becomes `true`)
+2. `onAppear` fires → `startTimer()` → `updateElapsed()`
+3. `updateElapsed()` writes to `@State var elapsedSeconds`
+4. Writing @State during view update triggers cycle detection
+
+**Fix**: Remove unused Timer code entirely since Claude's PTY spinner already includes timing info.

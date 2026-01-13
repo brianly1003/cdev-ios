@@ -9,7 +9,6 @@ struct LogListView: View {
     var isVisible: Bool = true  // Track if tab is visible
     var isInputFocused: Bool = false  // Track if input field is focused (for auto-scroll)
     var isStreaming: Bool = false  // Whether Claude is actively thinking/streaming
-    var streamingStartTime: Date?  // When streaming started (for duration display)
     var spinnerMessage: String?  // Custom message from pty_spinner events
 
     // Pull-to-refresh for loading more messages
@@ -28,14 +27,13 @@ struct LogListView: View {
     @AppStorage(Constants.UserDefaults.showTimestamps) private var showTimestamps = true
     @AppStorage(Constants.UserDefaults.useElementsView) private var useElementsView = true  // Feature flag
 
-    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, streamingStartTime: Date? = nil, spinnerMessage: String? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0, scrollRequest: ScrollDirection? = nil) {
+    init(logs: [LogEntry], elements: [ChatElement] = [], onClear: @escaping () -> Void, isVisible: Bool = true, isInputFocused: Bool = false, isStreaming: Bool = false, spinnerMessage: String? = nil, hasMoreMessages: Bool = false, isLoadingMore: Bool = false, onLoadMore: (() async -> Void)? = nil, searchText: String = "", matchingElementIds: [String] = [], currentMatchIndex: Int = 0, scrollRequest: ScrollDirection? = nil) {
         self.logs = logs
         self.elements = elements
         self.onClear = onClear
         self.isVisible = isVisible
         self.isInputFocused = isInputFocused
         self.isStreaming = isStreaming
-        self.streamingStartTime = streamingStartTime
         self.spinnerMessage = spinnerMessage
         self.hasMoreMessages = hasMoreMessages
         self.isLoadingMore = isLoadingMore
@@ -103,7 +101,6 @@ struct LogListView: View {
             isVisible: isVisible,
             isInputFocused: isInputFocused,
             isStreaming: isStreaming,
-            streamingStartTime: streamingStartTime,
             spinnerMessage: spinnerMessage,
             hasMoreMessages: hasMoreMessages,
             isLoadingMore: isLoadingMore,
@@ -545,7 +542,6 @@ private struct ElementsScrollView: View {
     let isVisible: Bool
     let isInputFocused: Bool
     let isStreaming: Bool
-    let streamingStartTime: Date?
     var spinnerMessage: String?  // Custom message from pty_spinner events
 
     // Pull-to-refresh for loading more messages
@@ -709,7 +705,7 @@ private struct ElementsScrollView: View {
             // NOTE: Removed .animation() modifier to prevent AttributeGraph cycle
             // The transition handles the appear/disappear animation
             if isStreaming {
-                StreamingIndicatorView(startTime: streamingStartTime, message: spinnerMessage)
+                StreamingIndicatorView(message: spinnerMessage)
                     .padding(.horizontal, Spacing.sm)
                     .padding(.bottom, Spacing.xs)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -956,13 +952,14 @@ private struct LogsScrollView: View {
 // MARK: - Streaming Indicator
 
 /// Shows when Claude is actively thinking/streaming
-/// Similar to Claude CLI's "Concocting... (esc to interrupt · thought for 2s)"
+/// Displays the spinner message from Claude's PTY (e.g., "Vibing… (thought for 2s)")
+///
+/// Note: Timer-based elapsed time tracking was removed because:
+/// 1. Claude's PTY spinner already includes timing in the message
+/// 2. The Timer caused @State writes during view updates, triggering AttributeGraph cycles
+/// 3. See docs/issues/streaming-indicator-animation-cycle.md for details
 struct StreamingIndicatorView: View {
-    let startTime: Date?
     var message: String?  // Custom message from pty_spinner (e.g., "Vibing…")
-
-    @State private var elapsedSeconds: Int = 0
-    @State private var timer: Timer?
 
     var body: some View {
         HStack(spacing: Spacing.xs) {
@@ -980,13 +977,6 @@ struct StreamingIndicatorView: View {
                     .foregroundStyle(ColorSystem.textSecondary)
             }
 
-            // Elapsed seconds removed - Claude's spinner text already shows timing
-            // if elapsedSeconds > 0 {
-            //     Text("(\(elapsedSeconds)s)")
-            //         .font(Typography.terminalSmall)
-            //         .foregroundStyle(ColorSystem.textTertiary)
-            // }
-
             Spacer()
         }
         .padding(.horizontal, Spacing.sm)
@@ -994,37 +984,6 @@ struct StreamingIndicatorView: View {
         .background(ColorSystem.terminalBgElevated)
         .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
         .shadow(color: Color.black.opacity(0.2), radius: 2, y: 1)
-        .onAppear {
-            startTimer()
-        }
-        .onDisappear {
-            stopTimer()
-        }
-        .onChange(of: startTime) { _, _ in
-            elapsedSeconds = 0
-            startTimer()
-        }
-    }
-
-    private func startTimer() {
-        stopTimer()
-        updateElapsed()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            updateElapsed()
-        }
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    private func updateElapsed() {
-        guard let startTime = startTime else {
-            elapsedSeconds = 0
-            return
-        }
-        elapsedSeconds = max(0, Int(Date().timeIntervalSince(startTime)))
     }
 }
 

@@ -140,7 +140,6 @@ struct DashboardView: View {
                             isVisible: viewModel.selectedTab == .logs,
                             isInputFocused: isInputFocused,
                             isStreaming: viewModel.isStreaming,
-                            streamingStartTime: viewModel.streamingStartTime,
                             spinnerMessage: viewModel.spinnerMessage,
                             hasMoreMessages: viewModel.messagesHasMore,
                             isLoadingMore: viewModel.isLoadingMoreMessages,
