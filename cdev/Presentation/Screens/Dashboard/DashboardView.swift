@@ -1010,11 +1010,12 @@ struct CommandSuggestionsView: View {
         .scrollIndicators(commands.count > maxVisibleItems ? .visible : .hidden)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.black.opacity(0.7))
+                .fill(ColorSystem.terminalBgElevated)
+                .shadow(color: Color.black.opacity(0.15), radius: 8, y: 4)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                .stroke(ColorSystem.terminalBgHighlight, lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

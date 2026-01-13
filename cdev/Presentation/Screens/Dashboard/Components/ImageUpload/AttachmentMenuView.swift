@@ -18,11 +18,12 @@ struct AttachmentMenuPopup: View {
         .frame(width: 160)  // Compact fixed width - fits all labels
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.black.opacity(0.9))
+                .fill(ColorSystem.terminalBgElevated)
+                .shadow(color: Color.black.opacity(0.15), radius: 8, y: 4)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                .stroke(ColorSystem.terminalBgHighlight, lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .onAppear {
