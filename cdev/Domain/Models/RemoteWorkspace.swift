@@ -152,9 +152,9 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
 
     // MARK: - Computed Properties
 
-    /// Number of active sessions
+    /// Number of active sessions (running or attached)
     var activeSessionCount: Int {
-        sessions.filter { $0.status == .running }.count
+        sessions.filter { $0.status.canSendPrompts }.count
     }
 
     /// Whether this workspace has at least one active session
@@ -169,7 +169,7 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
 
     /// Most recent active session (for quick access)
     var activeSession: Session? {
-        sessions.first { $0.status == .running }
+        sessions.first { $0.status.canSendPrompts }
     }
 
     /// Most recently active session (running or not)
@@ -396,6 +396,7 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
 /// Status of a session (Claude instance)
 /// - running: Active Claude CLI process, can use session/send
 /// - historical: Past session from ~/.claude/projects/, must resume with session/start + resume_session_id
+/// - attached: Session attached to LIVE mode, ready for interaction
 enum SessionStatus: String, Codable, Equatable {
     case running    // Session is active - can send prompts directly
     case historical // Past session - must resume first
@@ -403,11 +404,12 @@ enum SessionStatus: String, Codable, Equatable {
     case starting   // Session is starting
     case stopping   // Session is stopping
     case error      // Session failed
+    case attached   // Session attached to LIVE mode
 
     /// User-friendly display text
     var displayText: String {
         switch self {
-        case .running: return "Running"
+        case .running, .attached: return "Running"
         case .historical: return "Historical"
         case .stopped: return "Stopped"
         case .starting: return "Starting..."
@@ -419,7 +421,7 @@ enum SessionStatus: String, Codable, Equatable {
     /// SF Symbol icon for status
     var iconName: String {
         switch self {
-        case .running: return "checkmark.circle.fill"
+        case .running, .attached: return "checkmark.circle.fill"
         case .historical: return "clock.arrow.circlepath"
         case .stopped: return "stop.circle"
         case .starting, .stopping: return "arrow.triangle.2.circlepath"
@@ -429,7 +431,7 @@ enum SessionStatus: String, Codable, Equatable {
 
     /// Whether prompts can be sent to this session directly
     var canSendPrompts: Bool {
-        self == .running
+        self == .running || self == .attached
     }
 
     /// Whether this session needs to be resumed before sending prompts
@@ -594,6 +596,7 @@ struct DiscoveryResponse: Codable {
 // MARK: - Session Responses
 
 /// Response from session/start JSON-RPC method
+/// Note: Server returns session_id, not id
 struct SessionStartResponse: Codable {
     let id: String
     let workspaceId: String
@@ -602,7 +605,8 @@ struct SessionStartResponse: Codable {
     let lastActive: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, status
+        case id = "session_id"  // Server uses session_id, not id
+        case status
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"
@@ -610,6 +614,7 @@ struct SessionStartResponse: Codable {
 }
 
 /// Response from session/state JSON-RPC method (for reconnection)
+/// Note: Server returns session_id, not id
 struct SessionStateResponse: Codable {
     let id: String
     let workspaceId: String
@@ -634,7 +639,8 @@ struct SessionStateResponse: Codable {
     let viewers: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case id, status, viewers, summary
+        case id = "session_id"  // Server uses session_id, not id
+        case status, viewers, summary
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"

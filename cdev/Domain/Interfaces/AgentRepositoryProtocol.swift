@@ -273,13 +273,15 @@ struct SessionsResponse: Codable {
     /// Session status types
     /// - running: Active Claude CLI process, can use session/send
     /// - historical: Past session from ~/.claude/projects/, must resume first
+    /// - attached: Session attached to LIVE mode
     enum SessionStatus: String, Codable {
         case running
         case historical
+        case attached  // Session attached to LIVE mode
 
         /// Whether prompts can be sent to this session directly
         var canSendPrompts: Bool {
-            self == .running
+            self == .running || self == .attached
         }
     }
 
