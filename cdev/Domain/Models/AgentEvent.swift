@@ -42,6 +42,12 @@ enum AgentEventType: String, Codable {
 
     // Workspace events
     case workspaceRemoved = "workspace_removed"  // Workspace removed from server (broadcast to subscribers)
+
+    // Hook events (external Claude sessions - VS Code, Cursor, terminal)
+    case claudeHookSession = "claude_hook_session"        // External session started
+    case claudeHookPermission = "claude_hook_permission"  // Permission prompt in external session
+    case claudeHookToolStart = "claude_hook_tool_start"   // Tool execution started
+    case claudeHookToolEnd = "claude_hook_tool_end"       // Tool execution completed
 }
 
 /// Base event structure from agent
@@ -158,6 +164,12 @@ enum AgentEventPayload: Codable {
     // Workspace payloads
     case workspaceRemoved(WorkspaceRemovedPayload)  // Workspace removed from server
 
+    // Hook payloads (external Claude sessions)
+    case hookSession(HookSessionPayload)          // External session started
+    case hookPermission(HookPermissionPayload)    // Permission in external session
+    case hookToolStart(HookToolStartPayload)      // Tool started in external session
+    case hookToolEnd(HookToolEndPayload)          // Tool ended in external session
+
     case unknown
 
     init(from decoder: Decoder) throws {
@@ -236,6 +248,19 @@ enum AgentEventPayload: Codable {
         } else if let payload = try? container.decode(WorkspaceRemovedPayload.self),
                   payload.id != nil, payload.name != nil, payload.path != nil {
             self = .workspaceRemoved(payload)
+        // Hook payloads - external Claude sessions (check source == "external" and unique fields)
+        } else if let payload = try? container.decode(HookSessionPayload.self),
+                  payload.source == "external", payload.cwd != nil {
+            self = .hookSession(payload)
+        } else if let payload = try? container.decode(HookPermissionPayload.self),
+                  payload.tool != nil, payload.description != nil {
+            self = .hookPermission(payload)
+        } else if let payload = try? container.decode(HookToolStartPayload.self),
+                  payload.toolName != nil, payload.toolInput != nil {
+            self = .hookToolStart(payload)
+        } else if let payload = try? container.decode(HookToolEndPayload.self),
+                  payload.toolName != nil, payload.toolResult != nil {
+            self = .hookToolEnd(payload)
         // Generic error/warning payloads - check AFTER specific payloads that also have 'message' field
         } else if let payload = try? container.decode(ErrorPayload.self), payload.message != nil {
             self = .error(payload)
@@ -306,6 +331,14 @@ enum AgentEventPayload: Codable {
         case .streamReadComplete(let payload):
             try container.encode(payload)
         case .workspaceRemoved(let payload):
+            try container.encode(payload)
+        case .hookSession(let payload):
+            try container.encode(payload)
+        case .hookPermission(let payload):
+            try container.encode(payload)
+        case .hookToolStart(let payload):
+            try container.encode(payload)
+        case .hookToolEnd(let payload):
             try container.encode(payload)
         case .unknown:
             try container.encodeNil()
@@ -1139,5 +1172,130 @@ struct PTYPermissionResolvedPayload: Codable {
         // PTY mode uses input field
         guard let input = input else { return false }
         return input == "3" || input.lowercased() == "escape" || input.lowercased() == "n"
+    }
+}
+
+// MARK: - Hook Payloads (External Claude Sessions)
+
+/// Payload for claude_hook_session events
+/// Sent when an external Claude session starts (VS Code, Cursor, terminal)
+struct HookSessionPayload: Codable {
+    let sessionId: String?
+    let cwd: String?           // Working directory where Claude was started
+    let gitBranch: String?     // Git branch if in a repo
+    let source: String?        // Always "external" for hook events
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case cwd
+        case gitBranch = "git_branch"
+        case source
+    }
+
+    /// Extract project name from working directory
+    var projectName: String {
+        guard let cwd = cwd else { return "Unknown" }
+        return (cwd as NSString).lastPathComponent
+    }
+}
+
+/// Payload for claude_hook_permission events
+/// Sent when a permission prompt appears in an external Claude session
+/// Note: User must respond on desktop - this is informational only
+struct HookPermissionPayload: Codable, Identifiable {
+    var id: String { sessionId ?? UUID().uuidString }
+
+    let sessionId: String?
+    let tool: String?          // Tool requesting permission (Bash, Write, etc.)
+    let description: String?   // Human-readable description
+    let command: String?       // Command to execute (for Bash)
+    let path: String?          // File path (for Write/Edit)
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case tool
+        case description
+        case command
+        case path
+    }
+
+    /// Summary for display
+    var displaySummary: String {
+        if let command = command, !command.isEmpty {
+            return command
+        }
+        if let path = path, !path.isEmpty {
+            return (path as NSString).lastPathComponent
+        }
+        return description ?? tool ?? "Unknown action"
+    }
+}
+
+/// Payload for claude_hook_tool_start events
+/// Sent when a tool starts executing in an external Claude session
+struct HookToolStartPayload: Codable {
+    let sessionId: String?
+    let toolName: String?
+    let toolInput: AnyCodableValue?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case toolName = "tool_name"
+        case toolInput = "tool_input"
+    }
+
+    /// Extract readable input summary
+    var inputSummary: String? {
+        guard let toolInput = toolInput else { return nil }
+
+        // Try to extract command from dictionary
+        if let dict = toolInput.value as? [String: Any] {
+            if let command = dict["command"] as? String {
+                return command
+            }
+            if let path = dict["path"] as? String {
+                return (path as NSString).lastPathComponent
+            }
+        }
+
+        // Try string value directly
+        if let str = toolInput.value as? String {
+            return str
+        }
+
+        return nil
+    }
+}
+
+/// Payload for claude_hook_tool_end events
+/// Sent when a tool finishes executing in an external Claude session
+struct HookToolEndPayload: Codable {
+    let sessionId: String?
+    let toolName: String?
+    let toolResult: AnyCodableValue?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case toolName = "tool_name"
+        case toolResult = "tool_result"
+    }
+
+    /// Extract readable result summary (truncated)
+    var resultSummary: String? {
+        guard let toolResult = toolResult else { return nil }
+
+        // Try string value directly
+        if let str = toolResult.value as? String {
+            return String(str.prefix(200))
+        }
+
+        // Try to extract output from dictionary
+        if let dict = toolResult.value as? [String: Any] {
+            if let output = dict["output"] as? String {
+                return String(output.prefix(200))
+            }
+        }
+
+        return nil
     }
 }

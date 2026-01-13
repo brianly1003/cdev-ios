@@ -31,6 +31,9 @@ final class DashboardViewModel: ObservableObject {
     }
     @Published var pendingInteraction: PendingInteraction?
 
+    // External Sessions (Claude running in VS Code, Cursor, terminal via hooks)
+    @Published var externalSessionManager = ExternalSessionManager()
+
     // Logs & Diffs
     @Published var logs: [LogEntry] = []
     @Published var diffs: [DiffEntry] = []
@@ -211,6 +214,10 @@ final class DashboardViewModel: ObservableObject {
     // O(1) lookup to prevent duplicate elements from multiple sources
     private var seenElementIds: Set<String> = []
 
+    // Content-based deduplication (catches WebSocket vs History API duplicates)
+    // Key: hash of (type + timestamp + first 200 chars of content)
+    private var seenContentHashes: Set<String> = []
+
     // Track prompts sent by THIS client to deduplicate only our own echoes
     // Hashes are kept for a few seconds to handle duplicate server echoes
     // After timeout, they're cleaned up to allow repeated commands
@@ -357,8 +364,18 @@ final class DashboardViewModel: ObservableObject {
     private func queueChatElements(_ elements: [ChatElement]) {
         // Filter duplicates and process tasks
         for element in elements {
+            // Primary: ID-based deduplication
             guard !seenElementIds.contains(element.id) else { continue }
+
+            // Secondary: Content-based deduplication (catches WebSocket vs History duplicates)
+            let contentHash = generateContentHash(for: element)
+            guard !seenContentHashes.contains(contentHash) else {
+                AppLogger.log("[Dashboard] Skipping duplicate content: \(element.type) at \(element.timestamp)")
+                continue
+            }
+
             seenElementIds.insert(element.id)
+            seenContentHashes.insert(contentHash)
 
             // Handle task tracking
             if case .task(let taskContent) = element.content {
@@ -518,6 +535,42 @@ final class DashboardViewModel: ObservableObject {
         }
 
         return (agentId, toolUses)
+    }
+
+    /// Generate a content hash for deduplication
+    /// Uses type + timestamp (to second) + first 200 chars of content
+    private func generateContentHash(for element: ChatElement) -> String {
+        let typeString = element.type.rawValue
+        let timestampSeconds = Int(element.timestamp.timeIntervalSince1970)
+
+        // Extract content text based on element type
+        let contentSnippet: String
+        switch element.content {
+        case .userInput(let content):
+            contentSnippet = String(content.text.prefix(200))
+        case .assistantText(let content):
+            contentSnippet = String(content.text.prefix(200))
+        case .toolCall(let content):
+            contentSnippet = "\(content.tool):\(content.display.prefix(150))"
+        case .toolResult(let content):
+            contentSnippet = "\(content.toolName):\(content.summary.prefix(150))"
+        case .diff(let content):
+            contentSnippet = content.filePath
+        case .editDiff(let content):
+            contentSnippet = content.filePath
+        case .thinking(let content):
+            contentSnippet = String(content.text.prefix(200))
+        case .interrupted(let content):
+            contentSnippet = String(content.message.prefix(200))
+        case .contextCompaction(let content):
+            contentSnippet = content.summary
+        case .task(let content):
+            contentSnippet = "\(content.agentType):\(content.id)"
+        case .taskGroup(let content):
+            contentSnippet = "\(content.agentType):\(content.tasks.map { $0.id }.joined(separator: ",").prefix(150))"
+        }
+
+        return "\(typeString)|\(timestampSeconds)|\(contentSnippet)"
     }
 
     /// Force immediate log update (for user actions)
@@ -906,7 +959,8 @@ final class DashboardViewModel: ObservableObject {
         await logCache.clear()
         logs = []
         chatElements = []
-        seenElementIds.removeAll()  // Clear deduplication set
+        seenElementIds.removeAll()  // Clear deduplication sets
+        seenContentHashes.removeAll()
 
         // Reset pagination state
         messagesNextOffset = 0
@@ -1009,6 +1063,7 @@ final class DashboardViewModel: ObservableObject {
         logs = []
         chatElements = []
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
         forceNewSession = true  // Ensure next prompt uses mode: "new"
@@ -1033,6 +1088,7 @@ final class DashboardViewModel: ObservableObject {
         logs = []
         chatElements = []
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
         AppLogger.log("[Dashboard] Cleared & started new - cleared session state")
@@ -1526,6 +1582,7 @@ final class DashboardViewModel: ObservableObject {
         logs = []
         chatElements = []
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         // Reset pagination so next load starts from beginning
         messagesNextOffset = 0
         messagesHasMore = true  // Allow loading again
@@ -1616,7 +1673,8 @@ final class DashboardViewModel: ObservableObject {
             if isNewSession {
                 await logCache.clear()
                 chatElements = []
-                seenElementIds.removeAll()  // Clear deduplication set
+                seenElementIds.removeAll()  // Clear deduplication sets
+                seenContentHashes.removeAll()
                 // Reset pagination state
                 messagesNextOffset = 0
                 messagesHasMore = false
@@ -2549,6 +2607,35 @@ final class DashboardViewModel: ObservableObject {
                 }
             }
 
+        // MARK: - Hook Events (External Claude Sessions)
+
+        case .claudeHookSession:
+            // External Claude session started (VS Code, Cursor, terminal)
+            if case .hookSession(let payload) = event.payload {
+                externalSessionManager.handleSessionStart(payload)
+                AppLogger.log("[Dashboard] External session: \(payload.projectName)")
+            }
+
+        case .claudeHookPermission:
+            // Permission prompt in external session (read-only alert)
+            if case .hookPermission(let payload) = event.payload {
+                externalSessionManager.handlePermission(payload)
+                Haptics.warning()  // Alert user
+                AppLogger.log("[Dashboard] External permission: \(payload.tool ?? "?") - \(payload.displaySummary)")
+            }
+
+        case .claudeHookToolStart:
+            // Tool started in external session
+            if case .hookToolStart(let payload) = event.payload {
+                externalSessionManager.handleToolStart(payload)
+            }
+
+        case .claudeHookToolEnd:
+            // Tool ended in external session
+            if case .hookToolEnd(let payload) = event.payload {
+                externalSessionManager.handleToolEnd(payload)
+            }
+
         default:
             break
         }
@@ -2947,6 +3034,7 @@ final class DashboardViewModel: ObservableObject {
         userSelectedSessionId = nil
         hasActiveConversation = false
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
 
         // Update workspace store
         WorkspaceStore.shared.setActive(workspace)
@@ -3017,6 +3105,7 @@ final class DashboardViewModel: ObservableObject {
         chatMessages = []
         chatElements = []
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         AppLogger.log("[Dashboard] Logs and diffs cleared")
 
         // Clear caches in background (don't await)
@@ -3055,6 +3144,7 @@ final class DashboardViewModel: ObservableObject {
         logs.removeAll()
         diffs.removeAll()
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         pendingInteraction = nil
         isPendingTrustFolder = false  // Reset trust state for new workspace
         isPendingTempSession = false  // Reset temp session state for new workspace
@@ -3147,6 +3237,7 @@ final class DashboardViewModel: ObservableObject {
         userSelectedSessionId = nil
         hasActiveConversation = false
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Cleared session tracking")
 
         // Connect via appState (handles URL construction and subscription)
@@ -3162,6 +3253,7 @@ final class DashboardViewModel: ObservableObject {
             logs = []
             chatElements = []
             seenElementIds.removeAll()
+            seenContentHashes.removeAll()
 
             // Load session history and messages
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Loading session history...")
@@ -3221,6 +3313,7 @@ final class DashboardViewModel: ObservableObject {
         chatMessages = []
         chatElements = []
         seenElementIds.removeAll()
+        seenContentHashes.removeAll()
         await logCache.clear()
         await diffCache.clear()
     }
@@ -3243,7 +3336,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             // Process image (resize, compress, generate thumbnail)
             let processingService = ImageProcessingService.shared
-            var attachedImage = try await processingService.process(image, source: source)
+            let attachedImage = try await processingService.process(image, source: source)
 
             // Add to list immediately with pending state
             attachedImages.append(attachedImage)

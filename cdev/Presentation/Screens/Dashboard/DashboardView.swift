@@ -71,7 +71,8 @@ struct DashboardView: View {
                         repoName: viewModel.agentStatus.repoName,
                         sessionId: viewModel.isPendingTempSession ? nil : viewModel.agentStatus.sessionId,
                         isWatchingSession: viewModel.isWatchingSession,
-                        onWorkspaceTap: { showWorkspaceSwitcher = true }
+                        onWorkspaceTap: { showWorkspaceSwitcher = true },
+                        externalSessionManager: viewModel.externalSessionManager
                     )
 
                     // Connection status banner (non-blocking)
@@ -676,6 +677,7 @@ struct StatusBarView: View {
     let sessionId: String?
     var isWatchingSession: Bool = false
     var onWorkspaceTap: (() -> Void)?
+    var externalSessionManager: ExternalSessionManager?
 
     @StateObject private var sessionAwareness = SessionAwarenessManager.shared
     @State private var isPulsing = false
@@ -730,6 +732,11 @@ struct StatusBarView: View {
                     if sessionAwareness.hasOtherViewers {
                         ViewerCountBadge(viewerCount: sessionAwareness.viewerCount)
                     }
+                }
+
+                // External sessions badge (when hook events detected)
+                if let manager = externalSessionManager, manager.activeSessionCount > 0 {
+                    ExternalSessionsBadge(manager: manager)
                 }
 
                 Spacer()
