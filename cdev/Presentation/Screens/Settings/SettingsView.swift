@@ -15,6 +15,8 @@ struct SettingsView: View {
 
     @State private var showClearDataConfirm = false
     @State private var showThemePicker = false
+    @State private var showPrivacyPolicy = false
+    @State private var showTermsOfService = false
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
@@ -110,6 +112,23 @@ struct SettingsView: View {
                             )
                         }
 
+                        // Legal Section
+                        SettingsSection(title: "Legal", icon: "doc.text") {
+                            SettingsSheetRow(
+                                icon: "lock.shield",
+                                title: "Privacy Policy"
+                            ) {
+                                showPrivacyPolicy = true
+                            }
+
+                            SettingsSheetRow(
+                                icon: "doc.text.fill",
+                                title: "Terms of Service"
+                            ) {
+                                showTermsOfService = true
+                            }
+                        }
+
                     }
                     .padding(.horizontal, Spacing.xs)
                     .padding(.top, Spacing.xs)
@@ -151,6 +170,14 @@ struct SettingsView: View {
                 )
                 .presentationDetents([.height(280)])
                 .preferredColorScheme(currentTheme.colorScheme)
+            }
+            .sheet(isPresented: $showPrivacyPolicy) {
+                PrivacyPolicyView()
+                    .preferredColorScheme(currentTheme.colorScheme)
+            }
+            .sheet(isPresented: $showTermsOfService) {
+                TermsOfServiceView()
+                    .preferredColorScheme(currentTheme.colorScheme)
             }
             // Sheets need their own preferredColorScheme (don't inherit from parent)
             .preferredColorScheme(currentTheme.colorScheme)
@@ -377,6 +404,42 @@ private struct SettingsLinkRow: View {
             .padding(.vertical, Spacing.xs)
             .background(ColorSystem.terminalBgElevated)
         }
+    }
+}
+
+// MARK: - Settings Sheet Row (Compact)
+
+private struct SettingsSheetRow: View {
+    let icon: String
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            action()
+            Haptics.light()
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.primary)
+                    .frame(width: 20)
+
+                Text(title)
+                    .font(Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
+        }
+        .buttonStyle(.plain)
     }
 }
 
