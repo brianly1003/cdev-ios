@@ -607,8 +607,9 @@ private struct ElementsScrollView: View {
                         }
 
                         // Bottom anchor - always present for stable scroll-to-bottom
+                        // Height ensures comfortable spacing below last message when auto-scrolled
                         Color.clear
-                            .frame(height: 1)
+                            .frame(height: 60)
                             .id("bottom")
                     }
                     .padding(.horizontal, Spacing.xs)
@@ -881,9 +882,9 @@ private struct LogsScrollView: View {
                         )
                         .id(entry.id)
                     }
-                    // Bottom anchor
+                    // Bottom anchor - height ensures comfortable spacing
                     Color.clear
-                        .frame(height: 1)
+                        .frame(height: 60)
                         .id("bottom")
                 }
                 .padding(.horizontal, Spacing.xs)
