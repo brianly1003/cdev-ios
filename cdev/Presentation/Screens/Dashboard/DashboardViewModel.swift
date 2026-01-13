@@ -1377,9 +1377,40 @@ final class DashboardViewModel: ObservableObject {
             pendingInteraction = nil
             AppLogger.log("[Dashboard] Hook bridge permission responded successfully", type: .success)
         } catch {
+            // Check if this is a "request not found or already responded" error
+            // This can happen if user responded on desktop, cancelled, or closed Claude Code
+            // In this case, silently dismiss the permission UI instead of showing an error
+            if isPermissionAlreadyHandledError(error) {
+                AppLogger.log("[Dashboard] Permission request already handled elsewhere - dismissing silently", type: .info)
+                pendingInteraction = nil
+                return
+            }
+
             self.error = error as? AppError ?? .unknown(underlying: error)
             AppLogger.log("[Dashboard] Hook bridge permission response failed: \(error)", type: .error)
         }
+    }
+
+    /// Check if error indicates the permission request was already handled elsewhere
+    /// This happens when user responds on desktop, cancels request, or closes Claude Code
+    private func isPermissionAlreadyHandledError(_ error: Error) -> Bool {
+        // Check for JSON-RPC internal error (-32603) which is returned for "Request not found or already responded"
+        if let rpcError = error as? JSONRPCClientError {
+            switch rpcError {
+            case .protocolError(let stdError, _) where stdError == .internalError:
+                return true
+            default:
+                break
+            }
+        }
+
+        // Also check error message for the specific text (in case error wrapping changes)
+        let errorMessage = error.localizedDescription.lowercased()
+        if errorMessage.contains("request not found") || errorMessage.contains("already responded") {
+            return true
+        }
+
+        return false
     }
 
     /// Map option key to permission decision and scope for hook bridge mode
