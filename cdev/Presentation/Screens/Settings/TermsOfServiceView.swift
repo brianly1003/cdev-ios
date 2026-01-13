@@ -101,7 +101,7 @@ struct TermsOfServiceView: View {
                 .background(ColorSystem.success.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
 
-                Text("Cdev is released under the MIT License, one of the most permissive open source licenses available.")
+                Text("\(Constants.Brand.appName) is released under the MIT License, one of the most permissive open source licenses available.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -149,10 +149,10 @@ struct TermsOfServiceView: View {
                     .foregroundStyle(ColorSystem.textPrimary)
 
                 VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
-                    TermsBulletPoint("Use Cdev for any purpose, personal or commercial", color: ColorSystem.success)
+                    TermsBulletPoint("Use \(Constants.Brand.appName) for any purpose, personal or commercial", color: ColorSystem.success)
                     TermsBulletPoint("Modify the source code to suit your needs", color: ColorSystem.success)
                     TermsBulletPoint("Distribute your modifications", color: ColorSystem.success)
-                    TermsBulletPoint("Include Cdev in your own projects", color: ColorSystem.success)
+                    TermsBulletPoint("Include \(Constants.Brand.appName) in your own projects", color: ColorSystem.success)
                 }
 
                 Text("The only requirement is to include the original copyright notice and license text in any copies or substantial portions of the Software.")
@@ -165,9 +165,9 @@ struct TermsOfServiceView: View {
     // MARK: - Service Description Section
 
     private var serviceDescriptionSection: some View {
-        TermsSection(title: "About Cdev", icon: "iphone.and.arrow.forward") {
+        TermsSection(title: "About \(Constants.Brand.appName)", icon: "iphone.and.arrow.forward") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("Cdev is a free, open source mobile companion for Claude Code that enables you to:")
+                Text("\(Constants.Brand.appName) is a free, open source mobile companion for Claude Code that enables you to:")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -201,7 +201,7 @@ struct TermsOfServiceView: View {
     private var acceptableUseSection: some View {
         TermsSection(title: "Acceptable Use", icon: "checkmark.shield") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("While Cdev is open source, we ask that you:")
+                Text("While \(Constants.Brand.appName) is open source, we ask that you:")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
 
@@ -283,7 +283,7 @@ struct TermsOfServiceView: View {
     private var contributionsSection: some View {
         TermsSection(title: "Contributions", icon: "person.2") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("We welcome contributions to Cdev! By submitting a pull request, you agree that your contribution will be licensed under the same MIT License.")
+                Text("We welcome contributions to \(Constants.Brand.appName)! By submitting a pull request, you agree that your contribution will be licensed under the same MIT License.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)

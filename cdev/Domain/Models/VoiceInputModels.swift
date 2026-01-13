@@ -272,7 +272,7 @@ enum VoiceInputError: LocalizedError, Equatable, Sendable {
     var recoverySuggestion: String? {
         switch self {
         case .microphonePermissionDenied, .speechRecognitionPermissionDenied:
-            return "Open Settings and enable permissions for Cdev."
+            return "Open Settings and enable permissions for \(Constants.Brand.appName)."
         case .recognizerUnavailable:
             return "Try again in a moment or switch to a different language."
         case .languageNotDownloaded:

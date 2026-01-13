@@ -99,7 +99,7 @@ struct PrivacyPolicyView: View {
                 .background(ColorSystem.success.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
 
-                Text("Cdev is fully open source. You can inspect every line of code to verify our privacy claims. We have nothing to hide.")
+                Text("\(Constants.Brand.appName) is fully open source. You can inspect every line of code to verify our privacy claims. We have nothing to hide.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -140,7 +140,7 @@ struct PrivacyPolicyView: View {
                 .background(ColorSystem.success.opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
 
-                Text("Cdev does not collect, transmit, or store any of your data on external servers:")
+                Text("\(Constants.Brand.appName) does not collect, transmit, or store any of your data on external servers:")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
 
@@ -158,9 +158,9 @@ struct PrivacyPolicyView: View {
     // MARK: - How It Works Section
 
     private var howItWorksSection: some View {
-        PolicySection(title: "How Cdev Works", icon: "arrow.triangle.2.circlepath") {
+        PolicySection(title: "How \(Constants.Brand.appName) Works", icon: "arrow.triangle.2.circlepath") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("Cdev is a companion app that connects directly to your local Claude Code agent. All communication stays within your local network.")
+                Text("\(Constants.Brand.appName) is a companion app that connects directly to your local Claude Code agent. All communication stays within your local network.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -220,7 +220,7 @@ struct PrivacyPolicyView: View {
     private var localStorageSection: some View {
         PolicySection(title: "Local Storage", icon: "internaldrive") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("Cdev stores minimal data locally on your device:")
+                Text("\(Constants.Brand.appName) stores minimal data locally on your device:")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
 
@@ -257,7 +257,7 @@ struct PrivacyPolicyView: View {
                 .background(ColorSystem.success.opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
 
-                Text("Cdev uses only native Apple frameworks. We do not include any third-party analytics, advertising, or tracking libraries.")
+                Text("\(Constants.Brand.appName) uses only native Apple frameworks. We do not include any third-party analytics, advertising, or tracking libraries.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)

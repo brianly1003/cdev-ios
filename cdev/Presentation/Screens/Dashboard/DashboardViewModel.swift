@@ -161,6 +161,9 @@ final class DashboardViewModel: ObservableObject {
     private let diffCache: DiffCache
     private weak var appState: AppState?
 
+    // Mobile-friendly text replacements (no esc/ctrl+c on mobile)
+    private static let mobileStopText = "press ⏹ to stop"
+
     // Workspace-aware APIs
     private let workspaceManager = WorkspaceManagerService.shared
     private let workspaceStore = WorkspaceStore.shared
@@ -1914,7 +1917,7 @@ final class DashboardViewModel: ObservableObject {
                     streamingStartTime = Date()
                     // Set fallback spinner message for LIVE mode (no pty_spinner events)
                     if spinnerMessage == nil {
-                        spinnerMessage = "Thinking... (press ⏹ to stop)"
+                        spinnerMessage = "Thinking... (\(Self.mobileStopText))"
                     }
                     // Also set claude state to running if not already
                     if claudeState != .running {
@@ -2134,7 +2137,7 @@ final class DashboardViewModel: ObservableObject {
                         claudeState = .running
                         // Set fallback spinner message for LIVE mode (no pty_spinner events)
                         // if spinnerMessage == nil {
-                        //     spinnerMessage = "Thinking... (press ⏹ to stop)"
+                        //     spinnerMessage = "Thinking... (\(Self.mobileStopText))"
                         // }
                     case .permission, .question:
                         claudeState = .waiting
@@ -2168,9 +2171,11 @@ final class DashboardViewModel: ObservableObject {
             // PTY spinner event - update spinner message and claude state
             if case .ptySpinner(let payload) = event.payload {
                 // Use the full text with symbol (e.g., "· Percolating…")
-                // Replace "esc to interrupt" with mobile-friendly text (no escape key on mobile)
+                // Replace keyboard shortcuts with mobile-friendly text (no esc/ctrl+c on mobile)
                 var message = payload.text ?? payload.message
-                message = message?.replacingOccurrences(of: "esc to interrupt", with: "press ⏹ to stop")
+                message = message?
+                    .replacingOccurrences(of: "esc to interrupt", with: Self.mobileStopText)
+                    .replacingOccurrences(of: "ctrl+c to interrupt", with: Self.mobileStopText)
                 spinnerMessage = message
 
                 // pty_spinner indicates Claude is actively working - set to running
@@ -3362,10 +3367,30 @@ final class DashboardViewModel: ObservableObject {
     /// Check if a user message was sent by THIS client
     /// Returns true if this message matches a recently sent prompt
     /// Handles bash commands (with/without ! prefix)
+    /// Handles messages with "[Attached images: ...]" suffix (strips before comparing)
     /// Note: Hash is kept for 5 seconds to handle duplicate server echoes
     private func isOurOwnPrompt(_ text: String) -> Bool {
+        // Log for debugging
+        let trackedHashes = Array(sentPromptHashes.keys)
+        AppLogger.log("[Dashboard] isOurOwnPrompt checking: '\(text.prefix(100))', tracked hashes: \(trackedHashes)")
+
+        // First try exact match
         let hash = hashPrompt(text)
-        return sentPromptHashes[hash] != nil
+        if sentPromptHashes[hash] != nil {
+            AppLogger.log("[Dashboard] ✅ Exact hash match: \(hash)")
+            return true
+        }
+
+        // Try matching just the first line (in case server adds extra content)
+        let firstLine = text.components(separatedBy: .newlines).first ?? text
+        let firstLineHash = hashPrompt(firstLine)
+        if sentPromptHashes[firstLineHash] != nil {
+            AppLogger.log("[Dashboard] ✅ Matched prompt using first line only")
+            return true
+        }
+
+        AppLogger.log("[Dashboard] ❌ No hash match found. Text hash: \(hash), first line hash: \(firstLineHash)")
+        return false
     }
 
     /// Remove expired prompt hashes (older than 5 seconds)

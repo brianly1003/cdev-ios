@@ -126,7 +126,7 @@ struct SplashScreen: View {
                 .opacity(logoOpacity)
 
                 // App name
-                Text("Cdev")
+                Text(Constants.Brand.appName)
                     .font(.system(size: 28, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                     .opacity(logoOpacity)

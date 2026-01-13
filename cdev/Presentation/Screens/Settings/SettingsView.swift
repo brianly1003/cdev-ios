@@ -456,11 +456,11 @@ private struct BrandedHeader: View {
 
             // App Name & Tagline
             VStack(spacing: 2) {
-                Text("Cdev")
+                Text(Constants.Brand.appName)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(ColorSystem.textPrimary)
 
-                Text("Mobile companion for Claude Code")
+                Text(Constants.Brand.tagline)
                     .font(Typography.caption1)
                     .foregroundStyle(ColorSystem.textTertiary)
             }

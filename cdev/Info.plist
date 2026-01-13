@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Cdev</string>
+	<string>Cdev+</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -26,7 +26,7 @@
 		<string>_https._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera access is needed to scan QR codes for connecting to Cdev</string>
+	<string>Camera access is needed to scan QR codes for connecting to Cdev+</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is needed to connect to cdev-agent on your computer</string>
 	<key>NSMicrophoneUsageDescription</key>

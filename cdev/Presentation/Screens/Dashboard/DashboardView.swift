@@ -311,7 +311,7 @@ struct DashboardView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) {
-                        Text("Cdev")
+                        Text(Constants.Brand.appName)
                             .font(Typography.title3)
                             .fontWeight(.bold)
                     }
