@@ -1772,6 +1772,16 @@ struct ThinkingElementView: View {
     @State private var isExpanded = false
 
     var body: some View {
+        // Don't render if thinking content is empty or whitespace only
+        if content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            EmptyView()
+        } else {
+            thinkingContent
+        }
+    }
+
+    @ViewBuilder
+    private var thinkingContent: some View {
         VStack(alignment: .leading, spacing: 2) {
             // Toggle button
             Button {
