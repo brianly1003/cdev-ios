@@ -82,6 +82,7 @@ struct RootView: View {
             AppLogger.log("[RootView] Scene became active")
             if userOnDashboard && workspaceStore.activeWorkspace != nil {
                 isRestoringConnection = true  // Mark as restoring so we keep dashboard visible
+                appState.makeDashboardViewModel().handleAppDidBecomeActive()
             }
 
         case .background:
@@ -89,6 +90,9 @@ struct RootView: View {
             // Don't clear userOnDashboard - we want to restore when coming back
             AppLogger.log("[RootView] Scene entering background - preserving dashboard state")
             appState.markExpectedDisconnection()
+            if userOnDashboard && workspaceStore.activeWorkspace != nil {
+                appState.makeDashboardViewModel().handleAppDidEnterBackground()
+            }
 
         case .inactive:
             // Transitional state - ignore

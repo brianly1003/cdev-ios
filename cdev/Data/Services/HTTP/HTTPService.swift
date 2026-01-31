@@ -304,6 +304,45 @@ final class HTTPService: HTTPServiceProtocol {
         }
     }
 
+    /// Revoke refresh token (explicit disconnect)
+    /// This endpoint does NOT require existing auth token
+    /// - Parameter refreshToken: The refresh token to revoke
+    func revokeRefreshToken(_ refreshToken: String) async throws {
+        guard let baseURL = baseURL else {
+            throw AppError.serverUnreachable
+        }
+
+        let url = baseURL.appendingPathComponent("/api/auth/revoke")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let body = TokenRevokeRequest(refreshToken: refreshToken)
+        request.httpBody = try encoder.encode(body)
+
+        AppLogger.network("[HTTP] → POST /api/auth/revoke (revoking refresh token)")
+
+        let startTime = Date()
+        let (_, response) = try await session.data(for: request)
+        let duration = Date().timeIntervalSince(startTime)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError.invalidResponse
+        }
+
+        if (200...299).contains(httpResponse.statusCode) {
+            AppLogger.network("[HTTP] ← \(httpResponse.statusCode) /api/auth/revoke (\(Int(duration * 1000))ms)")
+            return
+        }
+
+        AppLogger.network("[HTTP] ✗ \(httpResponse.statusCode) /api/auth/revoke", type: .error)
+        if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+            throw AppError.refreshTokenExpired
+        }
+        throw AppError.httpRequestFailed(statusCode: httpResponse.statusCode, message: nil)
+    }
+
     // MARK: - Private
 
     private func performPost<B: Encodable>(path: String, body: B?) async throws -> Data {

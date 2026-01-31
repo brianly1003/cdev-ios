@@ -150,3 +150,12 @@ struct TokenRefreshRequest: Encodable {
         case refreshToken = "refresh_token"
     }
 }
+
+/// Request body for /api/auth/revoke
+struct TokenRevokeRequest: Encodable {
+    let refreshToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case refreshToken = "refresh_token"
+    }
+}

@@ -1082,6 +1082,10 @@ final class WorkspaceManagerViewModel: ObservableObject {
     func resetManager() {
         AppLogger.log("[WorkspaceManager] Resetting manager - disconnecting WebSocket")
 
+        Task {
+            await TokenManager.shared.revokeStoredRefreshToken()
+        }
+
         // Disconnect WebSocket first
         webSocketService.disconnect()
 

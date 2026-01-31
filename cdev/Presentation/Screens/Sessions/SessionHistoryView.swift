@@ -571,7 +571,10 @@ final class SessionHistoryViewModel: ObservableObject {
                 order: "desc"
             )
             // Reverse to show oldest at top, newest at bottom (chronological order)
-            messages = response.messages.reversed()
+            let filtered = response.messages.filter { message in
+                !ChatContentFilter.shouldHideInternalMessage(message.textContent)
+            }
+            messages = filtered.reversed()
             AppLogger.log("[SessionHistory] Loaded \(response.count) of \(response.total) messages for session \(sessionId)\(workspaceId != nil ? " (workspace: \(workspaceId!))" : "")")
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)

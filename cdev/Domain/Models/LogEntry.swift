@@ -55,6 +55,7 @@ struct LogEntry: Identifiable, Equatable {
         // Get text content - skip tool_use and tool_result messages (no text to display)
         let textContent = sessionMessage.textContent
         guard !textContent.isEmpty else { return nil }
+        guard !ChatContentFilter.shouldHideInternalMessage(textContent) else { return nil }
 
         // Determine stream type based on message type
         let stream: LogStream = sessionMessage.type == "user" ? .user : .stdout

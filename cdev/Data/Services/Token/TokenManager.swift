@@ -169,6 +169,36 @@ final class TokenManager {
         }
     }
 
+    /// Revoke refresh token on server and clear local tokens.
+    /// Used for explicit disconnect to invalidate the session immediately.
+    func revokeStoredRefreshToken() async {
+        guard let tokenPair = getStoredTokenPair() else {
+            clearTokens()
+            return
+        }
+
+        if tokenPair.isRefreshTokenExpired {
+            AppLogger.log("[TokenManager] Refresh token already expired, clearing tokens")
+            clearTokens()
+            return
+        }
+
+        guard let httpService = httpService else {
+            AppLogger.log("[TokenManager] No HTTP service configured, clearing tokens", type: .warning)
+            clearTokens()
+            return
+        }
+
+        do {
+            try await httpService.revokeRefreshToken(tokenPair.refreshToken)
+            AppLogger.log("[TokenManager] Refresh token revoked")
+        } catch {
+            AppLogger.log("[TokenManager] Failed to revoke refresh token: \(error)", type: .warning)
+        }
+
+        clearTokens()
+    }
+
     // MARK: - Token Exchange
 
     /// Exchange pairing token for access/refresh token pair

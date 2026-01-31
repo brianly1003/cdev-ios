@@ -1119,6 +1119,11 @@ struct ActionBarView: View {
         promptText.isBlank || isLoading || claudeState == .running
     }
 
+    /// Show stop indicator when Claude is running/waiting (replaces send button)
+    private var shouldShowStopIndicator: Bool {
+        (claudeState == .running || claudeState == .waiting) && !hasPTYPermission
+    }
+
     /// Placeholder text based on Claude state and bash mode
     private var placeholderText: String {
         if claudeState == .running {
@@ -1251,13 +1256,6 @@ struct ActionBarView: View {
                     .transition(.scale.combined(with: .opacity))
                 }
 
-                // Stop button with loading animation when active
-                // Hidden when PTY permission panel is showing (user needs to respond first)
-                if (claudeState == .running || claudeState == .waiting) && !hasPTYPermission {
-                    StopButtonWithAnimation(onStop: onStop)
-                        .transition(Animations.fadeScale)
-                }
-
                 // Prompt input with Pulse Terminal styling + rainbow "ultrathink" detection
                 HStack(spacing: inputSpacing) {
                     RainbowTextField(
@@ -1295,27 +1293,35 @@ struct ActionBarView: View {
                         .transition(.scale.combined(with: .opacity))
                     }
 
-                    // Send button with glow - compact sizing
-                    Button(action: onSend) {
-                        Group {
-                            if isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .tint(ColorSystem.primary)
-                            } else {
-                                Image(systemName: Icons.send)
-                                    .font(.system(size: sendIconSize))
+                    // Send button or stop indicator (replace when active)
+                    if shouldShowStopIndicator {
+                        StopButtonWithAnimation(onStop: onStop)
+                            .padding(.trailing, inputHorizontalPadding)
+                            .padding(.vertical, layout.tightSpacing)
+                            .transition(Animations.fadeScale)
+                    } else {
+                        Button(action: onSend) {
+                            Group {
+                                if isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                        .tint(ColorSystem.primary)
+                                } else {
+                                    Image(systemName: Icons.send)
+                                        .font(.system(size: sendIconSize))
+                                }
                             }
+                            .foregroundStyle(isSendDisabled ? ColorSystem.textQuaternary : ColorSystem.primary)
+                            .shadow(
+                                color: isSendDisabled ? .clear : ColorSystem.primaryGlow,
+                                radius: 4
+                            )
                         }
-                        .foregroundStyle(isSendDisabled ? ColorSystem.textQuaternary : ColorSystem.primary)
-                        .shadow(
-                            color: isSendDisabled ? .clear : ColorSystem.primaryGlow,
-                            radius: 4
-                        )
+                        .disabled(isSendDisabled)
+                        .padding(.trailing, inputHorizontalPadding)
+                        .padding(.vertical, layout.tightSpacing)
+                        .transition(Animations.fadeScale)
                     }
-                    .disabled(isSendDisabled)
-                    .padding(.trailing, inputHorizontalPadding)
-                    .padding(.vertical, layout.tightSpacing)
                 }
                 .background(ColorSystem.terminalBgHighlight)
                 .clipShape(RoundedRectangle(cornerRadius: layout.indicatorSize / 2))

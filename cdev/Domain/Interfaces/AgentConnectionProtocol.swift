@@ -118,4 +118,8 @@ protocol HTTPServiceProtocol: AnyObject {
     /// - Parameter refreshToken: The refresh token from previous token pair
     /// - Returns: New TokenPair with fresh access and refresh tokens
     func refreshTokenPair(_ refreshToken: String) async throws -> TokenPair
+
+    /// Revoke refresh token (explicit disconnect)
+    /// - Parameter refreshToken: The refresh token to revoke
+    func revokeRefreshToken(_ refreshToken: String) async throws
 }

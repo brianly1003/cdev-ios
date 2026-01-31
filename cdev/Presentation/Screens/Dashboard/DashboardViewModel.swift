@@ -212,6 +212,17 @@ final class DashboardViewModel: ObservableObject {
     // True only when the user explicitly picked a session from history.
     // When false, we allow auto-switching to the latest session from history.
     private var isSessionPinnedByUser: Bool = false
+    // Foreground reconciliation + stream watchdog
+    private var lastStreamEventAt: Date?
+    private var lastWatchdogStatusCheckAt: Date?
+    private var streamWatchdogTask: Task<Void, Never>?
+    private var isAppActive: Bool = true
+    private let streamWatchdogInterval: TimeInterval = 5
+    private let streamStaleThreshold: TimeInterval = 20
+    private let watchdogMinStatusCheckInterval: TimeInterval = 10
+    // Fallback when claude_message isn't emitted for PTY sessions
+    private var hasReceivedClaudeMessageForSession: Bool = false
+    private var lastPtyOutputLine: String?
 
     // Deduplication for real-time messages
     // O(1) lookup to prevent duplicate elements from multiple sources
@@ -918,10 +929,6 @@ final class DashboardViewModel: ObservableObject {
             var editToolIds: Set<String> = []
 
             for message in response.messages.reversed() {
-                if shouldIgnoreLocalCommandCaveat(message.textContent) {
-                    AppLogger.log("[Dashboard] Skipping local-command-caveat message in loadMoreMessages")
-                    continue
-                }
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
@@ -1042,10 +1049,6 @@ final class DashboardViewModel: ObservableObject {
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
             // Use instance seenElementIds (already cleared above)
             for message in messagesResponse.messages.reversed() {
-                if shouldIgnoreLocalCommandCaveat(message.textContent) {
-                    AppLogger.log("[Dashboard] Skipping local-command-caveat message in resumeSession")
-                    continue
-                }
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
@@ -1829,10 +1832,6 @@ final class DashboardViewModel: ObservableObject {
             var editToolIds: Set<String> = []
             // Use instance seenElementIds (already cleared above for new session)
             for (index, message) in chronologicalMessages.enumerated() {
-                if shouldIgnoreLocalCommandCaveat(message.textContent) {
-                    AppLogger.log("[Dashboard] Skipping local-command-caveat message in loadRecentSessionHistory")
-                    continue
-                }
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
@@ -1975,6 +1974,10 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func handleEvent(_ event: AgentEvent) async {
+        if shouldMarkStreamEvent(event) {
+            markStreamEvent(source: event.type.rawValue)
+        }
+
         switch event.type {
         case .claudeMessage:
             // NEW: Structured message with content blocks
@@ -1991,19 +1994,21 @@ final class DashboardViewModel: ObservableObject {
                     return
                 }
 
+                // Structured messages are flowing for this session - disable PTY fallback
+                hasReceivedClaudeMessageForSession = true
+
                 AppLogger.log("[Dashboard] claude_message received - uuid: \(payload.uuid ?? "nil"), role: \(payload.effectiveRole ?? "nil"), sessionId: \(payload.sessionId ?? "nil")")
 
                 // Skip user message echoes from real-time events (already shown optimistically)
                 // BUT ONLY skip messages sent by THIS CLIENT, not from other clients (e.g., Claude Code CLI)
                 // ALWAYS show bash mode OUTPUT (stdout/stderr) which is server-generated
+                let textContent = payload.effectiveContent?.textContent ?? ""
+                if ChatContentFilter.shouldHideInternalMessage(textContent) {
+                    AppLogger.log("[Dashboard] Skipping internal caveat claude_message")
+                    return
+                }
+
                 if payload.effectiveRole == "user" {
-                    let textContent = payload.effectiveContent?.textContent ?? ""
-
-                    if shouldIgnoreLocalCommandCaveat(textContent) {
-                        AppLogger.log("[Dashboard] Skipping local-command-caveat claude_message")
-                        return
-                    }
-
                     // Check for bash tags
                     let hasBashInput = textContent.contains("<bash-input>")  // Bash command
                     let hasBashOutput = textContent.contains("<bash-stdout>") ||
@@ -2260,11 +2265,55 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .ptyOutput:
-            // PTY mode terminal output - logged for debugging
-            // Note: Display content uses claude_message events for now
-            if case .ptyOutput(let payload) = event.payload,
-               let cleanText = payload.cleanText, !cleanText.isEmpty {
-                AppLogger.log("[Dashboard] PTY output: \(cleanText.prefix(100))")
+            // PTY mode terminal output - use as fallback when claude_message isn't emitted
+            guard isInteractiveMode else { return }
+            guard case .ptyOutput(let payload) = event.payload,
+                  let cleanTextRaw = payload.cleanText else {
+                return
+            }
+
+            let cleanText = cleanTextRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanText.isEmpty else { return }
+
+            if let eventSessionId = payload.sessionId,
+               let selectedSessionId = userSelectedSessionId,
+               !selectedSessionId.isEmpty,
+               eventSessionId != selectedSessionId {
+                AppLogger.log("[Dashboard] PTY output skipped - session mismatch (event: \(eventSessionId), selected: \(selectedSessionId))")
+                return
+            }
+
+            if cleanText == lastPtyOutputLine {
+                return
+            }
+            lastPtyOutputLine = cleanText
+
+            if hasReceivedClaudeMessageForSession {
+                AppLogger.log("[Dashboard] PTY output ignored (structured messages active)")
+                return
+            }
+
+            if let assistantText = parsePtyAssistantText(cleanText) {
+                if ChatContentFilter.shouldHideInternalMessage(assistantText) {
+                    return
+                }
+
+                queueChatElements([ChatElement.assistantText(assistantText)])
+
+                let entry = LogEntry(
+                    timestamp: event.timestamp,
+                    content: assistantText,
+                    stream: .stdout,
+                    sessionId: payload.sessionId
+                )
+                await logCache.add(entry)
+                scheduleLogUpdate()
+
+                if isLoading {
+                    isLoading = false
+                }
+            } else {
+                AppLogger.log("[Dashboard] PTY output (ignored): \(cleanText.prefix(80))")
             }
 
         case .ptyState:
@@ -2730,6 +2779,113 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    // MARK: - App Lifecycle (Foreground Reconciliation)
+
+    func handleAppDidBecomeActive() {
+        AppLogger.log("[Dashboard] App became active - reconciling state")
+        isAppActive = true
+        startStreamWatchdog()
+        Task { await reconcileAfterForeground() }
+    }
+
+    func handleAppDidEnterBackground() {
+        AppLogger.log("[Dashboard] App entered background - pausing watchdog")
+        isAppActive = false
+        stopStreamWatchdog()
+    }
+
+    private func reconcileAfterForeground() async {
+        lastStreamEventAt = Date()
+        lastWatchdogStatusCheckAt = nil
+
+        if let status = try? await _agentRepository.fetchStatus() {
+            applyStatus(status, context: "foreground")
+        } else {
+            AppLogger.log("[Dashboard] Foreground reconcile: status/get failed", type: .warning)
+        }
+
+        await loadRecentSessionHistory(isReconnection: true)
+        await startWatchingCurrentSession(force: true)
+        await refreshStatus()
+    }
+
+    private func startStreamWatchdog() {
+        streamWatchdogTask?.cancel()
+        streamWatchdogTask = Task { [weak self] in
+            while let self = self, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(self.streamWatchdogInterval * 1_000_000_000))
+                guard self.isAppActive else { continue }
+                guard self.connectionState.isConnected else { continue }
+                guard self.isStreaming || self.claudeState == .running else { continue }
+
+                let lastEvent = self.lastStreamEventAt ?? self.streamingStartTime
+                if let lastEvent, Date().timeIntervalSince(lastEvent) < self.streamStaleThreshold {
+                    continue
+                }
+
+                let now = Date()
+                if let lastCheck = self.lastWatchdogStatusCheckAt,
+                   now.timeIntervalSince(lastCheck) < self.watchdogMinStatusCheckInterval {
+                    continue
+                }
+                self.lastWatchdogStatusCheckAt = now
+                await self.reconcileStreamStatus(reason: "watchdog")
+            }
+        }
+    }
+
+    private func stopStreamWatchdog() {
+        streamWatchdogTask?.cancel()
+        streamWatchdogTask = nil
+    }
+
+    private func reconcileStreamStatus(reason: String) async {
+        guard let status = try? await _agentRepository.fetchStatus() else {
+            AppLogger.log("[Dashboard] Watchdog status/get failed", type: .warning)
+            return
+        }
+        applyStatus(status, context: reason)
+    }
+
+    private func applyStatus(_ status: AgentStatus, context: String) {
+        let previous = claudeState
+        claudeState = status.claudeState
+
+        if status.claudeState != .running {
+            isStreaming = false
+            spinnerMessage = nil
+            streamingStartTime = nil
+            if status.claudeState == .idle || status.claudeState == .stopped || status.claudeState == .error {
+                pendingInteraction = nil
+            }
+        }
+
+        AppLogger.log("[Dashboard] reconcileStatus(\(context)) \(previous) → \(claudeState)")
+    }
+
+    private func isStreamEvent(_ type: AgentEventType) -> Bool {
+        switch type {
+        case .claudeMessage, .ptySpinner, .ptyState, .streamReadComplete:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldMarkStreamEvent(_ event: AgentEvent) -> Bool {
+        guard isStreamEvent(event.type) else { return false }
+        guard let selectedSessionId = userSelectedSessionId, !selectedSessionId.isEmpty else { return true }
+        if let eventSessionId = event.sessionId, !eventSessionId.isEmpty {
+            return eventSessionId == selectedSessionId
+        }
+        return true
+    }
+
+    private func markStreamEvent(source: String) {
+        lastStreamEventAt = Date()
+        AppLogger.log("[Dashboard] Stream activity: \(source)")
+    }
+
     /// Update sessionId in agentStatus to maintain context
     private func updateSessionId(_ sessionId: String) {
         guard agentStatus.sessionId != sessionId else { return }
@@ -2747,8 +2903,14 @@ final class DashboardViewModel: ObservableObject {
     /// Set userSelectedSessionId and persist to storage
     /// Also updates the display sessionId in agentStatus
     private func setSelectedSession(_ sessionId: String?) {
+        let previousSessionId = userSelectedSessionId
         userSelectedSessionId = sessionId
         sessionRepository.selectedSessionId = sessionId
+
+        if previousSessionId != sessionId {
+            hasReceivedClaudeMessageForSession = false
+            lastPtyOutputLine = nil
+        }
 
         if let id = sessionId, !id.isEmpty {
             AppLogger.log("[Dashboard] Persisted selectedSessionId: \(id)")
@@ -2775,9 +2937,15 @@ final class DashboardViewModel: ObservableObject {
         return false
     }
 
-    private func shouldIgnoreLocalCommandCaveat(_ text: String) -> Bool {
-        guard !text.isEmpty else { return false }
-        return text.lowercased().contains("<local-command-caveat")
+    private func parsePtyAssistantText(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("⏺ ") {
+            return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if trimmed.hasPrefix("⏺") {
+            return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
     }
 
     private func handleSessionNotFound(context: String, refreshHistory: Bool = true) async {
@@ -3269,6 +3437,9 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] Failed to unsubscribe: \(error.localizedDescription)", type: .warning)
             }
         }
+
+        // Revoke refresh token before disconnecting (explicit logout)
+        await TokenManager.shared.revokeStoredRefreshToken()
 
         // Disconnect WebSocket
         AppLogger.log("[Dashboard] Calling webSocketService.disconnect()")
