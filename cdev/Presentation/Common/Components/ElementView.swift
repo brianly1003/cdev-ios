@@ -805,15 +805,16 @@ private struct InlineThinkingView: View {
                 HStack(spacing: Spacing.xxs) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(ColorSystem.primary.opacity(0.7))
 
-                    Image(systemName: "brain")
-                        .font(.system(size: 10))
+                    // Animated spinner matching Claude Code CLI
+                    ThinkingSpinner()
 
-                    Text("Thinking...")
+                    Text("Thinking…")
                         .font(Typography.terminalSmall)
                         .italic()
+                        .foregroundStyle(ColorSystem.primary.opacity(0.7))
                 }
-                .foregroundStyle(ColorSystem.primary.opacity(0.7))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(ColorSystem.primary.opacity(0.1))
@@ -1763,6 +1764,53 @@ private struct EditDiffLineView: View {
     }
 }
 
+// MARK: - Thinking Spinner
+
+/// Animated spinner matching Claude Code CLI style
+/// Cycles through frames: · → ✢ → ✳ → ✶ → ✻ → ✽ (forward then reverse)
+struct ThinkingSpinner: View {
+    /// Spinner frames (macOS style from Claude Code CLI)
+//    private static let baseFrames = ["·", "✢", "✳", "✶", "✻", "✽"]
+    private static let baseFrames = ["·", "✢", "⏺", "✶", "✻", "✽"]
+
+    /// Full animation sequence: forward + reverse for smooth loop
+    private static let animationFrames: [String] = {
+        baseFrames + baseFrames.reversed()
+    }()
+
+    /// Animation interval (200ms for thinking state)
+    private let interval: TimeInterval = 0.2
+
+    @State private var frameIndex = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        Text(Self.animationFrames[frameIndex % Self.animationFrames.count])
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(ColorSystem.primary.opacity(0.8))
+            .onAppear {
+                startAnimation()
+            }
+            .onDisappear {
+                stopAnimation()
+            }
+    }
+
+    private func startAnimation() {
+        // Start with random frame for variety
+        frameIndex = Int.random(in: 0..<Self.animationFrames.count)
+
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            frameIndex = (frameIndex + 1) % Self.animationFrames.count
+        }
+    }
+
+    private func stopAnimation() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
 // MARK: - Thinking View
 
 /// Collapsible thinking/reasoning block
@@ -1793,15 +1841,16 @@ struct ThinkingElementView: View {
                 HStack(spacing: Spacing.xxs) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(ColorSystem.primary.opacity(0.7))
 
-                    Image(systemName: "brain")
-                        .font(.system(size: 10))
+                    // Animated spinner matching Claude Code CLI
+                    ThinkingSpinner()
 
-                    Text("Thinking...")
+                    Text("Thinking…")
                         .font(Typography.terminalSmall)
                         .italic()
+                        .foregroundStyle(ColorSystem.primary.opacity(0.7))
                 }
-                .foregroundStyle(ColorSystem.primary.opacity(0.7))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(ColorSystem.primary.opacity(0.1))

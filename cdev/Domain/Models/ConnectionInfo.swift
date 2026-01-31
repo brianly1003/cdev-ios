@@ -7,7 +7,7 @@ struct ConnectionInfo: Codable, Equatable {
     let httpURL: URL
     let sessionId: String
     let repoName: String
-    let token: String?
+    let token: String?  // Access token for HTTP/WebSocket auth
     let tokenExpiresAtString: String?  // ISO8601 expiry time from server
 
     /// JSON keys match cdev-agent's PairingInfo:

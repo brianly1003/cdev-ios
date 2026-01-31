@@ -46,7 +46,7 @@ final class DefaultParseQRCodeUseCase: ParseQRCodeUseCase {
             AppLogger.log("  WebSocket: \(connectionInfo.webSocketURL.absoluteString)")
             AppLogger.log("  HTTP: \(connectionInfo.httpURL.absoluteString)")
             AppLogger.log("  Repo: \(connectionInfo.repoName)")
-            AppLogger.log("  Token: \(connectionInfo.token != nil ? "present (\(connectionInfo.token!.prefix(10))...)" : "none")")
+            AppLogger.log("  Token: \(connectionInfo.token != nil ? "present" : "none")")
             return connectionInfo
         } catch let error as AppError {
             throw error

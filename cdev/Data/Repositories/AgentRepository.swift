@@ -344,7 +344,8 @@ final class AgentRepository: AgentRepositoryProtocol {
                 diff: item.diff,
                 additions: nil,
                 deletions: nil,
-                isNew: item.isNew
+                isNew: item.isNew,
+                isTruncated: item.isTruncated
             )
         }
     }
@@ -415,57 +416,33 @@ final class AgentRepository: AgentRepositoryProtocol {
 
     // MARK: - Sessions
 
-    func getSessions(workspaceId: String? = nil, limit: Int = 20, offset: Int = 0) async throws -> SessionsResponse {
-        // Use workspace-aware workspace/session/history API when workspaceId is provided
-        if let workspaceId = workspaceId {
-            let params = SessionHistoryParams(workspaceId: workspaceId, limit: limit)
-            let result: SessionHistoryResult = try await rpcClient.request(
-                method: JSONRPCMethod.workspaceSessionHistory,
-                params: params
-            )
-
-            // Convert to SessionsResponse
-            let sessions = (result.sessions ?? []).map { session in
-                SessionsResponse.SessionInfo(
-                    sessionId: session.sessionId,
-                    summary: session.summary ?? "Session \(session.sessionId.prefix(8))",
-                    messageCount: session.messageCount ?? 0,
-                    lastUpdated: session.lastUpdated ?? "",
-                    branch: session.branch
-                )
-            }
-
-            return SessionsResponse(
-                sessions: sessions,
-                current: nil,
-                total: result.total ?? sessions.count,
-                limit: limit,
-                offset: offset
-            )
+    func getSessions(workspaceId: String, limit: Int = 20, offset: Int = 0) async throws -> SessionsResponse {
+        guard !workspaceId.isEmpty else {
+            AppLogger.network("[Sessions] Error: workspaceId required for workspace/session/history", type: .error)
+            throw AgentRepositoryError.workspaceIdRequired
         }
 
-        // Legacy: use session/list when no workspaceId
-        let params = SessionListParams(agentType: nil, limit: limit)
-        let result: SessionListResult = try await rpcClient.request(
-            method: JSONRPCMethod.sessionList,
+        let params = SessionHistoryParams(workspaceId: workspaceId, limit: limit)
+        let result: SessionHistoryResult = try await rpcClient.request(
+            method: JSONRPCMethod.workspaceSessionHistory,
             params: params
         )
 
         // Convert to SessionsResponse
         let sessions = (result.sessions ?? []).map { session in
             SessionsResponse.SessionInfo(
-                sessionId: session.resolvedId,
-                summary: session.summary ?? "Session \(session.resolvedId.prefix(8))",
+                sessionId: session.sessionId,
+                summary: session.summary ?? "Session \(session.sessionId.prefix(8))",
                 messageCount: session.messageCount ?? 0,
-                lastUpdated: session.lastUpdated ?? session.startTime ?? "",
-                branch: nil
+                lastUpdated: session.lastUpdated ?? "",
+                branch: session.branch
             )
         }
 
         return SessionsResponse(
             sessions: sessions,
             current: nil,
-            total: sessions.count,
+            total: result.total ?? sessions.count,
             limit: limit,
             offset: offset
         )

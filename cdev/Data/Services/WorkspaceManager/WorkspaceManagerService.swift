@@ -501,7 +501,7 @@ final class WorkspaceManagerService: ObservableObject {
         if let ws = webSocketService {
             let client = ws.getJSONRPCClient()
             do {
-                let _: SessionUnwatchResult = try await client.request(
+                let _: WorkspaceSessionUnwatchResult = try await client.request(
                     method: JSONRPCMethod.workspaceSessionUnwatch,
                     params: EmptyParams()
                 )
@@ -1140,11 +1140,13 @@ struct GitDiffResponse: Codable {
     let path: String?
     let isNew: Bool?
     let isStaged: Bool?
+    let isTruncated: Bool?
 
     enum CodingKeys: String, CodingKey {
         case diffs, diff, path
         case isNew = "is_new"
         case isStaged = "is_staged"
+        case isTruncated = "is_truncated"
     }
 
     struct GitDiffItem: Codable {
@@ -1152,11 +1154,13 @@ struct GitDiffResponse: Codable {
         let diff: String
         let isNew: Bool?
         let isStaged: Bool?
+        let isTruncated: Bool?
 
         enum CodingKeys: String, CodingKey {
             case path, diff
             case isNew = "is_new"
             case isStaged = "is_staged"
+            case isTruncated = "is_truncated"
         }
     }
 
@@ -1168,7 +1172,7 @@ struct GitDiffResponse: Codable {
         }
         // If we have single file format, convert to array
         if let diff = diff, let path = path {
-            return [GitDiffItem(path: path, diff: diff, isNew: isNew, isStaged: isStaged)]
+            return [GitDiffItem(path: path, diff: diff, isNew: isNew, isStaged: isStaged, isTruncated: isTruncated)]
         }
         return []
     }

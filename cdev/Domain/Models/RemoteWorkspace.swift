@@ -488,7 +488,7 @@ struct ServerConnection: Codable, Identifiable, Equatable {
     let host: String            // IP address or hostname
     var name: String?           // User-given name (e.g., "MacBook Pro")
     var lastConnected: Date     // For sorting recent connections
-    var token: String?          // Auth token from QR code pairing (transient, not persisted)
+    var token: String?          // Access token (transient, not persisted)
 
     /// Server port (always 8766 in single-port architecture)
     static let serverPort: Int = 8766

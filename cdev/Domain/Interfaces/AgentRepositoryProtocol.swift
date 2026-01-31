@@ -95,15 +95,15 @@ protocol AgentRepositoryProtocol {
 
     /// Get list of available Claude sessions (paginated)
     /// - Parameters:
-    ///   - workspaceId: Optional workspace ID for workspace-aware API (uses workspace/session/history)
+    ///   - workspaceId: Workspace ID (uses workspace/session/history)
     ///   - limit: Maximum sessions to return (default: 20, max: 100)
     ///   - offset: Number of sessions to skip (default: 0)
-    func getSessions(workspaceId: String?, limit: Int, offset: Int) async throws -> SessionsResponse
+    func getSessions(workspaceId: String, limit: Int, offset: Int) async throws -> SessionsResponse
 
     /// Get messages for a specific session (paginated)
     /// - Parameters:
     ///   - sessionId: UUID of the session
-    ///   - workspaceId: Optional workspace ID for workspace-aware API
+    ///   - workspaceId: Workspace ID (required for workspace/session/messages)
     ///   - limit: Max messages to return (default: 50, max: 500)
     ///   - offset: Starting position for pagination (default: 0)
     ///   - order: Sort order: "asc" (oldest first) or "desc" (newest first)

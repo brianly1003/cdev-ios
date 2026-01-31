@@ -705,6 +705,7 @@ struct GitDiffPayload: Codable {
     let additions: Int?
     let deletions: Int?
     let isNew: Bool?
+    let isTruncated: Bool?
 
     enum CodingKeys: String, CodingKey {
         case file = "path"  // API returns "path" not "file"
@@ -712,6 +713,7 @@ struct GitDiffPayload: Codable {
         case additions
         case deletions
         case isNew = "is_new"
+        case isTruncated = "is_truncated"
     }
 }
 

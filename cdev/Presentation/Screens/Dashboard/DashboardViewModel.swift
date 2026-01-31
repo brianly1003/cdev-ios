@@ -209,6 +209,9 @@ final class DashboardViewModel: ObservableObject {
     //   - No session → fetch recent from server → continue if exists, new if empty
     private var userSelectedSessionId: String?
     private var hasActiveConversation: Bool = false
+    // True only when the user explicitly picked a session from history.
+    // When false, we allow auto-switching to the latest session from history.
+    private var isSessionPinnedByUser: Bool = false
 
     // Deduplication for real-time messages
     // O(1) lookup to prevent duplicate elements from multiple sources
@@ -674,6 +677,7 @@ final class DashboardViewModel: ObservableObject {
                     mode = .new
                     sessionIdToSend = nil
                     forceNewSession = false  // Reset flag after use
+                    isSessionPinnedByUser = false
                     AppLogger.log("[Dashboard] Sending prompt: mode=new (forceNewSession flag)")
                 } else if let selectedId = userSelectedSessionId, !selectedId.isEmpty {
                     // Validate stored sessionId against server
@@ -693,6 +697,7 @@ final class DashboardViewModel: ObservableObject {
 
                         mode = .new
                         sessionIdToSend = nil
+                        isSessionPinnedByUser = false
                     }
                 } else {
                     // No session selected - try to get the most recent from server
@@ -701,11 +706,13 @@ final class DashboardViewModel: ObservableObject {
                         mode = .continue
                         sessionIdToSend = recentId
                         setSelectedSession(recentId)
+                        isSessionPinnedByUser = false
                         AppLogger.log("[Dashboard] Using recent session: mode=continue, sessionId=\(recentId)")
                     } else {
                         // No sessions exist on server - start fresh
                         mode = .new
                         sessionIdToSend = nil
+                        isSessionPinnedByUser = false
                         AppLogger.log("[Dashboard] No sessions exist, starting new")
                     }
                 }
@@ -720,6 +727,14 @@ final class DashboardViewModel: ObservableObject {
                     AppLogger.log("[Dashboard] Sending prompt with \(uploadedPaths.count) images: \(pathsText)")
                 }
 
+                if mode == .new {
+                    isPendingTempSession = true
+                    setSelectedSession(nil)
+                    AppLogger.log("[Dashboard] New session pending - waiting for session_id_resolved")
+                } else if isPendingTempSession {
+                    isPendingTempSession = false
+                }
+
                 try await sendPromptUseCase.execute(
                     prompt: finalPrompt,
                     mode: mode,
@@ -730,6 +745,9 @@ final class DashboardViewModel: ObservableObject {
                 if !uploadedPaths.isEmpty {
                     clearAttachedImages()
                 }
+
+                // Refresh session history shortly after send to catch session ID switches
+                scheduleSessionHistoryRefresh(reason: "post-send")
             }
             showPromptSheet = false
             Haptics.success()
@@ -870,6 +888,10 @@ final class DashboardViewModel: ObservableObject {
     func loadMoreMessages() async {
         guard messagesHasMore, !isLoadingMoreMessages else { return }
         guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else { return }
+        guard !isPendingTempSession else {
+            AppLogger.log("[Dashboard] loadMoreMessages skipped - pending session_id_resolved")
+            return
+        }
 
         isLoadingMoreMessages = true
         do {
@@ -896,6 +918,10 @@ final class DashboardViewModel: ObservableObject {
             var editToolIds: Set<String> = []
 
             for message in response.messages.reversed() {
+                if shouldIgnoreLocalCommandCaveat(message.textContent) {
+                    AppLogger.log("[Dashboard] Skipping local-command-caveat message in loadMoreMessages")
+                    continue
+                }
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
@@ -941,7 +967,12 @@ final class DashboardViewModel: ObservableObject {
             chatElements.insert(contentsOf: newElements, at: 0)
             await forceLogUpdate()
         } catch {
-            AppLogger.error(error, context: "Load more messages")
+            if isSessionNotFoundError(error) {
+                AppLogger.log("[Dashboard] Session not found during loadMoreMessages - refreshing history")
+                await handleSessionNotFound(context: "loadMoreMessages", refreshHistory: true)
+            } else {
+                AppLogger.error(error, context: "Load more messages")
+            }
         }
         isLoadingMoreMessages = false
     }
@@ -950,6 +981,8 @@ final class DashboardViewModel: ObservableObject {
     func resumeSession(_ sessionId: String) async {
         showSessionPicker = false
         isLoading = true
+        isPendingTempSession = false
+        isSessionPinnedByUser = true
         Haptics.medium()
 
         // Stop watching previous session
@@ -1009,6 +1042,10 @@ final class DashboardViewModel: ObservableObject {
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
             // Use instance seenElementIds (already cleared above)
             for message in messagesResponse.messages.reversed() {
+                if shouldIgnoreLocalCommandCaveat(message.textContent) {
+                    AppLogger.log("[Dashboard] Skipping local-command-caveat message in resumeSession")
+                    continue
+                }
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
@@ -1046,6 +1083,12 @@ final class DashboardViewModel: ObservableObject {
             // Note: Watch was already started before fetching messages
             Haptics.success()
         } catch {
+            if isSessionNotFoundError(error) {
+                AppLogger.log("[Dashboard] Session not found during resume - refreshing history")
+                await handleSessionNotFound(context: "resumeSession messages", refreshHistory: true)
+                isLoading = false
+                return
+            }
             self.error = error as? AppError ?? .unknown(underlying: error)
             Haptics.error()
         }
@@ -1066,6 +1109,7 @@ final class DashboardViewModel: ObservableObject {
         seenContentHashes.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
+        isSessionPinnedByUser = false
         forceNewSession = true  // Ensure next prompt uses mode: "new"
         AppLogger.log("[Dashboard] Started new session - cleared session state, forceNewSession=true")
 
@@ -1091,6 +1135,7 @@ final class DashboardViewModel: ObservableObject {
         seenContentHashes.removeAll()
         setSelectedSession(nil)
         hasActiveConversation = false
+        isSessionPinnedByUser = false
         AppLogger.log("[Dashboard] Cleared & started new - cleared session state")
 
         let clearEntry = LogEntry(
@@ -1638,6 +1683,12 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        // Skip if waiting for session_id_resolved
+        guard !isPendingTempSession else {
+            AppLogger.log("[Dashboard] loadRecentSessionHistory skipped - pending session_id_resolved")
+            return
+        }
+
         // Prevent duplicate loads
         guard !isInitialLoadInProgress else {
             AppLogger.log("[Dashboard] loadRecentSessionHistory skipped - already in progress")
@@ -1666,28 +1717,28 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             // Determine which session to load:
-            // 1. If userSelectedSessionId is already set (e.g., from setWorkspaceContext after starting a new session), use that
-            // 2. Otherwise, query the sessions API to find the most recent session
+            // 1. If userSelectedSessionId is set and pinned by user, keep it
+            // 2. Otherwise, use the latest session from history
             var sessionId: String?
 
+            let latestSessionId = await getMostRecentSessionId()
             if let existingSessionId = userSelectedSessionId, !existingSessionId.isEmpty {
-                // Use the session ID that was already set (e.g., when connecting to a new workspace)
-                sessionId = existingSessionId
-                AppLogger.log("[Dashboard] Using existing userSelectedSessionId: \(existingSessionId)")
-            } else {
-                // No session set yet - query the API to find one
-                AppLogger.log("[Dashboard] Calling getSessions API...")
-                let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 1, offset: 0)
-                AppLogger.log("[Dashboard] Sessions response: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
-
-                // Use current session ID if available and not empty, otherwise use most recent
-                if let current = sessionsResponse.current, !current.isEmpty {
-                    sessionId = current
-                    AppLogger.log("[Dashboard] Using current session: \(current)")
+                if let latest = latestSessionId, !latest.isEmpty, latest != existingSessionId {
+                    if isSessionPinnedByUser {
+                        sessionId = existingSessionId
+                        AppLogger.log("[Dashboard] Keeping pinned session: \(existingSessionId) (latest: \(latest))")
+                    } else {
+                        sessionId = latest
+                        isSessionPinnedByUser = false
+                        AppLogger.log("[Dashboard] Auto-switching to latest session: \(latest) (was: \(existingSessionId))")
+                    }
                 } else {
-                    sessionId = sessionsResponse.sessions.first?.sessionId
-                    AppLogger.log("[Dashboard] Using first session: \(sessionId ?? "none")")
+                    sessionId = existingSessionId
+                    AppLogger.log("[Dashboard] Using existing userSelectedSessionId: \(existingSessionId)")
                 }
+            } else {
+                sessionId = latestSessionId
+                AppLogger.log("[Dashboard] Using latest session: \(sessionId ?? "none")")
             }
 
             guard let sessionId = sessionId, !sessionId.isEmpty else {
@@ -1778,6 +1829,10 @@ final class DashboardViewModel: ObservableObject {
             var editToolIds: Set<String> = []
             // Use instance seenElementIds (already cleared above for new session)
             for (index, message) in chronologicalMessages.enumerated() {
+                if shouldIgnoreLocalCommandCaveat(message.textContent) {
+                    AppLogger.log("[Dashboard] Skipping local-command-caveat message in loadRecentSessionHistory")
+                    continue
+                }
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
@@ -1838,11 +1893,9 @@ final class DashboardViewModel: ObservableObject {
             // Log the actual error for debugging
             AppLogger.error(error, context: "Load session history failed")
 
-            // If session not found (404), clear the stale session state
-            if case .httpRequestFailed(let statusCode, _) = error as? AppError, statusCode == 404 {
-                AppLogger.log("[Dashboard] Session not found (404), clearing session state")
-                setSelectedSession(nil)
-                hasActiveConversation = false
+            if isSessionNotFoundError(error) {
+                AppLogger.log("[Dashboard] Session not found during history load - clearing session state")
+                await handleSessionNotFound(context: "history load", refreshHistory: false)
             }
         }
         AppLogger.log("[Dashboard] loadRecentSessionHistory completed")
@@ -1945,6 +1998,11 @@ final class DashboardViewModel: ObservableObject {
                 // ALWAYS show bash mode OUTPUT (stdout/stderr) which is server-generated
                 if payload.effectiveRole == "user" {
                     let textContent = payload.effectiveContent?.textContent ?? ""
+
+                    if shouldIgnoreLocalCommandCaveat(textContent) {
+                        AppLogger.log("[Dashboard] Skipping local-command-caveat claude_message")
+                        return
+                    }
 
                     // Check for bash tags
                     let hasBashInput = textContent.contains("<bash-input>")  // Bash command
@@ -2701,15 +2759,55 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Session Error Helpers
+
+    private func isSessionNotFoundError(_ error: Error) -> Bool {
+        if let rpcError = error as? JSONRPCClientError {
+            if case .agentError(let agent, _) = rpcError {
+                return agent == .sessionNotFound
+            }
+        }
+        if let appError = error as? AppError {
+            if case .httpRequestFailed(let statusCode, _) = appError {
+                return statusCode == 404
+            }
+        }
+        return false
+    }
+
+    private func shouldIgnoreLocalCommandCaveat(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        return text.lowercased().contains("<local-command-caveat")
+    }
+
+    private func handleSessionNotFound(context: String, refreshHistory: Bool = true) async {
+        AppLogger.log("[Dashboard] Session not found during \(context) - clearing session state")
+        isWatchingSession = false
+        watchingSessionId = nil
+        isPendingTempSession = false
+        isSessionPinnedByUser = false
+        setSelectedSession(nil)
+        hasActiveConversation = false
+        if refreshHistory {
+            await loadRecentSessionHistory(isReconnection: false)
+        }
+    }
+
     // MARK: - Session Validation Helpers
+
 
     /// Validate that a sessionId still exists on the server
     /// Returns true if session exists, false if not found or error
     /// Note: Checks up to 100 sessions (should cover recently used sessions)
     private func validateSessionExists(_ sessionId: String) async -> Bool {
         do {
+            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
+                AppLogger.log("[Dashboard] validateSessionExists: missing workspace ID", type: .warning)
+                return false
+            }
+
             // Load a larger batch for validation since we need to search
-            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 100, offset: 0)
+            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: workspaceId, limit: 100, offset: 0)
             let exists = sessionsResponse.sessions.contains { $0.sessionId == sessionId }
             if !exists {
                 AppLogger.log("[Dashboard] Session \(sessionId) not found in first 100 sessions (deleted or old)")
@@ -2856,25 +2954,77 @@ final class DashboardViewModel: ObservableObject {
         return ""
     }
 
-    /// Get the most recent session ID from the server
-    /// Returns the current session if available, otherwise the first session in the list
+    /// Schedule a light refresh of session history to catch session ID switches
+    private func scheduleSessionHistoryRefresh(reason: String) {
+        Task.detached { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000) // 0.8s
+            guard let self = self else { return }
+            AppLogger.log("[Dashboard] Refreshing session history (\(reason))")
+            await self.loadRecentSessionHistory(isReconnection: false)
+        }
+    }
+
+    /// Get the most recent session ID from workspace history
     private func getMostRecentSessionId() async -> String? {
-        do {
-            // Just need the first session, so limit to 1
-            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: currentWorkspaceId, limit: 1, offset: 0)
-            AppLogger.log("[Dashboard] getMostRecentSessionId: current=\(sessionsResponse.current ?? "nil"), total=\(sessionsResponse.total ?? 0)")
-
-            // Prefer current session if available
-            if let current = sessionsResponse.current, !current.isEmpty {
-                return current
-            }
-
-            // Otherwise use the most recent from the list
-            return sessionsResponse.sessions.first?.sessionId
-        } catch {
-            AppLogger.error(error, context: "Get most recent session ID")
+        guard let workspaceId = currentWorkspaceId else {
+            AppLogger.log("[Dashboard] getMostRecentSessionId: no workspace ID", type: .warning)
             return nil
         }
+
+        return await getMostRecentSessionIdFromHistory(workspaceId: workspaceId)
+    }
+
+    private func getMostRecentSessionIdFromHistory(workspaceId: String) async -> String? {
+        do {
+            let historyResponse = try await workspaceManager.getSessionHistory(workspaceId: workspaceId, limit: 20)
+            guard let sessions = historyResponse.sessions, !sessions.isEmpty else {
+                AppLogger.log("[Dashboard] getMostRecentSessionId: history empty for workspace \(workspaceId)")
+                return nil
+            }
+
+            let latest = selectLatestSessionId(from: sessions)
+            AppLogger.log("[Dashboard] getMostRecentSessionId: history latest=\(latest ?? "nil"), count=\(sessions.count)")
+            return latest
+        } catch {
+            AppLogger.error(error, context: "Get most recent session ID (history)")
+            return nil
+        }
+    }
+
+    private func selectLatestSessionId(from sessions: [HistorySessionInfo]) -> String? {
+        let sorted = sessions.sorted { left, right in
+            let leftDate = sessionSortDate(left)
+            let rightDate = sessionSortDate(right)
+            return leftDate > rightDate
+        }
+
+        return sorted.first?.sessionId
+    }
+
+    private func sessionSortDate(_ session: HistorySessionInfo) -> Date {
+        if let lastActive = parseSessionDate(session.lastActive) {
+            return lastActive
+        }
+        if let lastUpdated = parseSessionDate(session.lastUpdated) {
+            return lastUpdated
+        }
+        if let startedAt = parseSessionDate(session.startedAt) {
+            return startedAt
+        }
+        return .distantPast
+    }
+
+    private func parseSessionDate(_ dateString: String?) -> Date? {
+        guard let dateString = dateString, !dateString.isEmpty else { return nil }
+        let formatterWithFractional = ISO8601DateFormatter()
+        formatterWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatterWithFractional.date(from: dateString) {
+            return date
+        }
+
+        let formatterWithoutFractional = ISO8601DateFormatter()
+        formatterWithoutFractional.formatOptions = [.withInternetDateTime]
+        return formatterWithoutFractional.date(from: dateString)
     }
 
     // MARK: - Terminal Search
@@ -2931,6 +3081,12 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        // Skip if waiting for session_id_resolved
+        guard !isPendingTempSession else {
+            AppLogger.log("[Dashboard] startWatchingCurrentSession skipped - pending session_id_resolved")
+            return
+        }
+
         guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else {
             AppLogger.log("[Dashboard] No session to watch - userSelectedSessionId is nil or empty")
             return
@@ -2962,6 +3118,11 @@ final class DashboardViewModel: ObservableObject {
                 await SessionAwarenessManager.shared.setFocus(workspaceId: workspaceId, sessionId: sessionId)
             }
         } catch {
+            if isSessionNotFoundError(error) {
+                AppLogger.log("[Dashboard] Session not found during watch - refreshing history")
+                await handleSessionNotFound(context: "watch session", refreshHistory: true)
+                return
+            }
             AppLogger.error(error, context: "Watch session")
             // Reset state on failure so next attempt will try again
             isWatchingSession = false
@@ -3064,6 +3225,7 @@ final class DashboardViewModel: ObservableObject {
         // Clear session tracking so new session will trigger data reload
         userSelectedSessionId = nil
         hasActiveConversation = false
+        isSessionPinnedByUser = false
         seenElementIds.removeAll()
         seenContentHashes.removeAll()
 
@@ -3147,6 +3309,7 @@ final class DashboardViewModel: ObservableObject {
 
         userSelectedSessionId = nil
         hasActiveConversation = false
+        isSessionPinnedByUser = false
         connectionState = .disconnected
         claudeState = .idle
         agentStatus = AgentStatus()
@@ -3179,6 +3342,7 @@ final class DashboardViewModel: ObservableObject {
         pendingInteraction = nil
         isPendingTrustFolder = false  // Reset trust state for new workspace
         isPendingTempSession = false  // Reset temp session state for new workspace
+        isSessionPinnedByUser = false
 
         // IMPORTANT: When connecting to a workspace, always use the passed sessionId
         // The passed sessionId is the ACTIVE session for the workspace we're connecting to
@@ -3267,6 +3431,7 @@ final class DashboardViewModel: ObservableObject {
         // Clear session tracking for new workspace
         userSelectedSessionId = nil
         hasActiveConversation = false
+        isSessionPinnedByUser = false
         seenElementIds.removeAll()
         seenContentHashes.removeAll()
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Cleared session tracking")

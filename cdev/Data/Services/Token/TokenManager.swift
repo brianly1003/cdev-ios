@@ -129,6 +129,7 @@ final class TokenManager {
         if tokenPair.isRefreshTokenExpired {
             AppLogger.log("[TokenManager] Refresh token expired, need re-pairing")
             clearTokens()
+            onRefreshFailed?(AppError.refreshTokenExpired)
             return nil
         }
 
@@ -138,7 +139,16 @@ final class TokenManager {
             return newPair.accessToken
         } catch {
             AppLogger.log("[TokenManager] Token refresh failed: \(error)", type: .error)
-            onRefreshFailed?(error)
+
+            // If access token is still valid, keep using it and retry refresh later
+            if !tokenPair.isAccessTokenExpired {
+                AppLogger.log("[TokenManager] Using existing access token (still valid) despite refresh failure")
+                return tokenPair.accessToken
+            }
+
+            if isRefreshTokenInvalid(error) {
+                onRefreshFailed?(error)
+            }
             return nil
         }
     }
@@ -259,8 +269,24 @@ final class TokenManager {
             AppLogger.log("[TokenManager] Auto-refresh succeeded")
         } catch {
             AppLogger.log("[TokenManager] Auto-refresh failed: \(error)", type: .error)
-            onRefreshFailed?(error)
+            if isRefreshTokenInvalid(error) {
+                onRefreshFailed?(error)
+            }
         }
+    }
+
+    private func isRefreshTokenInvalid(_ error: Error) -> Bool {
+        if let appError = error as? AppError {
+            switch appError {
+            case .refreshTokenExpired, .tokenInvalid:
+                return true
+            case .httpRequestFailed(let statusCode, _):
+                return statusCode == 401 || statusCode == 403
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     // MARK: - Token Status

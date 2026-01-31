@@ -88,7 +88,7 @@ protocol HTTPServiceProtocol: AnyObject {
     /// Base URL for HTTP requests
     var baseURL: URL? { get set }
 
-    /// Authentication token for API requests (from QR code pairing)
+    /// Authentication token for API requests (access token)
     /// When set, adds `Authorization: Bearer <token>` header to all requests
     var authToken: String? { get set }
 

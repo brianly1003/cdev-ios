@@ -520,30 +520,18 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             throw AppError.connectionFailed(underlying: nil)
         }
 
-        // Build WebSocket URL with optional auth token
-        // Use direct string concatenation to ensure token is appended correctly
-        var wsURLString = connectionInfo.webSocketURL.absoluteString
+        let wsURL = connectionInfo.webSocketURL
+        var request = URLRequest(url: wsURL)
+        request.timeoutInterval = Constants.Network.connectionTimeout
         if let token = connectionInfo.token {
-            // Append token as query parameter
-            if wsURLString.contains("?") {
-                wsURLString += "&token=\(token)"
-            } else {
-                wsURLString += "?token=\(token)"
-            }
-            AppLogger.webSocket("Auth token appended to URL")
-            AppLogger.webSocket("  Original: \(connectionInfo.webSocketURL.absoluteString)")
-            AppLogger.webSocket("  With token: \(wsURLString)")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            AppLogger.webSocket("Auth token set on WebSocket request")
         } else {
             AppLogger.webSocket("WARNING: No auth token in connection info!")
         }
 
-        guard let wsURL = URL(string: wsURLString) else {
-            AppLogger.webSocket("ERROR: Failed to create URL from: \(wsURLString)", type: .error)
-            throw AppError.connectionFailed(underlying: nil)
-        }
-
         AppLogger.webSocket("Connecting to: \(wsURL.absoluteString)")
-        webSocket = session.webSocketTask(with: wsURL)
+        webSocket = session.webSocketTask(with: request)
         webSocket?.resume()
 
         // Wait for connection with timeout

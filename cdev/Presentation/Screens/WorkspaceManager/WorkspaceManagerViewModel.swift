@@ -229,11 +229,25 @@ final class WorkspaceManagerViewModel: ObservableObject {
             }
         }
 
-        // Handle token refresh failure - need to re-pair
+        // Handle token refresh failure
         TokenManager.shared.onRefreshFailed = { [weak self] error in
             Task { @MainActor in
                 AppLogger.log("[WorkspaceManager] Token refresh failed: \(error)", type: .error)
-                self?.handleRefreshTokenExpired()
+                if let appError = error as? AppError {
+                    switch appError {
+                    case .refreshTokenExpired, .tokenInvalid:
+                        self?.handleRefreshTokenExpired()
+                        return
+                    case .httpRequestFailed(let statusCode, _):
+                        if statusCode == 401 || statusCode == 403 {
+                            self?.handleRefreshTokenExpired()
+                            return
+                        }
+                    default:
+                        break
+                    }
+                }
+                AppLogger.log("[WorkspaceManager] Refresh failed but tokens may still be valid - will retry later", type: .warning)
             }
         }
 
@@ -415,35 +429,47 @@ final class WorkspaceManagerViewModel: ObservableObject {
         // Tell WebSocket we're managing our own retry loop (prevents .failed state flickering)
         webSocketService.isExternalRetryInProgress = true
 
-        // Save the host and token early so UI can show it
-        managerStore.saveHost(host, token: token)
+        // Save host early so UI can show it (do not persist pairing token)
+        managerStore.saveHost(host, token: nil)
         managerService.setCurrentHost(host)
 
-        // Handle token exchange if this is a pairing token
-        var accessToken = token
-        if let pairingToken = token, TokenType.from(token: pairingToken) == .pairing {
-            AppLogger.log("[WorkspaceManager] Detected pairing token, exchanging for access/refresh pair")
-            do {
-                let tokenPair = try await exchangePairingToken(pairingToken, host: host)
-                accessToken = tokenPair.accessToken
-                AppLogger.log("[WorkspaceManager] Token exchange successful, access token expires: \(tokenPair.accessTokenExpiresAt)")
-            } catch {
-                AppLogger.log("[WorkspaceManager] Token exchange failed: \(error)", type: .error)
-                // Fall back to using the pairing token directly (backward compatibility)
-                // This allows connection to servers that don't support token exchange yet
+        // Resolve access token (pairing -> exchange, or stored)
+        var accessToken: String? = nil
+        if let providedToken = token {
+            if TokenType.from(token: providedToken) == .pairing {
+                AppLogger.log("[WorkspaceManager] Detected pairing token, exchanging for access/refresh pair")
+                do {
+                    let tokenPair = try await exchangePairingToken(providedToken, host: host)
+                    accessToken = tokenPair.accessToken
+                    AppLogger.log("[WorkspaceManager] Token exchange successful, access token expires: \(tokenPair.accessTokenExpiresAt)")
+                } catch {
+                    AppLogger.log("[WorkspaceManager] Token exchange failed: \(error)", type: .error)
+                    let (code, message) = Self.rpcErrorInfo(from: error)
+                    self.error = .rpcError(code: code, message: message)
+                    self.showError = true
+                    self.isConnecting = false
+                    self.webSocketService.isExternalRetryInProgress = false
+                    self.serverStatus = .unreachable(lastError: message)
+                    return
+                }
+            } else {
+                accessToken = providedToken
             }
-        } else if token == nil {
-            // No token provided, check if we have stored tokens for this host
-            if let storedHost = TokenManager.shared.getStoredHost(),
-               storedHost == host,
-               let storedToken = await TokenManager.shared.getValidAccessToken() {
-                AppLogger.log("[WorkspaceManager] Using stored access token for host: \(host)")
-                accessToken = storedToken
-            }
+        } else if let storedHost = TokenManager.shared.getStoredHost(),
+                  storedHost == host,
+                  let storedToken = await TokenManager.shared.getValidAccessToken() {
+            AppLogger.log("[WorkspaceManager] Using stored access token for host: \(host)")
+            accessToken = storedToken
         }
 
-        // Build connection info with token (access token or fallback to original)
+        if let accessToken = accessToken {
+            managerStore.saveHost(host, token: accessToken)
+        }
+
+        // Build connection info with access token
         let connectionInfo = buildConnectionInfo(for: host, token: accessToken)
+        httpService.baseURL = connectionInfo.httpURL
+        httpService.authToken = accessToken
 
         // Retry loop
         while currentRetryAttempt < maxRetryAttempts && !connectionCancelled {
@@ -550,8 +576,24 @@ final class WorkspaceManagerViewModel: ObservableObject {
             httpURL: httpURL,
             sessionId: "",
             repoName: "Workspaces",
-            token: token  // Include auth token from QR code
+            token: token  // Include access token for auth
         )
+    }
+
+    private static func rpcErrorInfo(from error: Error) -> (Int, String) {
+        if let appError = error as? AppError {
+            switch appError {
+            case .httpRequestFailed(let statusCode, let message):
+                return (statusCode, message ?? appError.localizedDescription)
+            case .tokenInvalid, .tokenExpired, .refreshTokenExpired:
+                return (401, appError.localizedDescription)
+            case .authorizationFailed(let statusCode):
+                return (statusCode, appError.localizedDescription)
+            default:
+                return (-1, appError.localizedDescription)
+            }
+        }
+        return (-1, error.localizedDescription)
     }
 
     /// Check if host is a local network address

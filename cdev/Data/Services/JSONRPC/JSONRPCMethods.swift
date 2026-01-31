@@ -81,19 +81,7 @@ enum JSONRPCMethod {
     // File operations (multi-workspace mode)
     static let workspaceFileGet = "workspace/file/get"
 
-    // Session operations (legacy - single workspace)
-    static let sessionList = "session/list"
-    static let sessionGet = "session/get"
-    static let sessionMessages = "session/messages"
-    static let sessionElements = "session/elements"
-    static let sessionWatch = "session/watch"
-    static let sessionUnwatch = "session/unwatch"
-    static let sessionDelete = "session/delete"
-
-    // Session history (legacy - kept for backward compatibility)
-    static let sessionHistory = "session/history"
-
-    // Workspace session operations (NEW - workspace-aware)
+    // Workspace session operations (workspace-aware)
     static let workspaceSessionHistory = "workspace/session/history"
     static let workspaceSessionMessages = "workspace/session/messages"
     static let workspaceSessionWatch = "workspace/session/watch"
@@ -245,11 +233,13 @@ struct GitDiffResult: Codable, Sendable {
     let diff: String?
     let isStaged: Bool?
     let isNew: Bool?
+    let isTruncated: Bool?
 
     enum CodingKeys: String, CodingKey {
         case path, diff
         case isStaged = "is_staged"
         case isNew = "is_new"
+        case isTruncated = "is_truncated"
     }
 }
 
@@ -285,124 +275,6 @@ struct WorkspaceFileGetParams: Codable, Sendable {
         self.workspaceId = workspaceId
         self.path = path
         self.maxSizeKb = maxSizeKb
-    }
-}
-
-// MARK: - Session
-
-/// Session list request parameters
-struct SessionListParams: Codable, Sendable {
-    let agentType: String?
-    let limit: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case agentType = "agent_type"
-        case limit
-    }
-
-    init(agentType: String? = nil, limit: Int? = nil) {
-        self.agentType = agentType
-        self.limit = limit
-    }
-}
-
-/// Session info
-struct SessionInfoResult: Codable, Sendable {
-    let id: String?
-    let sessionId: String?
-    let agentType: String?
-    let summary: String?
-    let messageCount: Int?
-    let startTime: String?
-    let lastUpdated: String?
-    let projectPath: String?
-
-    // Server returns snake_case
-    enum CodingKeys: String, CodingKey {
-        case id
-        case sessionId = "session_id"
-        case agentType = "agent_type"
-        case summary
-        case messageCount = "message_count"
-        case startTime = "start_time"
-        case lastUpdated = "last_updated"
-        case projectPath = "project_path"
-    }
-
-    /// Get the session ID (server may use either 'id' or 'session_id')
-    var resolvedId: String {
-        sessionId ?? id ?? ""
-    }
-}
-
-/// Session list response result
-struct SessionListResult: Codable, Sendable {
-    let sessions: [SessionInfoResult]?
-}
-
-/// Session watch request parameters
-struct SessionWatchParams: Codable, Sendable {
-    let sessionId: String
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-    }
-}
-
-/// Session watch response result
-struct SessionWatchResult: Codable, Sendable {
-    let status: String?
-    let watching: Bool?
-}
-
-/// Session unwatch response result
-struct SessionUnwatchResult: Codable, Sendable {
-    let status: String?
-    let watching: Bool?
-}
-
-/// Session get request parameters
-struct SessionGetParams: Codable, Sendable {
-    let sessionId: String
-    let agentType: String?
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case agentType = "agent_type"
-    }
-}
-
-/// Session messages request parameters
-struct SessionMessagesParams: Codable, Sendable {
-    let sessionId: String
-    let agentType: String?
-    let limit: Int?
-    let offset: Int?
-    let order: String?  // "asc" or "desc" (default: "asc")
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case agentType = "agent_type"
-        case limit, offset, order
-    }
-}
-
-/// Session messages response result
-/// Note: Uses the same message format as HTTP API - full structure, not simplified
-struct SessionMessagesResult: Codable, Sendable {
-    let sessionId: String?
-    let messages: [SessionMessagesResponse.SessionMessage]?
-    let total: Int?
-    let limit: Int?
-    let offset: Int?
-    let hasMore: Bool?
-    let queryTimeMs: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case messages, total, limit, offset
-        case sessionId = "session_id"
-        case hasMore = "has_more"
-        case queryTimeMs = "query_time_ms"
     }
 }
 
@@ -1085,7 +957,7 @@ struct SessionHistoryParams: Codable, Sendable {
     }
 }
 
-/// Historical session info from session/history
+/// Historical session info from workspace/session/history
 /// Sessions can be "running" or "historical"
 struct HistorySessionInfo: Codable, Sendable, Identifiable {
     var id: String { sessionId }

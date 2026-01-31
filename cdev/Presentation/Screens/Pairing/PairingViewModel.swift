@@ -33,6 +33,7 @@ final class PairingViewModel: ObservableObject {
         self.httpService = httpService
         self.appState = appState
 
+        TokenManager.shared.setHTTPService(httpService)
         checkCameraPermission()
     }
 
@@ -80,7 +81,7 @@ final class PairingViewModel: ObservableObject {
             AppLogger.log("[Pairing] Parsed ConnectionInfo:")
             AppLogger.log("[Pairing]   ws: \(connectionInfo.webSocketURL)")
             AppLogger.log("[Pairing]   http: \(connectionInfo.httpURL)")
-            AppLogger.log("[Pairing]   token: \(connectionInfo.token != nil ? "YES (\(connectionInfo.token!.prefix(15))...)" : "NO")")
+            AppLogger.log("[Pairing]   token: \(connectionInfo.token != nil ? "present" : "none")")
             await connect(to: connectionInfo)
         } catch {
             AppLogger.log("[Pairing] Parse error: \(error)", type: .error)
@@ -139,20 +140,39 @@ final class PairingViewModel: ObservableObject {
 
     private func connect(to connectionInfo: ConnectionInfo) async {
         do {
-            // Set HTTP base URL and auth token
+            // Set HTTP base URL and resolve access token if needed
             httpService.baseURL = connectionInfo.httpURL
-            httpService.authToken = connectionInfo.token
-            if connectionInfo.token != nil {
-                AppLogger.log("[Pairing] Auth token configured for HTTP requests")
+
+            var updatedConnectionInfo = connectionInfo
+            if let token = connectionInfo.token, TokenType.from(token: token) == .pairing {
+                guard let host = connectionInfo.httpURL.host ?? connectionInfo.webSocketURL.host else {
+                    throw AppError.invalidQRCodeDetail(reason: "Missing host in connection info")
+                }
+                AppLogger.log("[Pairing] Exchanging pairing token for access token")
+                let tokenPair = try await TokenManager.shared.exchangePairingToken(token, host: host)
+                httpService.authToken = tokenPair.accessToken
+                updatedConnectionInfo = ConnectionInfo(
+                    webSocketURL: connectionInfo.webSocketURL,
+                    httpURL: connectionInfo.httpURL,
+                    sessionId: connectionInfo.sessionId,
+                    repoName: connectionInfo.repoName,
+                    token: tokenPair.accessToken,
+                    tokenExpiresAt: Self.formatISO8601(tokenPair.accessTokenExpiresAt)
+                )
+            } else {
+                httpService.authToken = connectionInfo.token
+                if connectionInfo.token != nil {
+                    AppLogger.log("[Pairing] Auth token configured for HTTP requests")
+                }
             }
 
-            // Connect via WebSocket (token is appended to URL in WebSocketService)
-            try await connectToAgentUseCase.execute(connectionInfo: connectionInfo)
+            // Connect via WebSocket (auth header set in WebSocketService)
+            try await connectToAgentUseCase.execute(connectionInfo: updatedConnectionInfo)
 
             // Save workspace for quick reconnection
             WorkspaceStore.shared.setActive(
-                from: connectionInfo,
-                repoName: connectionInfo.repoName
+                from: updatedConnectionInfo,
+                repoName: updatedConnectionInfo.repoName
             )
 
             // Clear scan history on successful connection
@@ -171,6 +191,12 @@ final class PairingViewModel: ObservableObject {
             }
             Haptics.error()
         }
+    }
+
+    private static func formatISO8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     // MARK: - Authentication Error Handling

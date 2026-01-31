@@ -970,10 +970,13 @@ struct StreamingIndicatorView: View {
                 .foregroundStyle(ColorSystem.primary)
                 .symbolEffect(.pulse)
 
-            // Only show message text if we have one (no fallback to prevent flashing)
-            // Note: Claude's PTY spinner already includes timing (e.g., "thought for 2s")
-            if let message = message {
+            // Show message from pty_spinner, or fallback "Thinking…" for Live mode
+            if let message = message, !message.isEmpty {
                 Text(message)
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textSecondary)
+            } else {
+                Text("Thinking…")
                     .font(Typography.terminalSmall)
                     .foregroundStyle(ColorSystem.textSecondary)
             }
