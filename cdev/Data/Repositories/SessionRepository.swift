@@ -97,6 +97,17 @@ final class SessionRepository: SessionStorageProtocol, SettingsStorageProtocol {
         }
     }
 
+    /// Currently selected session runtime (Claude or Codex)
+    var selectedSessionRuntime: AgentRuntime {
+        get {
+            let raw = defaults.string(forKey: Constants.UserDefaults.selectedSessionRuntime)
+            return AgentRuntime(rawValue: raw ?? AgentRuntime.claude.rawValue) ?? .claude
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Constants.UserDefaults.selectedSessionRuntime)
+        }
+    }
+
     /// Clear the selected session ID
     func clearSelectedSessionId() {
         defaults.removeObject(forKey: Constants.UserDefaults.selectedSessionId)

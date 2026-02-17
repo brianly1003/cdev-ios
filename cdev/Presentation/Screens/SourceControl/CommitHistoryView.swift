@@ -1,5 +1,32 @@
 import SwiftUI
 
+private struct GraphLayoutMetrics {
+    let columns: Int
+    let gutterWidth: CGFloat
+    let laneSpacing: CGFloat
+    let laneInset: CGFloat
+    let rowHeight: CGFloat
+    let nodeSize: CGFloat
+}
+
+private enum GraphPalette {
+    static let laneColors: [Color] = [
+        Color(hex: "#49C6E5"), // Aegean blue
+        Color(hex: "#6DD3A0"), // olive green
+        Color(hex: "#F4C06A"), // antique gold
+        Color(hex: "#F08A6A"), // terracotta
+        Color(hex: "#87C9FF"), // ionian sky
+        Color(hex: "#9AD1D4"), // marble aqua
+        Color(hex: "#E6B8A2"), // sand
+        Color(hex: "#6FB3B8")  // sea glass
+    ]
+
+    static func color(for lane: Int) -> Color {
+        guard !laneColors.isEmpty else { return ColorSystem.primary }
+        return laneColors[abs(lane) % laneColors.count]
+    }
+}
+
 // MARK: - Commit History View
 
 /// Compact terminal-style commit history with optional git graph visualization
@@ -14,6 +41,7 @@ struct CommitHistoryView: View {
     @State private var selectedCommit: GitCommitNode?
     @State private var searchText = ""
     @State private var showGraph = true
+    @State private var compactMode = true
     @FocusState private var isSearchFocused: Bool
 
     init(workspaceId: String) {
@@ -30,6 +58,46 @@ struct CommitHistoryView: View {
             commit.shortSha?.lowercased().contains(query) == true ||
             commit.sha.lowercased().contains(query)
         }
+    }
+
+    private var indexedFilteredCommits: [(offset: Int, commit: GitCommitNode)] {
+        Array(filteredCommits.enumerated()).map { item in
+            (offset: item.offset, commit: item.element)
+        }
+    }
+
+    private var graphColumns: Int {
+        max(1, viewModel.maxColumns)
+    }
+
+    private var graphLayout: GraphLayoutMetrics {
+        let laneInset: CGFloat = compactMode ? 8 : 10
+        let preferredLaneSpacing: CGFloat = compactMode
+            ? (layout.isCompact ? 9 : 10)
+            : (layout.isCompact ? 10 : 12)
+        let minimumLaneSpacing: CGFloat = compactMode ? 5.5 : 7
+        let targetGutterWidth: CGFloat = compactMode
+            ? (layout.isCompact ? 112 : 148)
+            : (layout.isCompact ? 124 : 176)
+        let availableWidth = max(0, targetGutterWidth - laneInset * 2)
+        let fittedLaneSpacing = max(
+            minimumLaneSpacing,
+            min(preferredLaneSpacing, availableWidth / CGFloat(max(1, graphColumns)))
+        )
+        let gutterWidth = laneInset * 2 + fittedLaneSpacing * CGFloat(graphColumns)
+
+        return GraphLayoutMetrics(
+            columns: graphColumns,
+            gutterWidth: gutterWidth,
+            laneSpacing: fittedLaneSpacing,
+            laneInset: laneInset,
+            rowHeight: compactMode ? (layout.isCompact ? 44 : 46) : (layout.isCompact ? 52 : 56),
+            nodeSize: compactMode ? 7 : 9
+        )
+    }
+
+    private var toolbarButtonSize: CGFloat {
+        layout.isCompact ? 42 : 44
     }
 
     var body: some View {
@@ -58,12 +126,38 @@ struct CommitHistoryView: View {
                     .foregroundStyle(ColorSystem.primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showGraph.toggle()
-                        Haptics.selection()
-                    } label: {
-                        Image(systemName: showGraph ? "chart.bar.xaxis" : "list.bullet")
-                            .font(.system(size: layout.iconMedium))
+                    HStack(spacing: layout.contentSpacing) {
+                        Button {
+                            compactMode.toggle()
+                            Haptics.selection()
+                        } label: {
+                            Image(systemName: compactMode ? "rectangle.compress.vertical" : "rectangle.expand.vertical")
+                                .font(.system(size: layout.iconMedium))
+                                .frame(width: toolbarButtonSize, height: toolbarButtonSize)
+                                .background(ColorSystem.terminalBgElevated.opacity(0.95))
+                                .overlay(
+                                    Circle()
+                                        .stroke(ColorSystem.terminalBgHighlight.opacity(0.7), lineWidth: 0.8)
+                                )
+                                .clipShape(Circle())
+                                .contentShape(Circle())
+                        }
+
+                        Button {
+                            showGraph.toggle()
+                            Haptics.selection()
+                        } label: {
+                            Image(systemName: showGraph ? "point.3.filled.connected.trianglepath.dotted" : "list.bullet")
+                                .font(.system(size: layout.iconMedium))
+                                .frame(width: toolbarButtonSize, height: toolbarButtonSize)
+                                .background(ColorSystem.terminalBgElevated.opacity(0.95))
+                                .overlay(
+                                    Circle()
+                                        .stroke(ColorSystem.terminalBgHighlight.opacity(0.7), lineWidth: 0.8)
+                                )
+                                .clipShape(Circle())
+                                .contentShape(Circle())
+                        }
                     }
                 }
             }
@@ -123,28 +217,56 @@ struct CommitHistoryView: View {
         .background(ColorSystem.terminalBgElevated)
     }
 
+    private var commitTableHeader: some View {
+        HStack(spacing: layout.tightSpacing) {
+            if showGraph {
+                Text("Graph")
+                    .frame(width: graphLayout.gutterWidth, alignment: .leading)
+            }
+            Text("Description")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Commit")
+                .frame(width: 78, alignment: .leading)
+            Text("Author")
+                .frame(width: 132, alignment: .leading)
+            Text("Date")
+                .frame(width: 94, alignment: .trailing)
+        }
+        .font(Typography.badge)
+        .foregroundStyle(ColorSystem.textTertiary)
+        .padding(.horizontal, layout.standardPadding)
+        .padding(.vertical, 6)
+        .background(ColorSystem.terminalBgElevated)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ColorSystem.terminalBgHighlight.opacity(0.6))
+                .frame(height: 0.7)
+        }
+    }
+
     // MARK: - Commit List
 
     private var commitList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(filteredCommits) { commit in
+                if !layout.isCompact {
+                    commitTableHeader
+                }
+
+                ForEach(indexedFilteredCommits, id: \.offset) { item in
+                    let commit = item.commit
                     GitGraphRow(
                         commit: commit,
-                        maxColumns: viewModel.maxColumns,
                         showGraph: showGraph,
                         isSelected: selectedCommit?.id == commit.id,
-                        layout: layout
+                        layout: layout,
+                        compactMode: compactMode,
+                        graphLayout: graphLayout,
+                        rowIndex: item.offset
                     )
                     .onTapGesture {
                         selectedCommit = commit
                         Haptics.selection()
-                    }
-
-                    // Divider
-                    if commit.id != filteredCommits.last?.id {
-                        Divider()
-                            .background(ColorSystem.terminalBgHighlight)
                     }
                 }
 
@@ -307,189 +429,324 @@ final class CommitHistoryViewModel: ObservableObject {
 
 // MARK: - Git Graph Row
 
-/// Compact row with git graph visualization and commit info
-struct GitGraphRow: View {
+/// SourceTree-like row: stable graph gutter + table-like metadata columns
+private struct GitGraphRow: View {
     let commit: GitCommitNode
-    let maxColumns: Int
     let showGraph: Bool
     let isSelected: Bool
     let layout: ResponsiveLayout
+    let compactMode: Bool
+    let graphLayout: GraphLayoutMetrics
+    let rowIndex: Int
 
-    private let columnWidth: CGFloat = 16
-    private let nodeSize: CGFloat = 8
+    private var graphColumns: Int { max(1, graphLayout.columns) }
+    private var laneSpacing: CGFloat { graphLayout.laneSpacing }
+    private var laneInsetX: CGFloat { graphLayout.laneInset }
+    private var rowHeight: CGFloat { graphLayout.rowHeight }
+    private var nodeSize: CGFloat { commit.isMergeCommit ? graphLayout.nodeSize + 1 : graphLayout.nodeSize }
+    private var currentColumn: Int { commit.graphPosition?.column ?? 0 }
+    private var primaryInlineRefs: [GitCommitRef] {
+        Array((commit.refs ?? []).prefix(compactMode ? 1 : 2))
+    }
+    private var hiddenInlineRefCount: Int {
+        max(0, (commit.refs?.count ?? 0) - primaryInlineRefs.count)
+    }
+    private var inlineRefOffsetX: CGFloat {
+        let proposed = xPosition(for: currentColumn) + nodeSize / 2 + 4
+        let reservedWidth: CGFloat = compactMode ? 34 : 56
+        return min(max(0, proposed), max(0, graphLayout.gutterWidth - reservedWidth))
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Graph visualization (optional)
+        HStack(alignment: .center, spacing: layout.tightSpacing) {
             if showGraph {
                 graphView
-                    .frame(width: CGFloat(max(1, maxColumns)) * columnWidth + 8)
             }
 
-            // Commit info
-            commitInfo
-                .padding(.leading, showGraph ? 0 : layout.smallPadding)
-
-            Spacer(minLength: layout.tightSpacing)
-
-            // Refs (tags, branches) and date
-            HStack(spacing: layout.tightSpacing) {
-                refsView
-                dateView
+            if layout.isCompact {
+                compactDetails
+            } else {
+                regularDetails
             }
         }
-        .padding(.horizontal, layout.smallPadding)
-        .padding(.vertical, layout.tightSpacing)
-        .background(isSelected ? ColorSystem.primary.opacity(0.1) : Color.clear)
+        .padding(.horizontal, layout.standardPadding)
+        .padding(.vertical, layout.ultraTightSpacing + 2)
+        .frame(minHeight: rowHeight + 8)
+        .background(rowBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ColorSystem.terminalBgHighlight.opacity(0.45))
+                .frame(height: 0.7)
+        }
         .contentShape(Rectangle())
+    }
+
+    // MARK: - Layouts
+
+    private var compactDetails: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(commit.subject)
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textPrimary)
+                .lineLimit(compactMode ? 1 : 2)
+                .truncationMode(.tail)
+
+            HStack(spacing: 4) {
+                Text(commit.displaySha)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color(hex: "#84D7EF"))
+                Text("•")
+                    .font(Typography.badge)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+                Text(commit.author)
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text(commit.displayRelativeDate)
+                    .font(Typography.badge)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var regularDetails: some View {
+        HStack(spacing: layout.contentSpacing) {
+            Text(commit.subject)
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textPrimary)
+                .lineLimit(compactMode ? 1 : 2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(commit.displaySha)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color(hex: "#84D7EF"))
+                .frame(width: 78, alignment: .leading)
+
+            Text(commit.author)
+                .font(Typography.terminalSmall)
+                .foregroundStyle(ColorSystem.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: 132, alignment: .leading)
+
+            Text(commit.displayRelativeDate)
+                .font(Typography.badge)
+                .foregroundStyle(ColorSystem.textQuaternary)
+                .frame(width: 94, alignment: .trailing)
+        }
     }
 
     // MARK: - Graph View
 
     private var graphView: some View {
-        Canvas { context, size in
-            let rowHeight = size.height
-            let midY = rowHeight / 2
-            let column = commit.graphPosition?.column ?? 0
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(ColorSystem.terminalBgElevated.opacity(0.38))
 
-            // Draw lines from graph position
-            if let lines = commit.graphPosition?.lines {
-                for line in lines {
-                    drawLine(context: context, line: line, midY: midY, rowHeight: rowHeight)
+            Canvas { context, size in
+                let centerY = size.height / 2
+
+                drawLaneGuides(context: context, size: size)
+
+                if let lines = commit.graphPosition?.lines, !lines.isEmpty {
+                    for line in lines {
+                        drawLine(context: context, line: line, centerY: centerY, rowHeight: size.height)
+                    }
+                } else {
+                    drawStem(context: context, column: currentColumn, rowHeight: size.height)
                 }
-            } else {
-                // Default: draw straight line through commit
-                var path = Path()
-                let x = CGFloat(column) * columnWidth + columnWidth / 2
-                path.move(to: CGPoint(x: x, y: 0))
-                path.addLine(to: CGPoint(x: x, y: rowHeight))
-                context.stroke(path, with: .color(branchColor(for: column)), lineWidth: 1.5)
+
+                let nodeX = xPosition(for: currentColumn)
+                let nodeRect = CGRect(
+                    x: nodeX - nodeSize / 2,
+                    y: centerY - nodeSize / 2,
+                    width: nodeSize,
+                    height: nodeSize
+                )
+                let nodeColor = branchColor(for: currentColumn)
+
+                if commit.isMergeCommit {
+                    context.stroke(
+                        Circle().path(in: nodeRect),
+                        with: .color(nodeColor),
+                        lineWidth: 1.8
+                    )
+                    context.fill(
+                        Circle().path(in: nodeRect.insetBy(dx: 1.8, dy: 1.8)),
+                        with: .color(Color(hex: "#EDE5D6"))
+                    )
+                } else {
+                    context.fill(Circle().path(in: nodeRect), with: .color(nodeColor))
+                    context.stroke(
+                        Circle().path(in: nodeRect),
+                        with: .color(Color(hex: "#EDE5D6").opacity(0.85)),
+                        lineWidth: 0.7
+                    )
+                }
             }
 
-            // Draw node (commit dot)
-            let nodeX = CGFloat(column) * columnWidth + columnWidth / 2
-            let nodeRect = CGRect(
-                x: nodeX - nodeSize / 2,
-                y: midY - nodeSize / 2,
-                width: nodeSize,
-                height: nodeSize
-            )
-
-            // Merge commit = hollow circle, regular = filled
-            if commit.isMergeCommit {
-                context.stroke(
-                    Circle().path(in: nodeRect),
-                    with: .color(branchColor(for: column)),
-                    lineWidth: 2
-                )
-            } else {
-                context.fill(
-                    Circle().path(in: nodeRect),
-                    with: .color(branchColor(for: column))
-                )
+            if !primaryInlineRefs.isEmpty {
+                HStack(spacing: 2) {
+                    ForEach(primaryInlineRefs) { ref in
+                        InlineNodeRefBadge(ref: ref, compact: compactMode)
+                    }
+                    if hiddenInlineRefCount > 0 {
+                        Text("+\(hiddenInlineRefCount)")
+                            .font(.system(size: 7, weight: .semibold))
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+                }
+                .offset(x: inlineRefOffsetX, y: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .frame(width: graphLayout.gutterWidth, height: rowHeight)
+        .clipped()
+    }
+
+    private func drawLaneGuides(context: GraphicsContext, size: CGSize) {
+        for lane in 0..<graphColumns {
+            let x = xPosition(for: lane)
+            var guide = Path()
+            guide.move(to: CGPoint(x: x, y: 0))
+            guide.addLine(to: CGPoint(x: x, y: size.height))
+
+            let isCurrent = lane == currentColumn
+            let color = isCurrent
+                ? Color(hex: "#9ED4F1").opacity(0.24)
+                : Color(hex: "#7994A8").opacity(0.18)
+            context.stroke(guide, with: .color(color), lineWidth: isCurrent ? 1.0 : 0.7)
         }
     }
 
-    private func drawLine(context: GraphicsContext, line: GitGraphLine, midY: CGFloat, rowHeight: CGFloat) {
-        let fromX = CGFloat(line.fromColumn) * columnWidth + columnWidth / 2
-        let toX = CGFloat(line.toColumn) * columnWidth + columnWidth / 2
+    private func drawStem(context: GraphicsContext, column: Int, rowHeight: CGFloat) {
+        var path = Path()
+        let x = xPosition(for: column)
+        path.move(to: CGPoint(x: x, y: 0))
+        path.addLine(to: CGPoint(x: x, y: rowHeight))
+        context.stroke(path, with: .color(branchColor(for: column)), lineWidth: compactMode ? 1.8 : 2.1)
+    }
+
+    private func drawLine(context: GraphicsContext, line: GitGraphLine, centerY: CGFloat, rowHeight: CGFloat) {
+        let fromX = xPosition(for: line.fromColumn)
+        let toX = xPosition(for: line.toColumn)
 
         var path = Path()
 
         switch line.lineType {
         case .straight:
             path.move(to: CGPoint(x: fromX, y: 0))
-            path.addLine(to: CGPoint(x: toX, y: rowHeight))
-
+            if fromX == toX {
+                path.addLine(to: CGPoint(x: toX, y: rowHeight))
+            } else {
+                let controlY = rowHeight * 0.5
+                path.addCurve(
+                    to: CGPoint(x: toX, y: rowHeight),
+                    control1: CGPoint(x: fromX, y: controlY * 0.7),
+                    control2: CGPoint(x: toX, y: controlY * 1.3)
+                )
+            }
         case .mergeLeft, .mergeRight:
             path.move(to: CGPoint(x: fromX, y: 0))
-            path.addQuadCurve(
-                to: CGPoint(x: toX, y: midY),
-                control: CGPoint(x: fromX, y: midY)
+            path.addCurve(
+                to: CGPoint(x: toX, y: centerY),
+                control1: CGPoint(x: fromX, y: rowHeight * 0.45),
+                control2: CGPoint(x: toX, y: rowHeight * 0.75)
             )
-
         case .branchLeft, .branchRight:
-            path.move(to: CGPoint(x: fromX, y: midY))
-            path.addQuadCurve(
+            path.move(to: CGPoint(x: fromX, y: centerY))
+            path.addCurve(
                 to: CGPoint(x: toX, y: rowHeight),
-                control: CGPoint(x: toX, y: midY)
+                control1: CGPoint(x: fromX, y: rowHeight * 0.65),
+                control2: CGPoint(x: toX, y: rowHeight * 0.35)
             )
-
         case .horizontal:
-            path.move(to: CGPoint(x: fromX, y: midY))
-            path.addLine(to: CGPoint(x: toX, y: midY))
-
+            path.move(to: CGPoint(x: fromX, y: centerY))
+            path.addLine(to: CGPoint(x: toX, y: centerY))
         case .cross:
-            // Vertical line
             path.move(to: CGPoint(x: fromX, y: 0))
             path.addLine(to: CGPoint(x: fromX, y: rowHeight))
+            path.move(to: CGPoint(x: fromX, y: centerY))
+            path.addLine(to: CGPoint(x: toX, y: centerY))
         }
 
-        context.stroke(path, with: .color(branchColor(for: line.fromColumn)), lineWidth: 1.5)
+        context.stroke(
+            path,
+            with: .color(branchColor(for: line.fromColumn)),
+            lineWidth: compactMode ? 1.8 : 2.1
+        )
+    }
+
+    private func xPosition(for column: Int) -> CGFloat {
+        CGFloat(column) * laneSpacing + laneSpacing / 2 + laneInsetX
     }
 
     private func branchColor(for column: Int) -> Color {
-        let colors: [Color] = [
-            ColorSystem.primary,     // Column 0 - main branch
-            ColorSystem.success,     // Column 1
-            ColorSystem.info,        // Column 2
-            ColorSystem.warning,     // Column 3
-            .purple,                 // Column 4+
-            .pink
-        ]
-        return colors[column % colors.count]
+        GraphPalette.color(for: column)
     }
 
-    // MARK: - Commit Info
+    private var rowBackground: some View {
+        let zebra = rowIndex.isMultiple(of: 2)
+            ? ColorSystem.terminalBg.opacity(0.84)
+            : ColorSystem.terminalBgElevated.opacity(0.44)
+        return Rectangle()
+            .fill(isSelected ? ColorSystem.primary.opacity(0.16) : zebra)
+    }
+}
 
-    private var commitInfo: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // SHA + Message
-            HStack(spacing: layout.tightSpacing) {
-                Text(commit.displaySha)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(ColorSystem.primary)
+private struct InlineNodeRefBadge: View {
+    let ref: GitCommitRef
+    let compact: Bool
 
-                Text(commit.subject)
-                    .font(Typography.terminal)
-                    .foregroundStyle(ColorSystem.textPrimary)
-                    .lineLimit(1)
-            }
-
-            // Author
-            Text(commit.author)
-                .font(Typography.terminalSmall)
-                .foregroundStyle(ColorSystem.textTertiary)
+    var body: some View {
+        HStack(spacing: 1) {
+            Image(systemName: iconName)
+                .font(.system(size: compact ? 5 : 6))
+            Text(displayName)
+                .font(.system(size: compact ? 7 : 8, weight: .semibold))
                 .lineLimit(1)
         }
+        .foregroundStyle(refColor)
+        .padding(.horizontal, compact ? 3 : 4)
+        .padding(.vertical, 1)
+        .background(refColor.opacity(0.14))
+        .clipShape(Capsule())
     }
 
-    // MARK: - Refs View
+    private var displayName: String {
+        let trimmed: String
+        switch ref.refType {
+        case .head:
+            trimmed = "HEAD"
+        case .remoteBranch where ref.name.hasPrefix("origin/"):
+            trimmed = String(ref.name.dropFirst(7))
+        default:
+            trimmed = ref.name
+        }
+        let maxLen = compact ? 8 : 12
+        return trimmed.count > maxLen ? String(trimmed.prefix(maxLen - 1)) + "…" : trimmed
+    }
 
-    private var refsView: some View {
-        HStack(spacing: 2) {
-            if let refs = commit.refs?.prefix(2) {
-                ForEach(Array(refs)) { ref in
-                    RefBadgeCompact(ref: ref)
-                }
-
-                if (commit.refs?.count ?? 0) > 2 {
-                    Text("+\((commit.refs?.count ?? 0) - 2)")
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(ColorSystem.textTertiary)
-                }
-            }
+    private var iconName: String {
+        switch ref.refType {
+        case .head: return "arrow.right"
+        case .localBranch: return "arrow.triangle.branch"
+        case .remoteBranch: return "cloud"
+        case .tag: return "tag"
         }
     }
 
-    // MARK: - Date View
-
-    private var dateView: some View {
-        Text(commit.displayRelativeDate)
-            .font(Typography.terminalSmall)
-            .foregroundStyle(ColorSystem.textQuaternary)
-            .frame(minWidth: 32, alignment: .trailing)
+    private var refColor: Color {
+        switch ref.refType {
+        case .head: return .orange
+        case .localBranch: return ColorSystem.success
+        case .remoteBranch: return ColorSystem.info
+        case .tag: return .yellow
+        }
     }
 }
 

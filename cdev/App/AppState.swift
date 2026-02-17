@@ -565,10 +565,14 @@ final class AppState: ObservableObject {
                 AppLogger.log("[AppState] connectToRemoteWorkspace: Using existing session: \(session.id)")
             } else {
                 // Start a new session
+                let runtime = sessionRepository.selectedSessionRuntime
                 AppLogger.log("[AppState] connectToRemoteWorkspace: Starting new session for workspace...")
-                let session = try await WorkspaceManagerService.shared.startSession(workspaceId: remoteWorkspace.id)
+                let session = try await WorkspaceManagerService.shared.startSession(
+                    workspaceId: remoteWorkspace.id,
+                    runtime: runtime
+                )
                 activeSessionId = session.id
-                AppLogger.log("[AppState] connectToRemoteWorkspace: Started session: \(session.id)")
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Started session: \(session.id), runtime: \(runtime.rawValue)")
             }
 
             // Set the session ID for DashboardViewModel to use

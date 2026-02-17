@@ -58,12 +58,16 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     /// Currently watched session ID (nil if not watching)
     var watchedSessionId: String? { get }
 
-    /// Watch a session for real-time updates using workspace/session/watch API
+    /// Watch a session for real-time updates.
+    /// Runtime-aware routing:
+    /// - workspaceScoped runtimes: workspace/session/watch
+    /// - runtimeScoped runtimes: session/watch with agent_type
     /// - Parameters:
     ///   - sessionId: The session ID to watch
-    ///   - workspaceId: The workspace ID (required for workspace/session/watch)
+    ///   - workspaceId: The workspace ID (required for workspaceScoped watch)
+    ///   - runtime: Agent runtime to watch
     /// - Throws: AppError.workspaceIdRequired if workspaceId is nil
-    func watchSession(_ sessionId: String, workspaceId: String?) async throws
+    func watchSession(_ sessionId: String, workspaceId: String?, runtime: AgentRuntime) async throws
 
     /// Stop watching the current session
     /// Sends unwatch_session command

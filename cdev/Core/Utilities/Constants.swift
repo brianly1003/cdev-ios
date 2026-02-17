@@ -72,6 +72,7 @@ enum Constants {
         static let theme = "app_theme"
         static let diffZoomScale = "diff_zoom_scale"
         static let selectedSessionId = "selected_session_id"
+        static let selectedSessionRuntime = "selected_session_runtime"
         static let useElementsView = "use_elements_view"  // Feature flag for Elements API UI
     }
 }

@@ -203,8 +203,10 @@ struct WorkspaceManagerView: View {
                 }
 
                 if viewModel.isConnected {
-                    // Already connected - just refresh workspace list
-                    await viewModel.refreshWorkspaces()
+                    // Already connected - ensure list is loaded
+                    if viewModel.workspaces.isEmpty {
+                        await viewModel.refreshWorkspaces()
+                    }
                 } else if viewModel.hasSavedManager {
                     // Not connected but have saved manager - try to reconnect with retry
                     await viewModel.connectToSavedManager()
@@ -426,11 +428,33 @@ struct WorkspaceManagerView: View {
             .scrollContentBackground(.hidden)
             .contentMargins(.top, 0, for: .scrollContent)
             .refreshable {
-                await viewModel.refreshWorkspaces()
+                await refreshWorkspaceList()
             }
             .onChange(of: scrollRequest) { _, direction in
                 guard let direction = direction else { return }
                 handleScrollRequest(direction: direction, proxy: proxy)
+            }
+        }
+    }
+
+    private func refreshWorkspaceList() async {
+        Haptics.light()
+        await viewModel.refreshWorkspaces()
+        Haptics.success()
+    }
+
+    private func refreshablePlaceholder<Content: View>(
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        GeometryReader { geometry in
+            ScrollView {
+                content()
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: geometry.size.height)
+            }
+            .scrollIndicators(.hidden)
+            .refreshable {
+                await refreshWorkspaceList()
             }
         }
     }
@@ -529,7 +553,7 @@ struct WorkspaceManagerView: View {
                 .font(Typography.body)
                 .foregroundStyle(ColorSystem.textSecondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Empty State
@@ -599,7 +623,7 @@ struct WorkspaceManagerView: View {
                 .buttonStyle(.plain)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Workspace List Content
@@ -624,9 +648,13 @@ struct WorkspaceManagerView: View {
 
             // Workspace list
             if viewModel.isLoading && viewModel.workspaces.isEmpty {
-                loadingView
+                refreshablePlaceholder {
+                    loadingView
+                }
             } else if viewModel.filteredWorkspaces.isEmpty {
-                emptyStateView
+                refreshablePlaceholder {
+                    emptyStateView
+                }
             } else {
                 workspaceList
             }

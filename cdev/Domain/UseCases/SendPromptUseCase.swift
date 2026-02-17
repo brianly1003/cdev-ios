@@ -1,8 +1,8 @@
 import Foundation
 
-/// Use case for sending prompts to Claude
+/// Use case for sending prompts to the selected runtime (Claude/Codex)
 protocol SendPromptUseCase {
-    func execute(prompt: String, mode: SessionMode, sessionId: String?) async throws
+    func execute(prompt: String, mode: SessionMode, sessionId: String?, runtime: AgentRuntime) async throws
 }
 
 final class DefaultSendPromptUseCase: SendPromptUseCase {
@@ -12,15 +12,20 @@ final class DefaultSendPromptUseCase: SendPromptUseCase {
         self.agentRepository = agentRepository
     }
 
-    func execute(prompt: String, mode: SessionMode = .new, sessionId: String? = nil) async throws {
+    func execute(
+        prompt: String,
+        mode: SessionMode = .new,
+        sessionId: String? = nil,
+        runtime: AgentRuntime = .claude
+    ) async throws {
         // Validate prompt
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AppError.commandFailed(reason: "Prompt cannot be empty")
         }
 
-        AppLogger.log("Sending prompt to Claude (mode: \(mode.rawValue))")
+        AppLogger.log("Sending prompt (runtime: \(runtime.rawValue), mode: \(mode.rawValue))")
 
-        try await agentRepository.runClaude(prompt: prompt, mode: mode, sessionId: sessionId)
+        try await agentRepository.runClaude(prompt: prompt, mode: mode, sessionId: sessionId, runtime: runtime)
 
         AppLogger.log("Prompt sent successfully", type: .success)
     }

@@ -68,6 +68,7 @@
 		91C4CA8CA584AB95BA1BA32B /* AppleSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB189FB5810B891E1D43B521 /* AppleSpeechService.swift */; };
 		93FF41E59E7AB360AC48DC8A /* FileCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8868ADD6804B4C22DFDE52 /* FileCache.swift */; };
 		947A46A68C3AE1E595D8A616 /* ImageProcessingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6779D99FDC51DAA11188A550 /* ImageProcessingService.swift */; };
+		18541085761E40A598A89B39 /* AgentRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978C8327476249C889B978E8 /* AgentRuntime.swift */; };
 		9A7A336A148FA0DA38838642 /* ExternalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7989767071B7CC85C7E85FD /* ExternalSession.swift */; };
 		9BC7B7AAF9ED702C33824CA6 /* AgentCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0333578E8E5D6052061F9550 /* AgentCommand.swift */; };
 		9D0F34112D1728D5F371F1C9 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 530ABD7507183772D4BFE60D /* Constants.swift */; };
@@ -292,6 +293,7 @@
 		F6725ECF2DD0E1A613C4A722 /* Gradients.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gradients.swift; sourceTree = "<group>"; };
 		F7401EB48F061AD156DE555C /* FileEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileEntry.swift; sourceTree = "<group>"; };
 		F7989767071B7CC85C7E85FD /* ExternalSession.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExternalSession.swift; path = Domain/Models/ExternalSession.swift; sourceTree = "<group>"; };
+		978C8327476249C889B978E8 /* AgentRuntime.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentRuntime.swift; path = Domain/Models/AgentRuntime.swift; sourceTree = "<group>"; };
 		FB189FB5810B891E1D43B521 /* AppleSpeechService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppleSpeechService.swift; sourceTree = "<group>"; };
 		FE520AEFB33B449FA5EE864F /* WorkspaceManagerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManagerViewModel.swift; sourceTree = "<group>"; };
 		FE55104071AA60BF9C9140A0 /* TermsOfServiceView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TermsOfServiceView.swift; sourceTree = "<group>"; };
@@ -887,6 +889,7 @@
 		DB958522DCB9E22307E0A4E4 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				978C8327476249C889B978E8 /* AgentRuntime.swift */,
 				F7989767071B7CC85C7E85FD /* ExternalSession.swift */,
 			);
 			name = Models;
@@ -1285,6 +1288,7 @@
 				5ECB36BF8EB53239C416E4F1 /* ImageAttachmentStrip.swift in Sources */,
 				C277167C81BCF3CB5ADEF983 /* PrivacyPolicyView.swift in Sources */,
 				AFE5CBC0664207415920B199 /* TermsOfServiceView.swift in Sources */,
+				18541085761E40A598A89B39 /* AgentRuntime.swift in Sources */,
 				9A7A336A148FA0DA38838642 /* ExternalSession.swift in Sources */,
 				428BD8CBD498AFD9246FC901 /* ExternalSessionManager.swift in Sources */,
 				B890F62D2DA050895505F87D /* ExternalSessionsView.swift in Sources */,

@@ -139,7 +139,7 @@ struct DashboardView: View {
                             elements: viewModel.chatElements,  // NEW: Elements API UI
                             onClear: { Task { await viewModel.clearLogs() } },
                             isVisible: viewModel.selectedTab == .logs,
-                            isInputFocused: isInputFocused,
+                            isInputFocused: isTextFieldEditing,
                             isStreaming: viewModel.isStreaming,
                             spinnerMessage: viewModel.spinnerMessage,
                             hasMoreMessages: viewModel.messagesHasMore,
@@ -234,10 +234,11 @@ struct DashboardView: View {
                                 onSend: { Task { await viewModel.sendPrompt() } },
                                 onStop: { Task { await viewModel.stopClaude() } },
                                 onToggleBashMode: { viewModel.toggleBashMode() },
-                                onFocusChange: { focused in
-                                    // Update the editing state (for command suggestions)
-                                    isTextFieldEditing = focused
-                                },
+                                onFocusChange: nil,
+                                // Agent selector - switch between Claude/Codex/etc.
+                                selectedRuntime: $viewModel.selectedSessionRuntime,
+                                // Runtime switch orchestration is handled in DashboardViewModel.selectedSessionRuntime didSet.
+                                onAgentChanged: nil,
                                 // Voice input (beta feature - only passed when enabled)
                                 voiceInputViewModel: voiceInputSettings.isEnabled ? voiceInputViewModel : nil,
                                 // Image attachments
@@ -277,17 +278,17 @@ struct DashboardView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                // Only ignore keyboard safe area when chat input is focused (uses manual handling)
-                // When search bar is focused, let SwiftUI handle keyboard avoidance normally
-                .ignoresSafeArea(.keyboard, edges: isInputFocused ? .bottom : [])
+                // Use UITextView editing state (more reliable than FocusState for UIViewRepresentable)
+                .ignoresSafeArea(.keyboard, edges: isTextFieldEditing ? .bottom : [])
                 .background(ColorSystem.terminalBg)
                 // Floating keyboard dismiss button - tracks keyboard and positions itself
                 // Only add action bar height offset on logs tab (which has the action bar)
+                // Note: actionBarHeight already includes agent selector bar height (measured via GeometryReader)
                 .overlay(alignment: .trailing) {
                     FloatingKeyboardDismissButton(
                         inputBarHeight: viewModel.selectedTab == .logs ? actionBarHeight : 0,
-                        promptText: viewModel.selectedTab == .logs ? viewModel.promptText : "",
-                        isBashMode: viewModel.selectedTab == .logs && viewModel.isBashMode
+                        promptText: viewModel.selectedTab == .logs ? viewModel.promptText : ""
+                        // isBashMode no longer needed - bash indicator is part of agent selector bar
                     )
                     .padding(.trailing, Spacing.md)
                 }
@@ -297,6 +298,7 @@ struct DashboardView: View {
                     // Dismiss keyboard globally
                     hideKeyboard()
                     isInputFocused = false
+                    isTextFieldEditing = false
 
                     // Reset Terminal search when leaving logs tab
                     if oldTab == .logs && viewModel.terminalSearchState.isActive {
@@ -339,6 +341,7 @@ struct DashboardView: View {
                         hasMore: viewModel.sessionsHasMore,
                         isLoadingMore: viewModel.isLoadingMoreSessions,
                         agentRepository: viewModel.agentRepository,
+                        selectedRuntime: $viewModel.selectedSessionRuntime,
                         onSelect: { sessionId in
                             Task { await viewModel.resumeSession(sessionId) }
                         },
@@ -1043,6 +1046,10 @@ struct ActionBarView: View {
     let onToggleBashMode: () -> Void
     var onFocusChange: ((Bool) -> Void)?  // Callback to update focus state (workaround for FocusState limitation)
 
+    // Agent selector - switch between Claude/Codex/etc.
+    @Binding var selectedRuntime: AgentRuntime
+    var onAgentChanged: ((AgentRuntime) -> Void)?
+
     // Voice input (optional - beta feature)
     var voiceInputViewModel: VoiceInputViewModel?
 
@@ -1109,9 +1116,8 @@ struct ActionBarView: View {
 
     /// Whether to show command suggestions
     private var showSuggestions: Bool {
-        // Use isEditing (from UITextView delegate) instead of isFocused.wrappedValue
-        // FocusState doesn't work reliably with UIViewRepresentable
-        !suggestedCommands.isEmpty && isEditing
+        // Slash commands only activate when "/" is the first character.
+        !suggestedCommands.isEmpty && promptText.hasPrefix("/")
     }
 
     /// Whether sending is disabled (Claude is running or waiting)
@@ -1127,9 +1133,9 @@ struct ActionBarView: View {
     /// Placeholder text based on Claude state and bash mode
     private var placeholderText: String {
         if claudeState == .running {
-            return "Claude is running..."
+            return "\(selectedRuntime.displayName) is running..."
         }
-        return isBashMode ? "Run bash command..." : "Ask Claude..."
+        return isBashMode ? "Run bash command..." : "Ask \(selectedRuntime.displayName)..."
     }
 
     /// Whether any images are being uploaded
@@ -1156,11 +1162,11 @@ struct ActionBarView: View {
         isEditing && !areActionsExpanded && !(promptText.isEmpty && shouldAutoShowButtons)
     }
 
-    /// Dynamic offset for floating popups - accounts for bash mode indicator height
+    /// Dynamic offset for floating popups - accounts for agent selector bar height
     private var popupOffset: CGFloat {
         let baseOffset: CGFloat = -64  // Input row height (~56pt) + gap (~8pt)
-        let bashIndicatorHeight: CGFloat = isBashMode ? -20 : 0  // Extra height when bash mode shown
-        return baseOffset + bashIndicatorHeight
+        let agentSelectorHeight: CGFloat = -28  // Agent selector bar always visible (~24pt + padding)
+        return baseOffset + agentSelectorHeight
     }
 
     // MARK: - Timer Helpers
@@ -1272,7 +1278,10 @@ struct ActionBarView: View {
                             }
                         }
                     )
-                    .focused(isFocused, onFocusChange: onFocusChange)
+                    .focused(isFocused, onFocusChange: { focused in
+                        isEditing = focused
+                        onFocusChange?(focused)
+                    })
                     .autocorrectionDisabled(isBashMode)  // Disable autocorrection in bash mode
                     .padding(.vertical, inputVerticalPadding)
                     .padding(.leading, inputHorizontalPadding)
@@ -1338,26 +1347,17 @@ struct ActionBarView: View {
             .padding(.horizontal, containerPadding)
             .padding(.vertical, layout.smallPadding)
 
-            // Bash mode indicator - simple text with icon
-            if isBashMode {
-                HStack(spacing: Spacing.xxs) {
-                    Image(systemName: "terminal.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("bash mode enabled")
-                        .font(Typography.terminalSmall)
-                }
-                .foregroundStyle(ColorSystem.success)
-                .padding(.horizontal, containerPadding)
-                .padding(.bottom, Spacing.xs)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            // Cursor-style compact selector bar (always visible)
+            // Shows: Agent selector | bash mode indicator (same line)
+            AgentSelectorBar(
+                selectedRuntime: $selectedRuntime,
+                isBashMode: isBashMode,
+                onAgentChanged: onAgentChanged
+            )
+            .padding(.horizontal, containerPadding)
+            .padding(.bottom, Spacing.xs)
         }
         .background(ColorSystem.terminalBgElevated)
-        // Only add keyboard padding when THIS input is focused (not search bar)
-        .padding(.bottom, isFocused.wrappedValue ? keyboardHeight : 0)
-        // Background for keyboard padding area (prevents black gap)
-        .background(ColorSystem.terminalBg)
         // Command suggestions floating above (hidden when attachment menu is open)
         .overlay(alignment: .bottom) {
             let isAttachmentMenuOpen = showAttachmentMenu?.wrappedValue ?? false
@@ -1417,6 +1417,11 @@ struct ActionBarView: View {
                 .transition(.offset(y: 20).combined(with: .opacity))
             }
         }
+        // Only add keyboard padding when the UITextView is actively editing.
+        // Keep this after popup overlays so overlays are anchored to the input bar, not the padded region.
+        .padding(.bottom, isEditing ? keyboardHeight : 0)
+        // Background for keyboard padding area (prevents black gap)
+        .background(ColorSystem.terminalBg)
         .animation(Animations.stateChange, value: claudeState)
         .animation(Animations.stateChange, value: showSuggestions)
         .animation(Animations.stateChange, value: showAttachmentMenu?.wrappedValue)
@@ -1432,16 +1437,13 @@ struct ActionBarView: View {
                 isFocused.wrappedValue = false
             }
         }
-        .onChange(of: isFocused.wrappedValue) { oldValue, newValue in
-            AppLogger.log("[ActionBarView] Focus changed: \(oldValue) -> \(newValue)")
-            // Reset keyboard height when losing focus
-            if !newValue {
-                keyboardHeight = 0
-            }
-        }
         // Messenger-style: Collapse action buttons when input gains focus
         .onChange(of: isEditing) { oldValue, newValue in
             AppLogger.log("[ActionBar] isEditing changed: \(oldValue) -> \(newValue)")
+            // Reset keyboard offset when editing ends.
+            if !newValue {
+                keyboardHeight = 0
+            }
             if newValue {
                 // Focus gained - collapse action buttons (show chevron)
                 // Close attachment menu immediately when chevron appears
@@ -1481,8 +1483,8 @@ struct ActionBarView: View {
         }
         // Track keyboard height for positioning above keyboard
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
-            // Only track keyboard when this input is focused
-            guard isFocused.wrappedValue else { return }
+            // Only track keyboard when this input is actively editing
+            guard isEditing else { return }
             guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
             // Subtract safe area bottom since we're inside the safe area
             let safeAreaBottom = UIApplication.shared.connectedScenes
@@ -1570,6 +1572,105 @@ private struct EnhancedWorkspaceBadge: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Cursor-Style Agent Selector Bar
+
+/// Cursor IDE-inspired compact agent selector bar
+/// Ultra-minimal text-based design that sits below the input field
+/// Shows: [icon] Agent Name ▼  |  [icon] bash mode enabled
+struct AgentSelectorBar: View {
+    @Binding var selectedRuntime: AgentRuntime
+    var isBashMode: Bool = false
+    var onAgentChanged: ((AgentRuntime) -> Void)?
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    /// Agent color from design system
+    private var agentColor: Color {
+        ColorSystem.Agent.color(for: selectedRuntime)
+    }
+
+    private var sortedRuntimes: [AgentRuntime] {
+        AgentRuntime.allCases.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            // Agent selector dropdown
+            Menu {
+                ForEach(sortedRuntimes) { runtime in
+                    Button {
+                        if selectedRuntime != runtime {
+                            withAnimation(Animations.stateChange) {
+                                selectedRuntime = runtime
+                            }
+                            onAgentChanged?(runtime)
+                            Haptics.selection()
+                        }
+                    } label: {
+                        Label {
+                            Text(runtime.displayName)
+                        } icon: {
+                            Image(systemName: runtime.iconName)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    // Agent icon with brand color
+                    Image(systemName: selectedRuntime.iconName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(agentColor)
+
+                    // Agent name
+                    Text(selectedRuntime.displayName)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    // Dropdown chevron
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(ColorSystem.terminalBgHighlight.opacity(0.6))
+                )
+            }
+            .menuStyle(.borderlessButton)
+
+            // Bash mode indicator (same line, right side)
+            if isBashMode {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("bash")
+                        .font(Typography.terminalSmall)
+                }
+                .foregroundStyle(ColorSystem.success)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(ColorSystem.success.opacity(0.12))
+                )
+                .transition(.scale.combined(with: .opacity))
+            }
+
+            Spacer()
+
+            // Future: Add more selectors here (model, session mode, etc.)
+            // Example: "Sonnet 4.5 ▼" | "Continue ▼"
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(Animations.stateChange, value: isBashMode)
     }
 }
 

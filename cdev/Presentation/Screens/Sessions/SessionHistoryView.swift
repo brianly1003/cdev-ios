@@ -4,6 +4,7 @@ import SwiftUI
 /// Displays conversation messages in a terminal-like format with tool use blocks
 struct SessionHistoryView: View {
     let session: SessionsResponse.SessionInfo
+    let runtime: AgentRuntime
     let workspaceId: String?
     let onResume: (() -> Void)?
     @StateObject private var viewModel: SessionHistoryViewModel
@@ -11,15 +12,18 @@ struct SessionHistoryView: View {
 
     init(
         session: SessionsResponse.SessionInfo,
+        runtime: AgentRuntime,
         agentRepository: AgentRepositoryProtocol,
         workspaceId: String? = nil,
         onResume: (() -> Void)? = nil
     ) {
         self.session = session
+        self.runtime = runtime
         self.workspaceId = workspaceId
         self.onResume = onResume
         _viewModel = StateObject(wrappedValue: SessionHistoryViewModel(
             sessionId: session.sessionId,
+            runtime: runtime,
             workspaceId: workspaceId,
             agentRepository: agentRepository
         ))
@@ -542,6 +546,7 @@ final class SessionHistoryViewModel: ObservableObject {
     @Published var error: AppError?
 
     private let sessionId: String
+    private let runtime: AgentRuntime
     private let workspaceId: String?
     private let agentRepository: AgentRepositoryProtocol
 
@@ -550,8 +555,9 @@ final class SessionHistoryViewModel: ObservableObject {
         messages.map { ChatMessage.from(sessionMessage: $0) }
     }
 
-    init(sessionId: String, workspaceId: String?, agentRepository: AgentRepositoryProtocol) {
+    init(sessionId: String, runtime: AgentRuntime, workspaceId: String?, agentRepository: AgentRepositoryProtocol) {
         self.sessionId = sessionId
+        self.runtime = runtime
         self.workspaceId = workspaceId
         self.agentRepository = agentRepository
     }
@@ -562,14 +568,30 @@ final class SessionHistoryViewModel: ObservableObject {
 
         do {
             // Load messages for session history view
-            // Uses workspace/session/messages when workspaceId is available
-            let response = try await agentRepository.getSessionMessages(
-                sessionId: sessionId,
-                workspaceId: workspaceId,
-                limit: 20,
-                offset: 0,
-                order: "desc"
-            )
+            let response: SessionMessagesResponse
+            switch runtime.sessionMessagesSource {
+            case .runtimeScoped:
+                response = try await agentRepository.getAgentSessionMessages(
+                    runtime: runtime,
+                    sessionId: sessionId,
+                    limit: 20,
+                    offset: 0,
+                    order: "desc"
+                )
+            case .workspaceScoped:
+                guard let workspaceId = workspaceId, !workspaceId.isEmpty else {
+                    throw AppError.workspaceIdRequired
+                }
+                // Uses workspace/session/messages when workspaceId is available
+                response = try await agentRepository.getSessionMessages(
+                    runtime: runtime,
+                    sessionId: sessionId,
+                    workspaceId: workspaceId,
+                    limit: 20,
+                    offset: 0,
+                    order: "desc"
+                )
+            }
             // Reverse to show oldest at top, newest at bottom (chronological order)
             let filtered = response.messages.filter { message in
                 !ChatContentFilter.shouldHideInternalMessage(message.textContent)

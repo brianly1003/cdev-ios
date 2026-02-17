@@ -88,6 +88,93 @@ enum ColorSystem {
     /// Contrast: ~3.2:1 (meets WCAG AA for large text/UI)
     static let textQuaternary = Color(light: "#A0AEC0", dark: "#4A5568")
 
+    // MARK: - Agent Brand Colors (For multi-agent selector)
+    // Desaturated in dark mode following Material Design guidelines
+    // Each agent has a primary color, tint (background), and glow
+    //
+    // EXTENSIBILITY: To add a new agent:
+    // 1. Add the case to AgentRuntime enum
+    // 2. Add color definitions below (or use an existing semantic color)
+    // 3. Update the switch statements in color/tint/glow functions
+
+    enum Agent {
+        // MARK: - Agent Color Definitions
+
+        /// Claude - Cdev Primary Teal
+        /// Warm and inviting, matches Cdev brand identity
+        static let claude = ColorSystem.primary
+        static let claudeTint = ColorSystem.primary.opacity(0.12)
+        static let claudeGlow = ColorSystem.primaryGlow
+
+        /// Codex (OpenAI) - Terminal Mint Green
+        /// Desaturated green for eye comfort
+        static let codex = ColorSystem.success
+        static let codexTint = ColorSystem.success.opacity(0.12)
+        static let codexGlow = ColorSystem.successGlow
+
+        /// Gemini (Google) - Stream Blue
+        /// Calm blue, good for extended viewing
+        static let gemini = ColorSystem.info
+        static let geminiTint = ColorSystem.info.opacity(0.12)
+        static let geminiGlow = ColorSystem.infoGlow
+
+        /// OpenRouter - Twilight Violet
+        /// Distinct purple for multi-model service
+        static let openrouter = ColorSystem.accent
+        static let openrouterTint = ColorSystem.accent.opacity(0.12)
+        static let openrouterGlow = ColorSystem.accentGlow
+
+        /// Aider - Golden Amber
+        /// Warm gold for the friendly coding assistant
+        static let aider = ColorSystem.warning
+        static let aiderTint = ColorSystem.warning.opacity(0.12)
+        static let aiderGlow = ColorSystem.warningGlow
+
+        /// Default fallback for unknown/new agents
+        static let defaultAgent = ColorSystem.textSecondary
+        static let defaultTint = ColorSystem.textSecondary.opacity(0.12)
+        static let defaultGlow = ColorSystem.textSecondary.opacity(0.25)
+
+        // MARK: - Runtime Color Resolution
+
+        /// Get primary color for an agent runtime
+        /// Extend this switch when adding new agents
+        static func color(for runtime: AgentRuntime) -> Color {
+            switch runtime {
+            case .claude: return claude
+            case .codex: return codex
+            // Future agents - uncomment when added to AgentRuntime:
+            // case .gemini: return gemini
+            // case .openrouter: return openrouter
+            // case .aider: return aider
+            }
+        }
+
+        /// Get tint (subtle background) for an agent runtime
+        static func tint(for runtime: AgentRuntime) -> Color {
+            switch runtime {
+            case .claude: return claudeTint
+            case .codex: return codexTint
+            // Future agents:
+            // case .gemini: return geminiTint
+            // case .openrouter: return openrouterTint
+            // case .aider: return aiderTint
+            }
+        }
+
+        /// Get glow effect color for an agent runtime
+        static func glow(for runtime: AgentRuntime) -> Color {
+            switch runtime {
+            case .claude: return claudeGlow
+            case .codex: return codexGlow
+            // Future agents:
+            // case .gemini: return geminiGlow
+            // case .openrouter: return openrouterGlow
+            // case .aider: return aiderGlow
+            }
+        }
+    }
+
     // MARK: - Semantic Status Colors
 
     enum Status {

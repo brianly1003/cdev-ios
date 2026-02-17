@@ -3,10 +3,10 @@ import Foundation
 /// Use case for responding to Claude (questions or permissions)
 protocol RespondToClaudeUseCase {
     /// Answer a question
-    func answerQuestion(response: String, requestId: String?) async throws
+    func answerQuestion(response: String, requestId: String?, runtime: AgentRuntime) async throws
 
     /// Approve or deny permission
-    func handlePermission(approved: Bool, requestId: String?) async throws
+    func handlePermission(approved: Bool, requestId: String?, runtime: AgentRuntime) async throws
 }
 
 final class DefaultRespondToClaudeUseCase: RespondToClaudeUseCase {
@@ -16,7 +16,7 @@ final class DefaultRespondToClaudeUseCase: RespondToClaudeUseCase {
         self.agentRepository = agentRepository
     }
 
-    func answerQuestion(response: String, requestId: String?) async throws {
+    func answerQuestion(response: String, requestId: String?, runtime: AgentRuntime) async throws {
         guard !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AppError.commandFailed(reason: "Response cannot be empty")
         }
@@ -26,19 +26,21 @@ final class DefaultRespondToClaudeUseCase: RespondToClaudeUseCase {
         try await agentRepository.respondToClaude(
             response: response,
             requestId: requestId,
-            approved: nil
+            approved: nil,
+            runtime: runtime
         )
 
         AppLogger.log("Response sent", type: .success)
     }
 
-    func handlePermission(approved: Bool, requestId: String?) async throws {
+    func handlePermission(approved: Bool, requestId: String?, runtime: AgentRuntime) async throws {
         AppLogger.log("Handling permission: \(approved ? "approved" : "denied")")
 
         try await agentRepository.respondToClaude(
             response: approved ? "yes" : "no",
             requestId: requestId,
-            approved: approved
+            approved: approved,
+            runtime: runtime
         )
 
         AppLogger.log("Permission response sent", type: .success)

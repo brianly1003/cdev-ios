@@ -9,14 +9,14 @@ protocol AgentRepositoryProtocol {
     func fetchStatus() async throws -> AgentStatus
 
     /// Run Claude with prompt
-    func runClaude(prompt: String, mode: SessionMode, sessionId: String?) async throws
+    func runClaude(prompt: String, mode: SessionMode, sessionId: String?, runtime: AgentRuntime) async throws
 
     /// Stop Claude
     /// - Parameter sessionId: Optional session ID to stop. If nil, uses current session from workspace.
-    func stopClaude(sessionId: String?) async throws
+    func stopClaude(sessionId: String?, runtime: AgentRuntime) async throws
 
     /// Respond to Claude (answer question or approve/deny permission)
-    func respondToClaude(response: String, requestId: String?, approved: Bool?) async throws
+    func respondToClaude(response: String, requestId: String?, approved: Bool?, runtime: AgentRuntime) async throws
 
     // MARK: - PTY Mode (Interactive Terminal)
 
@@ -24,13 +24,13 @@ protocol AgentRepositoryProtocol {
     /// - Parameters:
     ///   - sessionId: Session ID to send input to
     ///   - input: Raw text input (e.g., "1" for Yes, "2" for Yes all, "n" for No)
-    func sendInput(sessionId: String, input: String) async throws
+    func sendInput(sessionId: String, input: String, runtime: AgentRuntime) async throws
 
     /// Send a special key to an interactive (PTY mode) session
     /// - Parameters:
     ///   - sessionId: Session ID to send key to
     ///   - key: Special key (e.g., .enter, .escape)
-    func sendKey(sessionId: String, key: SessionInputKey) async throws
+    func sendKey(sessionId: String, key: SessionInputKey, runtime: AgentRuntime) async throws
 
     // MARK: - Hook Bridge Mode (Permission Respond)
 
@@ -93,21 +93,31 @@ protocol AgentRepositoryProtocol {
 
     // MARK: - Sessions
 
-    /// Get list of available Claude sessions (paginated)
+    /// Get list of workspace-history sessions (paginated)
     /// - Parameters:
     ///   - workspaceId: Workspace ID (uses workspace/session/history)
     ///   - limit: Maximum sessions to return (default: 20, max: 100)
     ///   - offset: Number of sessions to skip (default: 0)
     func getSessions(workspaceId: String, limit: Int, offset: Int) async throws -> SessionsResponse
 
+    /// Get list of agent sessions for a runtime (JSON-RPC session/list)
+    /// - Parameters:
+    ///   - runtime: Agent runtime (claude, codex, gemini)
+    ///   - workspaceId: Optional workspace ID filter (server resolves path)
+    ///   - limit: Maximum sessions to return (default: 20, max: 100)
+    ///   - offset: Number of sessions to skip (default: 0)
+    func getAgentSessions(runtime: AgentRuntime, workspaceId: String?, limit: Int, offset: Int) async throws -> SessionsResponse
+
     /// Get messages for a specific session (paginated)
     /// - Parameters:
+    ///   - runtime: Agent runtime routing (claude, codex, ...)
     ///   - sessionId: UUID of the session
     ///   - workspaceId: Workspace ID (required for workspace/session/messages)
     ///   - limit: Max messages to return (default: 50, max: 500)
     ///   - offset: Starting position for pagination (default: 0)
     ///   - order: Sort order: "asc" (oldest first) or "desc" (newest first)
     func getSessionMessages(
+        runtime: AgentRuntime,
         sessionId: String,
         workspaceId: String?,
         limit: Int,
@@ -115,11 +125,27 @@ protocol AgentRepositoryProtocol {
         order: String
     ) async throws -> SessionMessagesResponse
 
+    /// Get messages for a specific agent session (JSON-RPC session/messages)
+    func getAgentSessionMessages(
+        runtime: AgentRuntime,
+        sessionId: String,
+        limit: Int,
+        offset: Int,
+        order: String
+    ) async throws -> SessionMessagesResponse
+
     /// Delete a specific session using workspace/session/delete
     /// - Parameters:
+    ///   - runtime: Agent runtime routing (claude, codex, ...)
     ///   - sessionId: Session ID to delete
     ///   - workspaceId: Workspace ID containing the session
-    func deleteSession(sessionId: String, workspaceId: String) async throws -> DeleteSessionResponse
+    func deleteSession(runtime: AgentRuntime, sessionId: String, workspaceId: String) async throws -> DeleteSessionResponse
+
+    /// Delete a specific agent session (JSON-RPC session/delete)
+    func deleteAgentSession(runtime: AgentRuntime, sessionId: String) async throws -> DeleteSessionResponse
+
+    /// Delete all agent sessions for a runtime (JSON-RPC session/delete)
+    func deleteAllAgentSessions(runtime: AgentRuntime) async throws -> DeleteAllSessionsResponse
 
     // MARK: - Workspace Status
 
@@ -238,7 +264,7 @@ struct GitStatusResponse: Codable {
     }
 }
 
-/// Sessions list response from HTTP API (with pagination)
+/// Sessions list response (paginated)
 struct SessionsResponse: Codable {
     let sessions: [SessionInfo]
     let current: String?
@@ -292,6 +318,7 @@ struct SessionsResponse: Codable {
         let messageCount: Int
         let lastUpdated: String
         let branch: String?
+        let agentType: AgentRuntime?
 
         /// Session status: "running" or "historical"
         /// - running: Active Claude CLI process, can use session/send
@@ -310,17 +337,56 @@ struct SessionsResponse: Codable {
         /// List of client IDs currently viewing this session (multi-device awareness)
         let viewers: [String]?
 
+        // MARK: - Enhanced metadata (from Codex CLI sessions)
+
+        /// First user message in the session (useful for display when summary is empty)
+        let firstPrompt: String?
+
+        /// Git commit hash at session start
+        let gitCommit: String?
+
+        /// Git repository URL
+        let gitRepo: String?
+
+        /// Project/working directory path
+        let projectPath: String?
+
+        /// AI provider (openai, anthropic, etc.)
+        let modelProvider: String?
+
+        /// Specific model used (gpt-4, claude-3, etc.)
+        let model: String?
+
+        /// CLI version that created the session
+        let cliVersion: String?
+
+        /// Session file size in bytes
+        let fileSize: Int64?
+
+        /// Full path to the session file
+        let filePath: String?
+
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
             case summary
             case messageCount = "message_count"
             case lastUpdated = "last_updated"
             case branch
+            case agentType = "agent_type"
             case status
             case workspaceId = "workspace_id"
             case startedAt = "started_at"
             case lastActive = "last_active"
             case viewers
+            case firstPrompt = "first_prompt"
+            case gitCommit = "git_commit"
+            case gitRepo = "git_repo"
+            case projectPath = "project_path"
+            case modelProvider = "model_provider"
+            case model
+            case cliVersion = "cli_version"
+            case fileSize = "file_size"
+            case filePath = "file_path"
         }
 
         /// Memberwise initializer for programmatic creation (e.g., from RPC)
@@ -330,22 +396,46 @@ struct SessionsResponse: Codable {
             messageCount: Int,
             lastUpdated: String,
             branch: String? = nil,
+            agentType: AgentRuntime? = nil,
             status: SessionStatus? = nil,
             workspaceId: String? = nil,
             startedAt: String? = nil,
             lastActive: String? = nil,
-            viewers: [String]? = nil
+            viewers: [String]? = nil,
+            firstPrompt: String? = nil,
+            gitCommit: String? = nil,
+            gitRepo: String? = nil,
+            projectPath: String? = nil,
+            modelProvider: String? = nil,
+            model: String? = nil,
+            cliVersion: String? = nil,
+            fileSize: Int64? = nil,
+            filePath: String? = nil
         ) {
             self.sessionId = sessionId
             self.summary = summary
             self.messageCount = messageCount
             self.lastUpdated = lastUpdated
             self.branch = branch
+            self.agentType = agentType
             self.status = status
             self.workspaceId = workspaceId
             self.startedAt = startedAt
             self.lastActive = lastActive
             self.viewers = viewers
+            self.firstPrompt = firstPrompt
+            self.gitCommit = gitCommit
+            self.gitRepo = gitRepo
+            self.projectPath = projectPath
+            self.modelProvider = modelProvider
+            self.model = model
+            self.cliVersion = cliVersion
+            self.fileSize = fileSize
+            self.filePath = filePath
+        }
+
+        var runtime: AgentRuntime {
+            agentType ?? .claude
         }
 
         /// Whether this is a running session that can receive prompts
@@ -362,10 +452,27 @@ struct SessionsResponse: Codable {
         var viewerCount: Int {
             viewers?.count ?? 0
         }
+
+        /// Display text for the session (prefers summary, falls back to first prompt)
+        var displaySummary: String {
+            if !summary.isEmpty {
+                return summary
+            }
+            if let prompt = firstPrompt, !prompt.isEmpty {
+                return prompt
+            }
+            return "Session \(sessionId.prefix(8))"
+        }
+
+        /// Project name extracted from projectPath
+        var projectName: String? {
+            guard let path = projectPath else { return nil }
+            return (path as NSString).lastPathComponent
+        }
     }
 }
 
-/// Session messages response from HTTP API (paginated)
+/// Session messages response (paginated)
 struct SessionMessagesResponse: Codable {
     let sessionId: String
     let messages: [SessionMessage]

@@ -9,6 +9,7 @@ struct SessionPickerView: View {
     let hasMore: Bool
     let isLoadingMore: Bool
     let agentRepository: AgentRepositoryProtocol
+    @Binding var selectedRuntime: AgentRuntime
     let onSelect: (String) -> Void
     let onDelete: (String) -> Void
     let onDeleteAll: () -> Void
@@ -18,6 +19,10 @@ struct SessionPickerView: View {
     @State private var searchText: String = ""
     @State private var showDeleteAllAlert = false
     @State private var selectedSession: SessionsResponse.SessionInfo?
+
+    private var canResume: Bool {
+        selectedRuntime.supportsResume
+    }
 
     var filteredSessions: [SessionsResponse.SessionInfo] {
         if searchText.isEmpty {
@@ -32,6 +37,15 @@ struct SessionPickerView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                Picker("Runtime", selection: $selectedRuntime) {
+                    ForEach(AgentRuntime.allCases) { runtime in
+                        Text(runtime.displayName).tag(runtime)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
+
                 // Compact search bar
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "magnifyingglass")
@@ -69,16 +83,17 @@ struct SessionPickerView: View {
                             NavigationLink {
                                 SessionHistoryView(
                                     session: session,
+                                    runtime: selectedRuntime,
                                     agentRepository: agentRepository,
                                     workspaceId: workspaceId,
-                                    onResume: {
+                                    onResume: canResume ? {
                                         onSelect(session.sessionId)
-                                    }
+                                    } : nil
                                 )
                             } label: {
                                 SessionRowView(
                                     session: session,
-                                    isCurrentSession: session.sessionId == currentSessionId
+                                    isCurrentSession: canResume && session.sessionId == currentSessionId
                                 )
                             }
                             .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8))
@@ -98,13 +113,15 @@ struct SessionPickerView: View {
                             }
                             // Quick resume on swipe left
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                Button {
-                                    Haptics.selection()
-                                    onSelect(session.sessionId)
-                                } label: {
-                                    Image(systemName: "arrow.uturn.backward")
+                                if canResume {
+                                    Button {
+                                        Haptics.selection()
+                                        onSelect(session.sessionId)
+                                    } label: {
+                                        Image(systemName: "arrow.uturn.backward")
+                                    }
+                                    .tint(ColorSystem.primary)
                                 }
-                                .tint(ColorSystem.primary)
                             }
                         }
 

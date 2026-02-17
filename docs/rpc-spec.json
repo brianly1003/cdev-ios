@@ -348,6 +348,14 @@
                   "schema": {
                       "type": "string"
                   }
+              },
+              {
+                  "name": "agent_type",
+                  "description": "Agent type (optional)",
+                  "required": false,
+                  "schema": {
+                      "type": "string"
+                  }
               }
           ],
           "result": {

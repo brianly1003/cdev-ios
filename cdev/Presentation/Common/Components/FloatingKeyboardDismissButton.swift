@@ -39,8 +39,9 @@ struct FloatingKeyboardDismissButton: View {
             // Convert keyboard screen position to local coordinates
             let keyboardTopLocal = keyboardTopScreen - globalFrame.minY
             // Position button above the input bar
-            // Base offset of 22 accounts for button center (44pt button / 2) plus small gap
-            let totalOffset = inputBarHeight + textHeightOffset + bashModeOffset + 22 + 4 //4pt gap between button and keyboard
+            // Base offset of 22 accounts for button center (44pt button / 2) plus gap
+            // Extra spacing ensures it clears the action bar even with multiline input
+            let totalOffset = inputBarHeight + textHeightOffset + bashModeOffset + 22 + 32
             let buttonY = keyboardTopLocal - totalOffset
 
             if isKeyboardVisible && buttonY > 0 {

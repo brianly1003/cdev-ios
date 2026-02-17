@@ -64,13 +64,17 @@ struct AgentEvent: Codable, Identifiable {
     /// Session ID for event filtering (filter events by current session)
     let sessionId: String?
 
+    /// Agent/runtime type for event routing (e.g., "claude", "codex")
+    let agentType: String?
+
     init(
         id: String = UUID().uuidString,
         type: AgentEventType,
         payload: AgentEventPayload,
         timestamp: Date = Date(),
         workspaceId: String? = nil,
-        sessionId: String? = nil
+        sessionId: String? = nil,
+        agentType: String? = nil
     ) {
         self.id = id
         self.type = type
@@ -78,6 +82,7 @@ struct AgentEvent: Codable, Identifiable {
         self.timestamp = timestamp
         self.workspaceId = workspaceId
         self.sessionId = sessionId
+        self.agentType = agentType
     }
 
     enum CodingKeys: String, CodingKey {
@@ -87,6 +92,7 @@ struct AgentEvent: Codable, Identifiable {
         case timestamp
         case workspaceId = "workspace_id"
         case sessionId = "session_id"
+        case agentType = "agent_type"
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +102,7 @@ struct AgentEvent: Codable, Identifiable {
         self.payload = try container.decode(AgentEventPayload.self, forKey: .payload)
         self.workspaceId = try container.decodeIfPresent(String.self, forKey: .workspaceId)
         self.sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        self.agentType = try container.decodeIfPresent(String.self, forKey: .agentType)
 
         if let timestampString = try? container.decode(String.self, forKey: .timestamp),
            let date = Date.fromISO8601(timestampString) {
@@ -121,6 +128,14 @@ struct AgentEvent: Codable, Identifiable {
         guard let targetWorkspaceId = targetWorkspaceId else { return true }
         guard let eventWorkspaceId = workspaceId else { return true }
         return eventWorkspaceId == targetWorkspaceId
+    }
+
+    /// Check if this event matches the selected runtime (claude/codex).
+    /// Events without agent_type are treated as compatible for backward compatibility.
+    func matchesRuntime(_ runtime: AgentRuntime?) -> Bool {
+        guard let runtime = runtime else { return true }
+        guard let eventAgentType = agentType, !eventAgentType.isEmpty else { return true }
+        return eventAgentType == runtime.rawValue
     }
 }
 

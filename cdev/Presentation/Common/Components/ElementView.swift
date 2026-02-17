@@ -221,6 +221,10 @@ struct ElementView: View {
             // Enhanced Write tool display with content preview
             else if content.tool == "Write", content.fullContent != nil {
                 WriteToolElementView(content: content, searchText: searchText)
+            }
+            // Codex apply_patch display with inline changed lines
+            else if content.tool.lowercased() == "apply_patch", content.fullContent != nil {
+                ApplyPatchToolElementView(content: content, searchText: searchText)
             } else {
                 ToolCallElementView(content: content, searchText: searchText)
             }
@@ -1194,6 +1198,10 @@ struct ToolCallElementView: View {
     }
 
     private var toolDisplay: String {
+        if !content.display.isEmpty {
+            return content.display
+        }
+
         let params = displayParams
         if params.isEmpty {
             return content.tool
@@ -1203,7 +1211,7 @@ struct ToolCallElementView: View {
 
     private var displayParams: String {
         // Priority: command > file_path > pattern > args
-        if let cmd = content.params["command"] {
+        if let cmd = content.params["command"] ?? content.params["cmd"] {
             return cmd
         }
         if let path = content.params["file_path"] {
@@ -1214,9 +1222,6 @@ struct ToolCallElementView: View {
         }
         if let args = content.params["args"] {
             return args
-        }
-        if !content.display.isEmpty {
-            return content.display
         }
         return ""
     }
@@ -1299,7 +1304,7 @@ struct ToolResultElementView: View {
                         }
                         .font(Typography.terminal)
                         .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textSecondary)
-                        .textSelection(.enabled)
+                        .textSelection(.disabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -1319,6 +1324,7 @@ struct ToolResultElementView: View {
                         .padding(.leading, Spacing.sm)
                     }
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -2536,6 +2542,25 @@ struct WriteToolElementView: View {
         let previewText = lines.prefix(previewLineCount).joined(separator: "\n")
         let hasMore = lines.count > previewLineCount
 
+        Group {
+            if hasMore {
+                Button {
+                    withAnimation(Animations.stateChange) {
+                        isExpanded = true
+                    }
+                    Haptics.selection()
+                } label: {
+                    summaryContent(lines: lines, previewText: previewText, hasMore: hasMore)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                summaryContent(lines: lines, previewText: previewText, hasMore: hasMore)
+            }
+        }
+    }
+
+    private func summaryContent(lines: [String], previewText: String, hasMore: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: Spacing.xxs) {
                 Text("⎿")
@@ -2602,5 +2627,248 @@ struct WriteToolElementView: View {
             .padding(.leading, Spacing.sm)
         }
         .padding(.leading, Spacing.sm)
+    }
+}
+
+// MARK: - Apply Patch Tool View
+
+/// Expanded apply_patch display with inline patch lines (+/-/context) like Codex CLI.
+struct ApplyPatchToolElementView: View {
+    let content: ToolCallContent
+    var searchText: String = ""
+    @State private var isExpanded = false
+
+    private let previewLineCount = 6
+
+    private var patchLines: [String] {
+        guard let full = content.fullContent, !full.isEmpty else { return [] }
+        return full.components(separatedBy: "\n").filter { line in
+            !line.hasPrefix("*** Begin Patch") && !line.hasPrefix("*** End Patch")
+        }
+    }
+
+    private var toolDisplay: String {
+        if !content.display.isEmpty {
+            return content.display
+        }
+        return "Applied patch"
+    }
+
+    private var statusColor: Color {
+        switch content.status {
+        case .running: return ColorSystem.info
+        case .completed: return ColorSystem.primary
+        case .error: return ColorSystem.error
+        case .interrupted: return ColorSystem.warning
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            headerView
+
+            if !patchLines.isEmpty {
+                if isExpanded {
+                    patchPreview
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    patchSummary
+                }
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+        .frame(minHeight: 20)
+    }
+
+    private var headerView: some View {
+        Button {
+            if !patchLines.isEmpty {
+                withAnimation(Animations.stateChange) {
+                    isExpanded.toggle()
+                }
+                Haptics.selection()
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Spacing.xxs) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 6, height: 6)
+                    .padding(.top, 5)
+
+                if !patchLines.isEmpty {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                        .padding(.top, 5)
+                }
+
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(ColorSystem.Tool.name)
+                    .padding(.top, 4)
+
+                Group {
+                    if searchText.isEmpty {
+                        Text(toolDisplay)
+                    } else {
+                        HighlightedText(toolDisplay, highlighting: searchText)
+                    }
+                }
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.Tool.name)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+
+                if content.status == .running {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .tint(ColorSystem.primary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var patchSummary: some View {
+        let preview = patchLines.prefix(previewLineCount)
+        let hasMore = patchLines.count > previewLineCount
+
+        return Group {
+            if hasMore {
+                Button {
+                    withAnimation(Animations.stateChange) {
+                        isExpanded = true
+                    }
+                    Haptics.selection()
+                } label: {
+                    patchSummaryContent(preview: preview, hasMore: hasMore)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                patchSummaryContent(preview: preview, hasMore: hasMore)
+            }
+        }
+    }
+
+    private func patchSummaryContent(
+        preview: ArraySlice<String>,
+        hasMore: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: Spacing.xxs) {
+                Text("⎿")
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(preview.enumerated()), id: \.offset) { _, line in
+                        patchLineView(line)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if hasMore {
+                HStack(spacing: Spacing.xxs) {
+                    Text("…")
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                    Text("+\(patchLines.count - previewLineCount) lines (tap to expand)")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                }
+                .padding(.leading, Spacing.sm)
+            }
+        }
+    }
+
+    private var patchPreview: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(patchLines.enumerated()), id: \.offset) { _, line in
+                        patchLineView(line)
+                    }
+                }
+                .padding(Spacing.sm)
+            }
+            .frame(maxHeight: 320)
+            .background(ColorSystem.terminalBgHighlight)
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+
+            Button {
+                withAnimation(Animations.stateChange) {
+                    isExpanded = false
+                }
+                Haptics.selection()
+            } label: {
+                Text("collapse")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+            .padding(.top, Spacing.xxs)
+            .padding(.leading, Spacing.sm)
+        }
+        .padding(.leading, Spacing.sm)
+    }
+
+    @ViewBuilder
+    private func patchLineView(_ line: String) -> some View {
+        HStack(spacing: 0) {
+            Text(linePrefix(for: line))
+                .font(Typography.terminalSmall)
+                .foregroundStyle(linePrefixColor(for: line))
+                .frame(width: 14, alignment: .center)
+
+            Group {
+                if searchText.isEmpty {
+                    Text(lineBody(for: line))
+                } else {
+                    HighlightedText(lineBody(for: line), highlighting: searchText)
+                }
+            }
+            .font(Typography.terminalSmall)
+            .foregroundStyle(lineTextColor(for: line))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, Spacing.xxs)
+        .background(lineBackground(for: line))
+    }
+
+    private func linePrefix(for line: String) -> String {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return "+" }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return "-" }
+        if line.hasPrefix("@@") { return "@" }
+        return " "
+    }
+
+    private func lineBody(for line: String) -> String {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return String(line.dropFirst()) }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return String(line.dropFirst()) }
+        return line
+    }
+
+    private func linePrefixColor(for line: String) -> Color {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return ColorSystem.Diff.added }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return ColorSystem.Diff.removed }
+        return ColorSystem.textQuaternary
+    }
+
+    private func lineTextColor(for line: String) -> Color {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return ColorSystem.Diff.added }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return ColorSystem.Diff.removed }
+        if line.hasPrefix("*** ") || line.hasPrefix("@@") { return ColorSystem.textSecondary }
+        return ColorSystem.textTertiary
+    }
+
+    private func lineBackground(for line: String) -> Color {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return ColorSystem.Diff.addedBg }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return ColorSystem.Diff.removedBg }
+        return .clear
     }
 }

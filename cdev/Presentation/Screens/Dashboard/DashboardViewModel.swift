@@ -112,6 +112,22 @@ final class DashboardViewModel: ObservableObject {
     // Sessions (for /resume command)
     @Published var sessions: [SessionsResponse.SessionInfo] = []
     @Published var showSessionPicker: Bool = false
+    @Published var selectedSessionRuntime: AgentRuntime = .claude {
+        didSet {
+            guard oldValue != selectedSessionRuntime else { return }
+
+            sessionRepository.selectedSessionRuntime = selectedSessionRuntime
+
+            runtimeSwitchTask?.cancel()
+            let previousRuntime = oldValue
+            let nextRuntime = selectedSessionRuntime
+
+            runtimeSwitchTask = Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                await self.handleRuntimeSwitch(from: previousRuntime, to: nextRuntime)
+            }
+        }
+    }
     @Published var sessionsHasMore: Bool = false
     @Published var isLoadingMoreSessions: Bool = false
     private var sessionsNextOffset: Int = 0
@@ -165,7 +181,7 @@ final class DashboardViewModel: ObservableObject {
     private weak var appState: AppState?
 
     // Mobile-friendly text replacements (no esc/ctrl+c on mobile)
-    private static let mobileStopText = "press ⏹ to stop"
+    private static let mobileStopText = "press ⏹ to interrupt"
 
     // Workspace-aware APIs
     private let workspaceManager = WorkspaceManagerService.shared
@@ -178,6 +194,7 @@ final class DashboardViewModel: ObservableObject {
 
     private var eventTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
+    private var runtimeSwitchTask: Task<Void, Never>?
 
     // Debouncing for log updates to prevent UI lag
     private var logUpdateScheduled = false
@@ -277,6 +294,7 @@ final class DashboardViewModel: ObservableObject {
 
         // Load persisted session ID from storage and initialize agentStatus
         self.userSelectedSessionId = sessionRepository.selectedSessionId
+        self.selectedSessionRuntime = sessionRepository.selectedSessionRuntime
         if let storedId = userSelectedSessionId {
             AppLogger.log("[Dashboard] Loaded stored sessionId: \(storedId)")
             // Initialize agentStatus with stored sessionId so refreshStatus preserves it
@@ -340,6 +358,7 @@ final class DashboardViewModel: ObservableObject {
     deinit {
         eventTask?.cancel()
         stateTask?.cancel()
+        runtimeSwitchTask?.cancel()
         searchDebounceTask?.cancel()
     }
 
@@ -378,6 +397,10 @@ final class DashboardViewModel: ObservableObject {
     private func queueChatElements(_ elements: [ChatElement]) {
         // Filter duplicates and process tasks
         for element in elements {
+            if shouldHideElementFromChatList(element) {
+                continue
+            }
+
             // Primary: ID-based deduplication
             guard !seenElementIds.contains(element.id) else { continue }
 
@@ -666,7 +689,8 @@ final class DashboardViewModel: ObservableObject {
             if claudeState == .waiting, let interaction = pendingInteraction {
                 try await respondToClaudeUseCase.answerQuestion(
                     response: userMessage,
-                    requestId: interaction.requestId
+                    requestId: interaction.requestId,
+                    runtime: selectedSessionRuntime
                 )
                 pendingInteraction = nil
             } else {
@@ -739,9 +763,14 @@ final class DashboardViewModel: ObservableObject {
                 }
 
                 if mode == .new {
-                    isPendingTempSession = true
                     setSelectedSession(nil)
-                    AppLogger.log("[Dashboard] New session pending - waiting for session_id_resolved")
+                    if selectedSessionRuntime.requiresSessionResolutionOnNewSession {
+                        isPendingTempSession = true
+                        AppLogger.log("[Dashboard] New session pending - waiting for session_id_resolved")
+                    } else {
+                        isPendingTempSession = false
+                        AppLogger.log("[Dashboard] New \(selectedSessionRuntime.rawValue) session requested")
+                    }
                 } else if isPendingTempSession {
                     isPendingTempSession = false
                 }
@@ -749,7 +778,8 @@ final class DashboardViewModel: ObservableObject {
                 try await sendPromptUseCase.execute(
                     prompt: finalPrompt,
                     mode: mode,
-                    sessionId: sessionIdToSend
+                    sessionId: sessionIdToSend,
+                    runtime: selectedSessionRuntime
                 )
 
                 // Clear attached images after successful send
@@ -837,32 +867,15 @@ final class DashboardViewModel: ObservableObject {
         do {
             // Reset pagination state
             sessionsNextOffset = 0
-
-            // Workspace ID is required for session APIs
-            guard let workspaceId = currentWorkspaceId else {
-                AppLogger.log("[Dashboard] Cannot load sessions - no workspace ID", type: .warning)
-                sessions = []
-                sessionsHasMore = false
-                return
-            }
-
-            AppLogger.log("[Dashboard] Using workspace/session/history: \(workspaceId)")
-            let historyResponse = try await workspaceManager.getSessionHistory(workspaceId: workspaceId, limit: sessionsPageSize)
-
-            // Convert HistorySessionInfo to SessionsResponse.SessionInfo
-            sessions = (historyResponse.sessions ?? []).map { historySession in
-                SessionsResponse.SessionInfo(
-                    sessionId: historySession.sessionId,
-                    summary: historySession.summary ?? "No summary",
-                    messageCount: historySession.messageCount ?? 0,
-                    lastUpdated: historySession.lastUpdated ?? "",
-                    branch: historySession.branch
-                )
-            }
-            // workspace/session/history doesn't support pagination yet
-            sessionsHasMore = false
-            sessionsNextOffset = sessions.count
-            AppLogger.log("[Dashboard] Loaded \(sessions.count) sessions from workspace history, total=\(historyResponse.total ?? 0)")
+            let response = try await fetchSessionsPage(
+                runtime: selectedSessionRuntime,
+                limit: sessionsPageSize,
+                offset: sessionsNextOffset
+            )
+            sessions = response.sessions
+            sessionsHasMore = response.hasMore
+            sessionsNextOffset = response.nextOffset
+            AppLogger.log("[Dashboard] Loaded \(sessions.count) \(selectedSessionRuntime.rawValue) sessions, hasMore=\(sessionsHasMore)")
         } catch is CancellationError {
             AppLogger.log("[Dashboard] Session loading cancelled")
         } catch {
@@ -874,19 +887,17 @@ final class DashboardViewModel: ObservableObject {
     func loadMoreSessions() async {
         guard sessionsHasMore, !isLoadingMoreSessions else { return }
 
-        // Workspace ID is required for session APIs
-        guard let workspaceId = currentWorkspaceId else {
-            AppLogger.log("[Dashboard] Cannot load more sessions - no workspace ID", type: .warning)
-            return
-        }
-
         isLoadingMoreSessions = true
         do {
-            let response = try await _agentRepository.getSessions(workspaceId: workspaceId, limit: sessionsPageSize, offset: sessionsNextOffset)
+            let response = try await fetchSessionsPage(
+                runtime: selectedSessionRuntime,
+                limit: sessionsPageSize,
+                offset: sessionsNextOffset
+            )
             sessions.append(contentsOf: response.sessions)
             sessionsHasMore = response.hasMore
             sessionsNextOffset = response.nextOffset
-            AppLogger.log("[Dashboard] Loaded more sessions: +\(response.sessions.count), total now=\(sessions.count), hasMore=\(sessionsHasMore)")
+            AppLogger.log("[Dashboard] Loaded more \(selectedSessionRuntime.rawValue) sessions: +\(response.sessions.count), total now=\(sessions.count), hasMore=\(sessionsHasMore)")
         } catch is CancellationError {
             AppLogger.log("[Dashboard] Load more sessions cancelled")
         } catch {
@@ -906,9 +917,9 @@ final class DashboardViewModel: ObservableObject {
 
         isLoadingMoreMessages = true
         do {
-            let response = try await _agentRepository.getSessionMessages(
+            let response = try await fetchSessionMessagesPage(
+                runtime: selectedSessionRuntime,
                 sessionId: sessionId,
-                workspaceId: currentWorkspaceId,
                 limit: messagesPageSize,
                 offset: messagesNextOffset,
                 order: "desc"
@@ -956,6 +967,10 @@ final class DashboardViewModel: ObservableObject {
 
                 // Filter out Edit tool_results and duplicates
                 for element in elements {
+                    if shouldHideElementFromChatList(element) {
+                        continue
+                    }
+
                     // Skip Edit tool results (already shown as diff)
                     if case .toolResult(let content) = element.content {
                         if editToolIds.contains(content.toolCallId) {
@@ -1012,8 +1027,8 @@ final class DashboardViewModel: ObservableObject {
         hasActiveConversation = false  // Reset - will be set true on first prompt
         AppLogger.log("[Dashboard] User resumed session: \(sessionId)")
 
-        // Notify server of active session selection (for multi-device sync)
-        if let workspaceId = currentWorkspaceId {
+        // Notify server of active session selection when runtime requires workspace activation
+        if selectedSessionRuntime.requiresWorkspaceActivationOnResume, let workspaceId = currentWorkspaceId {
             do {
                 _ = try await _agentRepository.activateSession(workspaceId: workspaceId, sessionId: sessionId)
             } catch {
@@ -1022,15 +1037,14 @@ final class DashboardViewModel: ObservableObject {
             }
         }
 
-        // IMPORTANT: Start watching the new session BEFORE fetching messages
-        // The workspace/session/messages API requires the session to be watched first
+        // Start watching the new session before fetching messages.
         await startWatchingCurrentSession()
 
         // Load first page of session messages
         do {
-            let messagesResponse = try await _agentRepository.getSessionMessages(
+            let messagesResponse = try await fetchSessionMessagesPage(
+                runtime: selectedSessionRuntime,
                 sessionId: sessionId,
-                workspaceId: currentWorkspaceId,
                 limit: messagesPageSize,
                 offset: 0,
                 order: "desc"
@@ -1155,19 +1169,14 @@ final class DashboardViewModel: ObservableObject {
     ///   - sessionId: Session ID to delete
     ///   - workspaceId: Workspace ID containing the session (uses currentWorkspaceId if nil)
     func deleteSession(_ sessionId: String, workspaceId: String? = nil) async {
-        // Use provided workspaceId or fallback to current
-        guard let wsId = workspaceId ?? currentWorkspaceId else {
-            AppLogger.log("[Dashboard] Cannot delete session - no workspace ID", type: .error)
-            self.error = .commandFailed(reason: "No workspace context for session deletion")
-            Haptics.error()
-            return
-        }
-
         do {
-            _ = try await _agentRepository.deleteSession(sessionId: sessionId, workspaceId: wsId)
-            // Remove from local list
+            try await deleteSessionForRuntime(
+                runtime: selectedSessionRuntime,
+                sessionId: sessionId,
+                workspaceId: workspaceId ?? currentWorkspaceId
+            )
             sessions.removeAll { $0.sessionId == sessionId }
-            AppLogger.log("[Dashboard] Deleted session: \(sessionId) from workspace: \(wsId)")
+            AppLogger.log("[Dashboard] Deleted \(selectedSessionRuntime.rawValue) session: \(sessionId)")
             Haptics.success()
         } catch {
             AppLogger.error(error, context: "Delete session")
@@ -1178,50 +1187,40 @@ final class DashboardViewModel: ObservableObject {
 
     /// Delete all sessions in the current workspace
     func deleteAllSessions() async {
-        guard let wsId = currentWorkspaceId else {
-            AppLogger.log("[Dashboard] Cannot delete all sessions - no workspace ID", type: .error)
-            self.error = .commandFailed(reason: "No workspace context for session deletion")
-            Haptics.error()
-            return
-        }
+        do {
+            let summary = try await deleteAllSessionsForRuntime(
+                runtime: selectedSessionRuntime,
+                workspaceId: currentWorkspaceId
+            )
+            sessions = []
+            AppLogger.log("[Dashboard] Deleted \(summary.deletedCount) \(selectedSessionRuntime.rawValue) sessions (failed: \(summary.failedCount))")
 
-        var deletedCount = 0
-        var errors: [Error] = []
+            if selectedSessionRuntime.sessionListSource == .workspaceHistory {
+                // Preserve existing behavior for workspace-history runtimes.
+                await logCache.clear()
+                logs = []
+                chatElements = []
+                setSelectedSession(nil)
+                hasActiveConversation = false
 
-        // Delete each session individually using workspace/session/delete
-        for session in sessions {
-            do {
-                _ = try await _agentRepository.deleteSession(sessionId: session.sessionId, workspaceId: wsId)
-                deletedCount += 1
-            } catch {
-                AppLogger.log("[Dashboard] Failed to delete session \(session.sessionId): \(error)", type: .error)
-                errors.append(error)
+                let entry = LogEntry(
+                    content: "🗑️ Deleted \(summary.deletedCount) sessions",
+                    stream: .system
+                )
+                await logCache.add(entry)
+                await forceLogUpdate()
             }
-        }
 
-        // Clear local state
-        sessions = []
-        AppLogger.log("[Dashboard] Deleted \(deletedCount) sessions")
-
-        // Also clear current logs, elements, and session state
-        await logCache.clear()
-        logs = []
-        chatElements = []
-        setSelectedSession(nil)
-        hasActiveConversation = false
-
-        let entry = LogEntry(
-            content: "🗑️ Deleted \(deletedCount) sessions",
-            stream: .system
-        )
-        await logCache.add(entry)
-        await forceLogUpdate()
-
-        if errors.isEmpty {
-            Haptics.success()
-        } else {
-            Haptics.warning()
-            self.error = .commandFailed(reason: "Failed to delete \(errors.count) sessions")
+            if summary.failedCount == 0 {
+                Haptics.success()
+            } else {
+                Haptics.warning()
+                self.error = .commandFailed(reason: "Failed to delete \(summary.failedCount) sessions")
+            }
+        } catch {
+            AppLogger.error(error, context: "Delete all sessions")
+            self.error = error as? AppError ?? .unknown(underlying: error)
+            Haptics.error()
         }
     }
 
@@ -1249,7 +1248,7 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             // Use userSelectedSessionId which is updated by session_id_resolved
-            try await _agentRepository.stopClaude(sessionId: userSelectedSessionId)
+            try await _agentRepository.stopClaude(sessionId: userSelectedSessionId, runtime: selectedSessionRuntime)
             // Update state immediately after successful stop
             // (don't wait for WebSocket event which may be delayed or missing)
             claudeState = .idle
@@ -1288,7 +1287,8 @@ final class DashboardViewModel: ObservableObject {
         do {
             try await respondToClaudeUseCase.handlePermission(
                 approved: true,
-                requestId: interaction.requestId
+                requestId: interaction.requestId,
+                runtime: selectedSessionRuntime
             )
             pendingInteraction = nil
         } catch {
@@ -1304,7 +1304,8 @@ final class DashboardViewModel: ObservableObject {
         do {
             try await respondToClaudeUseCase.handlePermission(
                 approved: false,
-                requestId: interaction.requestId
+                requestId: interaction.requestId,
+                runtime: selectedSessionRuntime
             )
             pendingInteraction = nil
         } catch {
@@ -1320,7 +1321,8 @@ final class DashboardViewModel: ObservableObject {
         do {
             try await respondToClaudeUseCase.answerQuestion(
                 response: response,
-                requestId: interaction.requestId
+                requestId: interaction.requestId,
+                runtime: selectedSessionRuntime
             )
             pendingInteraction = nil
         } catch {
@@ -1353,7 +1355,7 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             // Send escape key to server to cancel the permission prompt
-            try await _agentRepository.sendInput(sessionId: sessionId, input: "escape")
+            try await _agentRepository.sendInput(sessionId: sessionId, input: "escape", runtime: selectedSessionRuntime)
             pendingInteraction = nil
             AppLogger.log("[Dashboard] PTY permission dismissed with escape key")
             Haptics.light()
@@ -1539,14 +1541,14 @@ final class DashboardViewModel: ObservableObject {
         do {
             // Send navigation keys to reach target option
             for i in 0..<keyPresses {
-                try await _agentRepository.sendInput(sessionId: sessionId, input: direction)
+                try await _agentRepository.sendInput(sessionId: sessionId, input: direction, runtime: selectedSessionRuntime)
                 AppLogger.log("[Dashboard] PTY sent '\(direction)' (\(i + 1)/\(keyPresses))")
                 // Small delay between key presses to ensure they're processed in order
                 try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
             }
 
             // Send "enter" to confirm selection
-            try await _agentRepository.sendInput(sessionId: sessionId, input: "enter")
+            try await _agentRepository.sendInput(sessionId: sessionId, input: "enter", runtime: selectedSessionRuntime)
             pendingInteraction = nil
             AppLogger.log("[Dashboard] PTY permission responded: navigated to option '\(key)' and pressed enter")
         } catch {
@@ -1675,6 +1677,51 @@ final class DashboardViewModel: ObservableObject {
         Haptics.light()
     }
 
+    /// Handle runtime changes from the agent selector.
+    /// Performs full rebinding so events/messages always match selected runtime.
+    private func handleRuntimeSwitch(from oldRuntime: AgentRuntime, to newRuntime: AgentRuntime) async {
+        guard oldRuntime != newRuntime else { return }
+
+        AppLogger.log("[Dashboard] Runtime switch: \(oldRuntime.rawValue) -> \(newRuntime.rawValue)")
+
+        // Stop active watch first to avoid stale event routing from previous runtime.
+        await stopWatchingSession()
+
+        // Best effort unwatch in case local watch flags drifted from server state.
+        do {
+            try await webSocketService.unwatchSession()
+        } catch {
+            AppLogger.log("[Dashboard] Runtime switch unwatch fallback: \(error.localizedDescription)")
+        }
+        SessionAwarenessManager.shared.clearFocus()
+
+        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
+
+        // Reset local state to avoid cross-runtime session leakage.
+        await clearLogs()
+        isSessionPinnedByUser = false
+        hasActiveConversation = false
+        isPendingTrustFolder = false
+        isPendingTempSession = false
+        pendingInteraction = nil
+        setSelectedSession(nil)
+
+        claudeState = .idle
+        isStreaming = false
+        spinnerMessage = nil
+        streamingStartTime = nil
+
+        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
+
+        await loadSessions()
+        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
+
+        await loadRecentSessionHistory(isReconnection: false)
+        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
+
+        await refreshStatus()
+    }
+
     // MARK: - Private
 
     /// Load history from most recent session
@@ -1793,32 +1840,28 @@ final class DashboardViewModel: ObservableObject {
 
             // Get first page of messages for the session
             AppLogger.log("[Dashboard] Fetching messages for session: \(sessionId)")
-            let messagesResponse: SessionMessagesResponse
+            let fetchedBatch: SessionHistoryMessageBatch
             do {
-                messagesResponse = try await _agentRepository.getSessionMessages(
+                fetchedBatch = try await fetchMessagesForSessionHistory(
                     sessionId: sessionId,
-                    workspaceId: currentWorkspaceId,
-                    limit: messagesPageSize,
-                    offset: 0,
-                    order: "desc"
+                    isReconnection: isReconnection,
+                    isNewSession: isNewSession
                 )
-
-                // Update pagination state
-                messagesHasMore = messagesResponse.hasMore
-                messagesNextOffset = messagesResponse.nextOffset
-                messagesTotalCount = messagesResponse.total
-
-                AppLogger.log("[Dashboard] Got \(messagesResponse.count) of \(messagesResponse.total) messages, hasMore=\(messagesResponse.hasMore)")
             } catch {
                 AppLogger.error(error, context: "Fetch session messages")
                 throw error
             }
 
+            // Update pagination state after optional catch-up pages.
+            messagesHasMore = fetchedBatch.hasMore
+            messagesNextOffset = fetchedBatch.nextOffset
+            messagesTotalCount = fetchedBatch.total
+
             // Yield after network call to prevent UI starvation
             await Task.yield()
 
             // Only add messages if there are any
-            guard messagesResponse.count > 0 else {
+            guard !fetchedBatch.messages.isEmpty else {
                 AppLogger.log("[Dashboard] Session has no messages")
                 logs = []
                 return
@@ -1826,7 +1869,7 @@ final class DashboardViewModel: ObservableObject {
 
             // Convert to log entries and ChatElements (skip tool messages with no text)
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
-            let chronologicalMessages = Array(messagesResponse.messages.reversed())
+            let chronologicalMessages = Array(fetchedBatch.messages.reversed())
             var entriesAdded = 0
             // Track Edit tool IDs to filter their tool_results
             var editToolIds: Set<String> = []
@@ -1877,7 +1920,7 @@ final class DashboardViewModel: ObservableObject {
             let afterCount = chatElements.count
             let newMessagesCount = afterCount - beforeCount
 
-            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(afterCount) elements from \(messagesResponse.count) messages (deduplicated)")
+            AppLogger.log("[Dashboard] Created \(entriesAdded) log entries and \(afterCount) elements from \(fetchedBatch.messages.count) messages (deduplicated)")
 
             if isReconnection && newMessagesCount > 0 {
                 AppLogger.log("[Dashboard] Reconnection synced \(newMessagesCount) new messages (before: \(beforeCount), after: \(afterCount))")
@@ -1898,6 +1941,68 @@ final class DashboardViewModel: ObservableObject {
             }
         }
         AppLogger.log("[Dashboard] loadRecentSessionHistory completed")
+    }
+
+    private struct SessionHistoryMessageBatch {
+        let messages: [SessionMessagesResponse.SessionMessage]
+        let total: Int
+        let hasMore: Bool
+        let nextOffset: Int
+    }
+
+    private func fetchMessagesForSessionHistory(
+        sessionId: String,
+        isReconnection: Bool,
+        isNewSession: Bool
+    ) async throws -> SessionHistoryMessageBatch {
+        let previousKnownTotal = messagesTotalCount
+
+        let initialPage = try await fetchSessionMessagesPage(
+            runtime: selectedSessionRuntime,
+            sessionId: sessionId,
+            limit: messagesPageSize,
+            offset: 0,
+            order: "desc"
+        )
+        AppLogger.log("[Dashboard] Got initial page: \(initialPage.count) of \(initialPage.total), hasMore=\(initialPage.hasMore)")
+
+        // On reconnection, fetch enough additional pages to cover messages produced while disconnected.
+        // This keeps catch-up reliable without replaying the entire session.
+        var messages = initialPage.messages
+        var total = initialPage.total
+        var hasMore = initialPage.hasMore
+        var nextOffset = initialPage.nextOffset
+
+        let shouldCatchUp = isReconnection && !isNewSession && previousKnownTotal > 0 && total > previousKnownTotal
+        if shouldCatchUp {
+            var remainingMissed = max(0, (total - previousKnownTotal) - messages.count)
+            AppLogger.log("[Dashboard] Reconnection catch-up: previousTotal=\(previousKnownTotal), latestTotal=\(total), remainingMissed=\(remainingMissed)")
+
+            while remainingMissed > 0 && hasMore {
+                let extraPage = try await fetchSessionMessagesPage(
+                    runtime: selectedSessionRuntime,
+                    sessionId: sessionId,
+                    limit: messagesPageSize,
+                    offset: nextOffset,
+                    order: "desc"
+                )
+
+                messages.append(contentsOf: extraPage.messages)
+                nextOffset = extraPage.nextOffset
+                hasMore = extraPage.hasMore
+                total = max(total, extraPage.total)
+                remainingMissed = max(0, remainingMissed - extraPage.count)
+
+                AppLogger.log("[Dashboard] Reconnection catch-up page: +\(extraPage.count), remainingMissed=\(remainingMissed), nextOffset=\(nextOffset), hasMore=\(hasMore)")
+            }
+        }
+
+        return SessionHistoryMessageBatch(
+            messages: messages,
+            total: total,
+            hasMore: hasMore,
+            nextOffset: nextOffset
+        )
     }
 
     private func startListening() {
@@ -1928,6 +2033,8 @@ final class DashboardViewModel: ObservableObject {
 
                     AppLogger.log("[Dashboard] Reconnected - starting loadRecentSessionHistory")
                     await self.loadRecentSessionHistory(isReconnection: true)
+                    AppLogger.log("[Dashboard] Reconnected - syncing session/state")
+                    await self.syncCurrentSessionRuntimeState(context: "reconnect")
                     // refreshStatus() calls refreshGitStatus() internally when hasCompletedInitialLoad is true
                     AppLogger.log("[Dashboard] Reconnected - starting refreshStatus (includes git status)")
                     await self.refreshStatus()
@@ -1976,6 +2083,12 @@ final class DashboardViewModel: ObservableObject {
     private func handleEvent(_ event: AgentEvent) async {
         if shouldMarkStreamEvent(event) {
             markStreamEvent(source: event.type.rawValue)
+        }
+
+        // Route agent-specific stream events by runtime to prevent Claude/Codex cross-talk.
+        if !event.matchesRuntime(selectedSessionRuntime) {
+            AppLogger.log("[Dashboard] Skipping \(event.type.rawValue) event for agent_type=\(event.agentType ?? "nil"), selected_runtime=\(selectedSessionRuntime.rawValue)")
+            return
         }
 
         switch event.type {
@@ -2051,7 +2164,26 @@ final class DashboardViewModel: ObservableObject {
                     }
                 }
 
-                let elements = ChatElement.from(payload: payload)
+                let isCodexRuntime = selectedSessionRuntime == .codex
+
+                // Codex CLI-style behavior: route thinking text to bottom streaming bar
+                // and avoid rendering thinking blocks as chat rows.
+                if isCodexRuntime,
+                   let thinkingText = codexThinkingText(from: payload) {
+                    spinnerMessage = codexSpinnerMessage(from: thinkingText)
+                    if !isStreaming {
+                        isStreaming = true
+                        streamingStartTime = Date()
+                    }
+                    if claudeState != .running {
+                        claudeState = .running
+                    }
+                }
+
+                var elements = ChatElement.from(payload: payload)
+                if isCodexRuntime {
+                    elements.removeAll { $0.type == .thinking }
+                }
 
                 // Queue elements for debounced UI update (batches rapid events)
                 if !elements.isEmpty {
@@ -2600,7 +2732,7 @@ final class DashboardViewModel: ObservableObject {
 
                         // Watch the new session with workspace_id from event (or fallback to currentWorkspaceId)
                         do {
-                            try await webSocketService.watchSession(realId, workspaceId: effectiveWorkspaceId)
+                            try await webSocketService.watchSession(realId, workspaceId: effectiveWorkspaceId, runtime: selectedSessionRuntime)
                             isWatchingSession = true
                             watchingSessionId = realId
                             AppLogger.log("[Dashboard] Now watching session: \(realId)")
@@ -2805,6 +2937,7 @@ final class DashboardViewModel: ObservableObject {
         }
 
         await loadRecentSessionHistory(isReconnection: true)
+        await syncCurrentSessionRuntimeState(context: "foreground")
         await startWatchingCurrentSession(force: true)
         await refreshStatus()
     }
@@ -2863,6 +2996,82 @@ final class DashboardViewModel: ObservableObject {
         AppLogger.log("[Dashboard] reconcileStatus(\(context)) \(previous) → \(claudeState)")
     }
 
+    private func syncCurrentSessionRuntimeState(context: String) async {
+        guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else {
+            AppLogger.log("[Dashboard] session/state sync skipped (\(context)) - no selected session")
+            return
+        }
+
+        do {
+            let runtimeState = try await workspaceManager.getSessionState(sessionId: sessionId)
+            let syncedState = Self.mapClaudeState(from: runtimeState)
+            let previousState = claudeState
+
+            claudeState = syncedState
+            agentStatus = AgentStatus(
+                claudeState: syncedState,
+                sessionId: agentStatus.sessionId ?? sessionId,
+                repoName: agentStatus.repoName,
+                repoPath: agentStatus.repoPath,
+                connectedClients: agentStatus.connectedClients,
+                uptime: agentStatus.uptime
+            )
+
+            // Reset streaming-only UI when runtime is not actively running.
+            if syncedState != .running {
+                isStreaming = false
+                spinnerMessage = nil
+                streamingStartTime = nil
+            }
+
+            // If runtime is no longer waiting, clear stale interaction UI.
+            if runtimeState.waitingForInput != true && syncedState != .waiting {
+                pendingInteraction = nil
+            }
+
+            let workspaceId = runtimeState.workspaceId
+            if !workspaceId.isEmpty {
+                workspaceManager.updateWorkspaceSession(workspaceId: workspaceId, session: runtimeState.toSession())
+            }
+
+            AppLogger.log("[Dashboard] session/state sync (\(context)): session=\(sessionId), claudeState \(previousState) → \(syncedState), isRunning=\(runtimeState.isRunning ?? false), waitingForInput=\(runtimeState.waitingForInput ?? false), pendingTool=\(runtimeState.pendingToolName ?? "nil")")
+        } catch {
+            if isSessionNotFoundError(error) {
+                AppLogger.log("[Dashboard] session/state sync (\(context)) skipped - session not active: \(sessionId)")
+            } else {
+                AppLogger.log("[Dashboard] session/state sync (\(context)) failed: \(error.localizedDescription)", type: .warning)
+            }
+        }
+    }
+
+    private static func mapClaudeState(from runtimeState: SessionStateResponse) -> ClaudeState {
+        if let raw = runtimeState.claudeState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !raw.isEmpty {
+            switch raw {
+            case "running", "starting":
+                return .running
+            case "waiting", "permission", "question":
+                return .waiting
+            case "idle":
+                return .idle
+            case "stopped", "stopping":
+                return .stopped
+            case "error", "failed":
+                return .error
+            default:
+                break
+            }
+        }
+
+        if runtimeState.waitingForInput == true {
+            return .waiting
+        }
+        if runtimeState.isRunning == true {
+            return .running
+        }
+        return .idle
+    }
+
     private func isStreamEvent(_ type: AgentEventType) -> Bool {
         switch type {
         case .claudeMessage, .ptySpinner, .ptyState, .streamReadComplete:
@@ -2874,6 +3083,7 @@ final class DashboardViewModel: ObservableObject {
 
     private func shouldMarkStreamEvent(_ event: AgentEvent) -> Bool {
         guard isStreamEvent(event.type) else { return false }
+        guard event.matchesRuntime(selectedSessionRuntime) else { return false }
         guard let selectedSessionId = userSelectedSessionId, !selectedSessionId.isEmpty else { return true }
         if let eventSessionId = event.sessionId, !eventSessionId.isEmpty {
             return eventSessionId == selectedSessionId
@@ -2969,14 +3179,13 @@ final class DashboardViewModel: ObservableObject {
     /// Note: Checks up to 100 sessions (should cover recently used sessions)
     private func validateSessionExists(_ sessionId: String) async -> Bool {
         do {
-            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
-                AppLogger.log("[Dashboard] validateSessionExists: missing workspace ID", type: .warning)
-                return false
-            }
-
-            // Load a larger batch for validation since we need to search
-            let sessionsResponse = try await _agentRepository.getSessions(workspaceId: workspaceId, limit: 100, offset: 0)
+            let sessionsResponse = try await fetchSessionsPage(
+                runtime: selectedSessionRuntime,
+                limit: 100,
+                offset: 0
+            )
             let exists = sessionsResponse.sessions.contains { $0.sessionId == sessionId }
+
             if !exists {
                 AppLogger.log("[Dashboard] Session \(sessionId) not found in first 100 sessions (deleted or old)")
             }
@@ -3122,6 +3331,45 @@ final class DashboardViewModel: ObservableObject {
         return ""
     }
 
+    /// Extract normalized thinking text from structured claude_message payload.
+    /// Used for Codex runtime to show thinking in the bottom streaming bar.
+    private func codexThinkingText(from payload: ClaudeMessagePayload) -> String? {
+        guard case .blocks(let blocks) = payload.effectiveContent else { return nil }
+
+        let thinkingSegments = blocks
+            .filter { $0.type == "thinking" }
+            .compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !thinkingSegments.isEmpty else { return nil }
+
+        let merged = thinkingSegments.joined(separator: " • ")
+        let normalized = normalizeThinkingMessage(merged)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    /// Keep spinner text compact and readable (strip top-level markdown emphasis, collapse whitespace).
+    private func normalizeThinkingMessage(_ text: String) -> String {
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if normalized.hasPrefix("**"), normalized.hasSuffix("**"), normalized.count > 4 {
+            normalized = String(normalized.dropFirst(2).dropLast(2))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        normalized = normalized.replacingOccurrences(of: "\n", with: " ")
+        normalized = normalized.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return normalized
+    }
+
+    /// Ensure spinner message always includes mobile interrupt guidance.
+    private func codexSpinnerMessage(from thinkingText: String) -> String {
+        if thinkingText.localizedCaseInsensitiveContains(Self.mobileStopText) {
+            return thinkingText
+        }
+        return "\(thinkingText) (\(Self.mobileStopText))"
+    }
+
     /// Schedule a light refresh of session history to catch session ID switches
     private func scheduleSessionHistoryRefresh(reason: String) {
         Task.detached { [weak self] in
@@ -3132,52 +3380,189 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Get the most recent session ID from workspace history
+    /// Get the most recent session ID for the selected runtime
     private func getMostRecentSessionId() async -> String? {
-        guard let workspaceId = currentWorkspaceId else {
-            AppLogger.log("[Dashboard] getMostRecentSessionId: no workspace ID", type: .warning)
-            return nil
-        }
-
-        return await getMostRecentSessionIdFromHistory(workspaceId: workspaceId)
-    }
-
-    private func getMostRecentSessionIdFromHistory(workspaceId: String) async -> String? {
         do {
-            let historyResponse = try await workspaceManager.getSessionHistory(workspaceId: workspaceId, limit: 20)
-            guard let sessions = historyResponse.sessions, !sessions.isEmpty else {
-                AppLogger.log("[Dashboard] getMostRecentSessionId: history empty for workspace \(workspaceId)")
+            let response = try await fetchSessionsPage(
+                runtime: selectedSessionRuntime,
+                limit: 20,
+                offset: 0
+            )
+            guard !response.sessions.isEmpty else {
+                AppLogger.log("[Dashboard] getMostRecentSessionId: \(selectedSessionRuntime.rawValue) list empty")
                 return nil
             }
 
-            let latest = selectLatestSessionId(from: sessions)
-            AppLogger.log("[Dashboard] getMostRecentSessionId: history latest=\(latest ?? "nil"), count=\(sessions.count)")
+            let latest = selectLatestAgentSessionId(from: response.sessions)
+            AppLogger.log("[Dashboard] getMostRecentSessionId: \(selectedSessionRuntime.rawValue) latest=\(latest ?? "nil"), count=\(response.sessions.count)")
             return latest
         } catch {
-            AppLogger.error(error, context: "Get most recent session ID (history)")
+            AppLogger.error(error, context: "Get most recent session ID")
             return nil
         }
     }
 
-    private func selectLatestSessionId(from sessions: [HistorySessionInfo]) -> String? {
+    private func fetchSessionsPage(
+        runtime: AgentRuntime,
+        limit: Int,
+        offset: Int
+    ) async throws -> SessionsResponse {
+        switch runtime.sessionListSource {
+        case .runtimeScoped:
+            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
+                AppLogger.log("[Dashboard] Cannot load \(runtime.rawValue) sessions - no workspace ID", type: .warning)
+                return SessionsResponse(sessions: [], total: 0, limit: limit, offset: offset)
+            }
+            return try await _agentRepository.getAgentSessions(
+                runtime: runtime,
+                workspaceId: workspaceId,
+                limit: limit,
+                offset: offset
+            )
+
+        case .workspaceHistory:
+            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
+                AppLogger.log("[Dashboard] Cannot load sessions - no workspace ID", type: .warning)
+                return SessionsResponse(sessions: [], total: 0, limit: limit, offset: offset)
+            }
+
+            // workspace/session/history currently has no offset support.
+            guard offset == 0 else {
+                return SessionsResponse(sessions: [], total: 0, limit: limit, offset: offset)
+            }
+
+            let historyResponse = try await workspaceManager.getSessionHistory(
+                workspaceId: workspaceId,
+                limit: limit,
+                runtime: runtime
+            )
+            let mapped = (historyResponse.sessions ?? []).map { historySession in
+                let status = historySession.status.flatMap { SessionsResponse.SessionStatus(rawValue: $0) }
+                return SessionsResponse.SessionInfo(
+                    sessionId: historySession.sessionId,
+                    summary: historySession.summary ?? "No summary",
+                    messageCount: historySession.messageCount ?? 0,
+                    lastUpdated: historySession.lastUpdated ?? "",
+                    branch: historySession.branch,
+                    agentType: runtime,
+                    status: status,
+                    workspaceId: workspaceId,
+                    startedAt: historySession.startedAt,
+                    lastActive: historySession.lastActive,
+                    viewers: historySession.viewers
+                )
+            }
+
+            // Force total to mapped.count so hasMore remains false for this API.
+            return SessionsResponse(
+                sessions: mapped,
+                total: mapped.count,
+                limit: limit,
+                offset: 0
+            )
+        }
+    }
+
+    private func fetchSessionMessagesPage(
+        runtime: AgentRuntime,
+        sessionId: String,
+        limit: Int,
+        offset: Int,
+        order: String
+    ) async throws -> SessionMessagesResponse {
+        switch runtime.sessionMessagesSource {
+        case .runtimeScoped:
+            return try await _agentRepository.getAgentSessionMessages(
+                runtime: runtime,
+                sessionId: sessionId,
+                limit: limit,
+                offset: offset,
+                order: order
+            )
+        case .workspaceScoped:
+            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
+                throw AppError.workspaceIdRequired
+            }
+            return try await _agentRepository.getSessionMessages(
+                runtime: runtime,
+                sessionId: sessionId,
+                workspaceId: workspaceId,
+                limit: limit,
+                offset: offset,
+                order: order
+            )
+        }
+    }
+
+    private func deleteSessionForRuntime(
+        runtime: AgentRuntime,
+        sessionId: String,
+        workspaceId: String?
+    ) async throws {
+        switch runtime.sessionListSource {
+        case .runtimeScoped:
+            _ = try await _agentRepository.deleteAgentSession(runtime: runtime, sessionId: sessionId)
+        case .workspaceHistory:
+            guard let workspaceId = workspaceId, !workspaceId.isEmpty else {
+                throw AppError.workspaceIdRequired
+            }
+            _ = try await _agentRepository.deleteSession(runtime: runtime, sessionId: sessionId, workspaceId: workspaceId)
+        }
+    }
+
+    private struct DeleteAllSessionsSummary {
+        let deletedCount: Int
+        let failedCount: Int
+    }
+
+    private func deleteAllSessionsForRuntime(
+        runtime: AgentRuntime,
+        workspaceId: String?
+    ) async throws -> DeleteAllSessionsSummary {
+        switch runtime.sessionListSource {
+        case .runtimeScoped:
+            let response = try await _agentRepository.deleteAllAgentSessions(runtime: runtime)
+            return DeleteAllSessionsSummary(deletedCount: response.deleted, failedCount: 0)
+
+        case .workspaceHistory:
+            guard let workspaceId = workspaceId, !workspaceId.isEmpty else {
+                throw AppError.workspaceIdRequired
+            }
+
+            var deletedCount = 0
+            var failedCount = 0
+            for session in sessions {
+                do {
+                    _ = try await _agentRepository.deleteSession(runtime: runtime, sessionId: session.sessionId, workspaceId: workspaceId)
+                    deletedCount += 1
+                } catch {
+                    failedCount += 1
+                    AppLogger.log("[Dashboard] Failed to delete session \(session.sessionId): \(error)", type: .error)
+                }
+            }
+
+            return DeleteAllSessionsSummary(deletedCount: deletedCount, failedCount: failedCount)
+        }
+    }
+
+    private func selectLatestAgentSessionId(from sessions: [SessionsResponse.SessionInfo]) -> String? {
         let sorted = sessions.sorted { left, right in
             let leftDate = sessionSortDate(left)
             let rightDate = sessionSortDate(right)
             return leftDate > rightDate
         }
-
         return sorted.first?.sessionId
     }
 
-    private func sessionSortDate(_ session: HistorySessionInfo) -> Date {
+    private func sessionSortDate(_ session: SessionsResponse.SessionInfo) -> Date {
         if let lastActive = parseSessionDate(session.lastActive) {
             return lastActive
         }
-        if let lastUpdated = parseSessionDate(session.lastUpdated) {
-            return lastUpdated
-        }
         if let startedAt = parseSessionDate(session.startedAt) {
             return startedAt
+        }
+        if let lastUpdated = parseSessionDate(session.lastUpdated) {
+            return lastUpdated
         }
         return .distantPast
     }
@@ -3275,7 +3660,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             AppLogger.log("[Dashboard] Calling watchSession API for: \(sessionId)")
             // Use workspace-aware API if available
-            try await webSocketService.watchSession(sessionId, workspaceId: currentWorkspaceId)
+            try await webSocketService.watchSession(sessionId, workspaceId: currentWorkspaceId, runtime: selectedSessionRuntime)
             // JSON-RPC response confirms watching - set state immediately
             isWatchingSession = true
             watchingSessionId = sessionId
@@ -3341,6 +3726,10 @@ final class DashboardViewModel: ObservableObject {
     /// Returns true if element was added, false if duplicate
     @discardableResult
     private func addElementIfNew(_ element: ChatElement) -> Bool {
+        if shouldHideElementFromChatList(element) {
+            return false
+        }
+
         guard !seenElementIds.contains(element.id) else {
             return false
         }
@@ -3362,6 +3751,11 @@ final class DashboardViewModel: ObservableObject {
             }
         }
         return addedCount
+    }
+
+    /// Keep Codex thinking output in the bottom thinking bar, not in chat rows.
+    private func shouldHideElementFromChatList(_ element: ChatElement) -> Bool {
+        selectedSessionRuntime == .codex && element.type == .thinking
     }
 
     // MARK: - Workspace Management

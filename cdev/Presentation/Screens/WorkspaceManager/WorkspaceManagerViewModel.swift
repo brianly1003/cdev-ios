@@ -182,6 +182,9 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Used to prevent "Not Connected" flash on appear
     @Published private(set) var hasCheckedConnection: Bool = false
 
+    /// Ensures we auto-load workspaces once per connected lifecycle
+    private var hasAutoLoadedForCurrentConnection = false
+
     // MARK: - Initialization
 
     init(
@@ -360,7 +363,16 @@ final class WorkspaceManagerViewModel: ObservableObject {
                             self.hasCheckedConnection = true
                             AppLogger.log("[WorkspaceManager] Connection state synced: connected")
                         }
+
+                        // Connection became ready - load workspace list once
+                        if !self.hasAutoLoadedForCurrentConnection {
+                            self.hasAutoLoadedForCurrentConnection = true
+                            Task { [weak self] in
+                                await self?.refreshWorkspacesAfterConnection()
+                            }
+                        }
                     case .disconnected:
+                        self.hasAutoLoadedForCurrentConnection = false
                         // Only update if we were connected and not in a retry loop
                         if self.serverStatus == .connected {
                             self.serverStatus = .disconnected
@@ -377,6 +389,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
                             AppLogger.log("[WorkspaceManager] Connection state synced: reconnecting (\(attempt))")
                         }
                     case .failed(let reason):
+                        self.hasAutoLoadedForCurrentConnection = false
                         // Only update to failed state if ViewModel is not running its own retry loop
                         // ViewModel's connectWithRetry handles its own state transitions
                         if !self.isConnecting {
@@ -484,7 +497,10 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 serverStatus = .connected
                 isConnecting = false
                 currentRetryAttempt = 0
-                await refreshWorkspaces()
+                if !hasAutoLoadedForCurrentConnection {
+                    hasAutoLoadedForCurrentConnection = true
+                    await refreshWorkspacesAfterConnection()
+                }
                 Haptics.success()
                 AppLogger.log("[WorkspaceManager] Connected successfully to \(host)")
                 return
@@ -626,6 +642,36 @@ final class WorkspaceManagerViewModel: ObservableObject {
         } catch {
             self.error = .rpcError(code: -1, message: error.localizedDescription)
             self.showError = true
+        }
+    }
+
+    /// Refresh workspace list with short retries after a new connection is established.
+    /// This handles startup races where the socket is up but RPC requests are briefly unavailable.
+    private func refreshWorkspacesAfterConnection() async {
+        let maxAttempts = 3
+
+        for attempt in 1...maxAttempts {
+            guard webSocketService.isConnected else { return }
+
+            do {
+                _ = try await managerService.listWorkspaces()
+                return
+            } catch {
+                let isLastAttempt = attempt == maxAttempts
+                if isLastAttempt {
+                    if let managerError = error as? WorkspaceManagerError {
+                        self.error = managerError
+                    } else {
+                        self.error = .rpcError(code: -1, message: error.localizedDescription)
+                    }
+                    self.showError = true
+                    AppLogger.log("[WorkspaceManager] Workspace refresh failed after connect: \(error.localizedDescription)", type: .error)
+                    return
+                }
+
+                AppLogger.log("[WorkspaceManager] Workspace refresh retry \(attempt + 1)/\(maxAttempts) after connect", type: .warning)
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
         }
     }
 
@@ -1107,6 +1153,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
         // Update status
         serverStatus = .disconnected
+        hasAutoLoadedForCurrentConnection = false
         currentWorkspaceId = nil
 
         // Show setup sheet

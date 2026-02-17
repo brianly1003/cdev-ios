@@ -68,14 +68,14 @@ final class AgentRepository: AgentRepositoryProtocol {
 
     // MARK: - Claude Control
 
-    func runClaude(prompt: String, mode: SessionMode, sessionId: String?) async throws {
+    func runClaude(prompt: String, mode: SessionMode, sessionId: String?, runtime: AgentRuntime) async throws {
         // For "new" mode, don't use any session ID - start fresh
         // For "continue" mode, use provided sessionId or fallback to currentSessionId
         let effectiveSessionId: String?
         if mode == .new {
             // New session - don't include session_id in request
             effectiveSessionId = nil
-            AppLogger.log("[AgentRepository] Mode is 'new' - will not include session_id")
+            AppLogger.log("[AgentRepository] Mode is 'new' - will not include session_id (runtime: \(runtime.rawValue))")
         } else {
             // Continue mode - use provided or current session
             effectiveSessionId = await MainActor.run { () -> String? in
@@ -87,11 +87,12 @@ final class AgentRepository: AgentRepositoryProtocol {
         }
 
         if let sid = effectiveSessionId {
-            AppLogger.log("[AgentRepository] Using session/send API with session: \(sid), mode: continue")
+            AppLogger.log("[AgentRepository] Using session/send API with session: \(sid), mode: continue, runtime: \(runtime.rawValue)")
             try await WorkspaceManagerService.shared.sendPrompt(
                 sessionId: sid,
                 prompt: prompt,
-                mode: "continue"
+                mode: "continue",
+                runtime: runtime
             )
             return
         }
@@ -100,11 +101,12 @@ final class AgentRepository: AgentRepositoryProtocol {
         // Use session/send with mode "new" and no session_id
         let workspaceId = await MainActor.run { self.currentWorkspaceId }
         if workspaceId != nil {
-            AppLogger.log("[AgentRepository] Sending prompt with mode 'new' (no session_id)")
+            AppLogger.log("[AgentRepository] Sending prompt with mode 'new' (no session_id), runtime: \(runtime.rawValue)")
             try await WorkspaceManagerService.shared.sendPrompt(
                 sessionId: nil,  // No session_id for new sessions
                 prompt: prompt,
-                mode: "new"
+                mode: "new",
+                runtime: runtime
             )
             return
         }
@@ -113,7 +115,7 @@ final class AgentRepository: AgentRepositoryProtocol {
         throw AgentRepositoryError.noWorkspaceContext
     }
 
-    func stopClaude(sessionId: String?) async throws {
+    func stopClaude(sessionId: String?, runtime: AgentRuntime) async throws {
         // Use provided sessionId or fallback to current session from workspace
         let effectiveSessionId: String?
         if let sid = sessionId, !sid.isEmpty {
@@ -127,11 +129,11 @@ final class AgentRepository: AgentRepositoryProtocol {
             throw AgentRepositoryError.noSessionContext
         }
 
-        AppLogger.log("[AgentRepository] Using session/stop API with session: \(sid)")
-        try await WorkspaceManagerService.shared.stopSession(sessionId: sid)
+        AppLogger.log("[AgentRepository] Using session/stop API with session: \(sid), runtime: \(runtime.rawValue)")
+        try await WorkspaceManagerService.shared.stopSession(sessionId: sid, runtime: runtime)
     }
 
-    func respondToClaude(response: String, requestId: String?, approved: Bool?) async throws {
+    func respondToClaude(response: String, requestId: String?, approved: Bool?, runtime: AgentRuntime) async throws {
         let sessionId = await MainActor.run { self.currentSessionId }
         guard let sid = sessionId else {
             AppLogger.log("[AgentRepository] No session context for respond", type: .warning)
@@ -152,28 +154,29 @@ final class AgentRepository: AgentRepositoryProtocol {
             responseValue = response
         }
 
-        AppLogger.log("[AgentRepository] Using session/respond API with session: \(sid), type: \(responseType)")
+        AppLogger.log("[AgentRepository] Using session/respond API with session: \(sid), type: \(responseType), runtime: \(runtime.rawValue)")
         try await WorkspaceManagerService.shared.respond(
             sessionId: sid,
             type: responseType,
-            response: responseValue
+            response: responseValue,
+            runtime: runtime
         )
     }
 
     // MARK: - PTY Mode (Interactive Terminal)
 
-    func sendInput(sessionId: String, input: String) async throws {
-        AppLogger.log("[AgentRepository] Sending PTY input to session: \(sessionId), input: \(input)")
-        let params = SessionInputParams(sessionId: sessionId, input: input)
+    func sendInput(sessionId: String, input: String, runtime: AgentRuntime) async throws {
+        AppLogger.log("[AgentRepository] Sending PTY input to session: \(sessionId), input: \(input), runtime: \(runtime.rawValue)")
+        let params = SessionInputParams(sessionId: sessionId, input: input, agentType: runtime.rawValue)
         let _: SessionInputResult = try await rpcClient.request(
             method: JSONRPCMethod.sessionInput,
             params: params
         )
     }
 
-    func sendKey(sessionId: String, key: SessionInputKey) async throws {
-        AppLogger.log("[AgentRepository] Sending PTY key to session: \(sessionId), key: \(key.rawValue)")
-        let params = SessionInputParams(sessionId: sessionId, key: key)
+    func sendKey(sessionId: String, key: SessionInputKey, runtime: AgentRuntime) async throws {
+        AppLogger.log("[AgentRepository] Sending PTY key to session: \(sessionId), key: \(key.rawValue), runtime: \(runtime.rawValue)")
+        let params = SessionInputParams(sessionId: sessionId, key: key, agentType: runtime.rawValue)
         let _: SessionInputResult = try await rpcClient.request(
             method: JSONRPCMethod.sessionInput,
             params: params
@@ -448,7 +451,71 @@ final class AgentRepository: AgentRepositoryProtocol {
         )
     }
 
+    func getAgentSessions(runtime: AgentRuntime, workspaceId: String? = nil, limit: Int = 20, offset: Int = 0) async throws -> SessionsResponse {
+        let requestLimit = max(limit + offset, limit)
+        let params = SessionListParams(
+            agentType: runtime.rawValue,
+            workspaceId: workspaceId,
+            limit: requestLimit
+        )
+
+        AppLogger.network("[AgentSessions] RPC session/list agent_type=\(runtime.rawValue), workspace_id=\(workspaceId ?? "nil"), limit=\(requestLimit)")
+        let result: SessionListResult = try await rpcClient.request(
+            method: JSONRPCMethod.sessionList,
+            params: params
+        )
+
+        let allSessions = result.sessions ?? []
+        let pageSessions = Array(allSessions.dropFirst(offset).prefix(limit))
+        let mapped = pageSessions.map { session -> SessionsResponse.SessionInfo in
+            // Prefer summary, fallback to first prompt, then session ID
+            let summary: String
+            if let s = session.summary, !s.isEmpty {
+                summary = s
+            } else if let fp = session.firstPrompt, !fp.isEmpty {
+                summary = fp
+            } else {
+                summary = "Session \(session.sessionId.prefix(8))"
+            }
+            let messageCount = session.messageCount ?? 0
+            let lastUpdated = session.lastUpdated ?? session.startTime ?? ""
+            let agentType = AgentRuntime(rawValue: session.agentType ?? "") ?? runtime
+            return SessionsResponse.SessionInfo(
+                sessionId: session.sessionId,
+                summary: summary,
+                messageCount: messageCount,
+                lastUpdated: lastUpdated,
+                branch: session.branch,
+                agentType: agentType,
+                status: nil,
+                workspaceId: nil,
+                startedAt: session.startTime,
+                lastActive: session.lastUpdated,
+                viewers: nil,
+                // Enhanced metadata from Codex CLI sessions
+                firstPrompt: session.firstPrompt,
+                gitCommit: session.gitCommit,
+                gitRepo: session.gitRepo,
+                projectPath: session.projectPath,
+                modelProvider: session.modelProvider,
+                model: session.model,
+                cliVersion: session.cliVersion,
+                fileSize: session.fileSize,
+                filePath: session.filePath
+            )
+        }
+
+        return SessionsResponse(
+            sessions: mapped,
+            current: nil,
+            total: result.total,
+            limit: limit,
+            offset: offset
+        )
+    }
+
     func getSessionMessages(
+        runtime: AgentRuntime,
         sessionId: String,
         workspaceId: String?,
         limit: Int = 20,
@@ -467,7 +534,8 @@ final class AgentRepository: AgentRepositoryProtocol {
             sessionId: sessionId,
             limit: limit,
             offset: offset,
-            order: order
+            order: order,
+            agentType: runtime.rawValue
         )
 
         let result: WorkspaceSessionMessagesResult = try await rpcClient.request(
@@ -502,9 +570,43 @@ final class AgentRepository: AgentRepositoryProtocol {
         )
     }
 
-    func deleteSession(sessionId: String, workspaceId: String) async throws -> DeleteSessionResponse {
-        AppLogger.log("[AgentRepository] Deleting session: \(sessionId) from workspace: \(workspaceId)")
-        let params = WorkspaceSessionDeleteParams(workspaceId: workspaceId, sessionId: sessionId)
+    func getAgentSessionMessages(
+        runtime: AgentRuntime,
+        sessionId: String,
+        limit: Int = 20,
+        offset: Int = 0,
+        order: String = "desc"
+    ) async throws -> SessionMessagesResponse {
+        let params = SessionMessagesParams(
+            sessionId: sessionId,
+            agentType: runtime.rawValue,
+            limit: limit,
+            offset: offset,
+            order: order
+        )
+
+        AppLogger.network("[AgentSessions] RPC session/messages agent_type=\(runtime.rawValue), session_id=\(sessionId)")
+        let result: SessionMessagesResult = try await rpcClient.request(
+            method: JSONRPCMethod.sessionMessages,
+            params: params
+        )
+
+        let messages = result.messages ?? []
+        return SessionMessagesResponse(
+            sessionId: result.sessionId ?? sessionId,
+            messages: messages,
+            total: result.total ?? messages.count,
+            limit: result.limit ?? limit,
+            offset: result.offset ?? offset,
+            hasMore: result.hasMore ?? false,
+            cacheHit: nil,
+            queryTimeMs: result.queryTimeMs
+        )
+    }
+
+    func deleteSession(runtime: AgentRuntime, sessionId: String, workspaceId: String) async throws -> DeleteSessionResponse {
+        AppLogger.log("[AgentRepository] Deleting \(runtime.rawValue) session: \(sessionId) from workspace: \(workspaceId)")
+        let params = WorkspaceSessionDeleteParams(workspaceId: workspaceId, sessionId: sessionId, agentType: runtime.rawValue)
         let result: WorkspaceSessionDeleteResult = try await rpcClient.request(
             method: JSONRPCMethod.workspaceSessionDelete,
             params: params
@@ -513,6 +615,32 @@ final class AgentRepository: AgentRepositoryProtocol {
         return DeleteSessionResponse(
             message: result.status ?? "deleted",
             sessionId: sessionId
+        )
+    }
+
+    func deleteAgentSession(runtime: AgentRuntime, sessionId: String) async throws -> DeleteSessionResponse {
+        let params = SessionDeleteParams(sessionId: sessionId, agentType: runtime.rawValue)
+        AppLogger.network("[AgentSessions] RPC session/delete agent_type=\(runtime.rawValue), session_id=\(sessionId)")
+        let result: SessionDeleteResult = try await rpcClient.request(
+            method: JSONRPCMethod.sessionDelete,
+            params: params
+        )
+        return DeleteSessionResponse(
+            message: result.status ?? "deleted",
+            sessionId: sessionId
+        )
+    }
+
+    func deleteAllAgentSessions(runtime: AgentRuntime) async throws -> DeleteAllSessionsResponse {
+        let params = SessionDeleteParams(sessionId: nil, agentType: runtime.rawValue)
+        AppLogger.network("[AgentSessions] RPC session/delete agent_type=\(runtime.rawValue) (all)")
+        let result: SessionDeleteResult = try await rpcClient.request(
+            method: JSONRPCMethod.sessionDelete,
+            params: params
+        )
+        return DeleteAllSessionsResponse(
+            message: result.status ?? "deleted",
+            deleted: result.deleted ?? 0
         )
     }
 

@@ -31,26 +31,31 @@ private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
         view.backgroundColor = .clear
         view.delegate = context.coordinator
 
-        // Add SwiftUI content as hosted view
-        let hostingController = UIHostingController(rootView: content)
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.frame = CGRect(x: 0, y: 0, width: size, height: size)
-        hostingController.view.isUserInteractionEnabled = false // Let container handle touches
+        // Add SwiftUI content as hosted view (avoid UIHostingController to prevent reparenting warnings)
+        let hostingConfig = UIHostingConfiguration { content }
+            .margins(.all, 0)
+        let hostingView = hostingConfig.makeContentView()
+        hostingView.backgroundColor = .clear
+        hostingView.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        hostingView.isUserInteractionEnabled = false // Let container handle touches
 
-        view.addSubview(hostingController.view)
+        view.addSubview(hostingView)
 
-        context.coordinator.hostingController = hostingController
+        context.coordinator.hostingView = hostingView
         context.coordinator.containerSize = size
 
         return view
     }
 
     func updateUIView(_ uiView: ForceTouchContainerView, context: Context) {
-        context.coordinator.hostingController?.rootView = content
+        let hostingConfig = UIHostingConfiguration { content }
+            .margins(.all, 0)
+        context.coordinator.hostingView?.configuration = hostingConfig
         // Update frame when SwiftUI layout changes
-        let size = context.coordinator.containerSize
+        let size = buttonSize + 20
+        context.coordinator.containerSize = size
         uiView.frame = CGRect(x: 0, y: 0, width: size, height: size)
-        context.coordinator.hostingController?.view.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        context.coordinator.hostingView?.frame = CGRect(x: 0, y: 0, width: size, height: size)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ForceTouchContainerView, context: Context) -> CGSize? {
@@ -74,7 +79,7 @@ private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, ForceTouchContainerDelegate {
-        var hostingController: UIHostingController<Content>?
+        var hostingView: (UIView & UIContentView)?
 
         let forceThreshold: CGFloat
         let longPressDuration: TimeInterval

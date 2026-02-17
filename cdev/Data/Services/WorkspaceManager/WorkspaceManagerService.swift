@@ -275,8 +275,12 @@ final class WorkspaceManagerService: ObservableObject {
 
     // MARK: - Session Operations
 
-    /// Start a new Claude session for a workspace
-    func startSession(workspaceId: String) async throws -> Session {
+    /// Start a new runtime session for a workspace
+    func startSession(
+        workspaceId: String,
+        runtime: AgentRuntime = .claude,
+        resumeSessionId: String? = nil
+    ) async throws -> Session {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
@@ -284,7 +288,11 @@ final class WorkspaceManagerService: ObservableObject {
         let client = ws.getJSONRPCClient()
         let response: SessionStartResponse = try await client.request(
             method: JSONRPCMethod.sessionStart,
-            params: WMSessionStartParams(workspaceId: workspaceId)
+            params: WMSessionStartParams(
+                workspaceId: workspaceId,
+                resumeSessionId: resumeSessionId,
+                agentType: runtime.rawValue
+            )
         )
 
         // Clear unreachable status on successful session start
@@ -301,7 +309,7 @@ final class WorkspaceManagerService: ObservableObject {
         updateWorkspaceSession(workspaceId: workspaceId, session: newSession)
 
         Haptics.success()
-        AppLogger.log("[WorkspaceManager] Started session: \(response.id) for workspace: \(workspaceId)")
+        AppLogger.log("[WorkspaceManager] Started session: \(response.id) for workspace: \(workspaceId), runtime: \(runtime.rawValue)")
 
         return Session(
             id: response.id,
@@ -313,7 +321,7 @@ final class WorkspaceManagerService: ObservableObject {
     }
 
     /// Stop a session
-    func stopSession(sessionId: String) async throws {
+    func stopSession(sessionId: String, runtime: AgentRuntime = .claude) async throws {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
@@ -323,7 +331,7 @@ final class WorkspaceManagerService: ObservableObject {
         do {
             let _: EmptyResponse = try await client.request(
                 method: JSONRPCMethod.sessionStop,
-                params: SessionIdParams(sessionId: sessionId)
+                params: SessionIdParams(sessionId: sessionId, agentType: runtime.rawValue)
             )
         } catch let error as JSONRPCClientError {
             // Convert RPC errors to WorkspaceManager errors for better UI handling
@@ -338,7 +346,7 @@ final class WorkspaceManagerService: ObservableObject {
         removeSessionFromWorkspace(sessionId: sessionId)
 
         Haptics.light()
-        AppLogger.log("[WorkspaceManager] Stopped session: \(sessionId)")
+        AppLogger.log("[WorkspaceManager] Stopped session: \(sessionId) (runtime: \(runtime.rawValue))")
     }
 
     /// Send a prompt to a session
@@ -348,7 +356,14 @@ final class WorkspaceManagerService: ObservableObject {
     ///   - workspaceId: Optional workspace ID. Required for "new" mode to specify which workspace.
     ///   - prompt: The prompt text to send
     ///   - mode: "new" or "continue"
-    func sendPrompt(sessionId: String?, workspaceId: String? = nil, prompt: String, mode: String = "new") async throws {
+    ///   - runtime: Agent runtime for routing (claude, codex)
+    func sendPrompt(
+        sessionId: String?,
+        workspaceId: String? = nil,
+        prompt: String,
+        mode: String = "new",
+        runtime: AgentRuntime = .claude
+    ) async throws {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
@@ -370,15 +385,16 @@ final class WorkspaceManagerService: ObservableObject {
                 workspaceId: effectiveWorkspaceId,  // Required for "new" mode
                 prompt: prompt,
                 mode: mode,
-                permissionMode: "interactive"
+                permissionMode: "interactive",
+                agentType: runtime.rawValue
             )
         )
 
-        AppLogger.log("[WorkspaceManager] Sent prompt (mode: \(mode), sessionId: \(sessionId ?? "nil"), workspaceId: \(effectiveWorkspaceId ?? "nil")) (interactive mode)")
+        AppLogger.log("[WorkspaceManager] Sent prompt (mode: \(mode), runtime: \(runtime.rawValue), sessionId: \(sessionId ?? "nil"), workspaceId: \(effectiveWorkspaceId ?? "nil")) (interactive mode)")
     }
 
     /// Respond to a permission request or question
-    func respond(sessionId: String, type: String, response: String) async throws {
+    func respond(sessionId: String, type: String, response: String, runtime: AgentRuntime = .claude) async throws {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
@@ -386,10 +402,10 @@ final class WorkspaceManagerService: ObservableObject {
         let client = ws.getJSONRPCClient()
         let _: EmptyResponse = try await client.request(
             method: JSONRPCMethod.sessionRespond,
-            params: WMSessionRespondParams(sessionId: sessionId, type: type, response: response)
+            params: WMSessionRespondParams(sessionId: sessionId, type: type, response: response, agentType: runtime.rawValue)
         )
 
-        AppLogger.log("[WorkspaceManager] Responded to session: \(sessionId)")
+        AppLogger.log("[WorkspaceManager] Responded to session: \(sessionId) (runtime: \(runtime.rawValue))")
     }
 
     /// Get session state (for reconnection sync)
@@ -432,8 +448,8 @@ final class WorkspaceManagerService: ObservableObject {
         return response.sessions
     }
 
-    /// Get session history for a workspace (workspace-aware API)
-    func getSessionHistory(workspaceId: String, limit: Int = 50) async throws -> SessionHistoryResult {
+    /// Get session history for a workspace/runtime (workspace-aware API)
+    func getSessionHistory(workspaceId: String, limit: Int = 50, runtime: AgentRuntime = .claude) async throws -> SessionHistoryResult {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
         }
@@ -441,10 +457,10 @@ final class WorkspaceManagerService: ObservableObject {
         let client = ws.getJSONRPCClient()
         let response: SessionHistoryResult = try await client.request(
             method: JSONRPCMethod.workspaceSessionHistory,
-            params: SessionHistoryParams(workspaceId: workspaceId, limit: limit)
+            params: SessionHistoryParams(workspaceId: workspaceId, limit: limit, agentType: runtime.rawValue)
         )
 
-        AppLogger.log("[WorkspaceManager] Got session history: \(response.sessions?.count ?? 0) sessions for workspace \(workspaceId)")
+        AppLogger.log("[WorkspaceManager] Got session history: \(response.sessions?.count ?? 0) sessions for workspace \(workspaceId), runtime: \(runtime.rawValue)")
         return response
     }
 
@@ -497,14 +513,10 @@ final class WorkspaceManagerService: ObservableObject {
     /// Leave a workspace without removing it (for multi-device scenarios)
     /// Unwatches session, unsubscribes from events, and hides from local UI
     func leaveWorkspace(_ workspaceId: String) async throws {
-        // Unwatch any active session first
+        // Unwatch any active session first (runtime-aware, includes agent_type)
         if let ws = webSocketService {
-            let client = ws.getJSONRPCClient()
             do {
-                let _: WorkspaceSessionUnwatchResult = try await client.request(
-                    method: JSONRPCMethod.workspaceSessionUnwatch,
-                    params: EmptyParams()
-                )
+                try await ws.unwatchSession()
                 AppLogger.log("[WorkspaceManager] Unwatched session for workspace: \(workspaceId)")
             } catch {
                 // Non-fatal - might not be watching anything
@@ -1062,17 +1074,34 @@ private struct DiscoverParams: Encodable {
 
 private struct WMSessionStartParams: Encodable {
     let workspaceId: String
+    let resumeSessionId: String?
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"
+        case resumeSessionId = "resume_session_id"
+        case agentType = "agent_type"
+    }
+
+    init(workspaceId: String, resumeSessionId: String? = nil, agentType: String? = nil) {
+        self.workspaceId = workspaceId
+        self.resumeSessionId = resumeSessionId
+        self.agentType = agentType
     }
 }
 
 private struct SessionIdParams: Encodable {
     let sessionId: String
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
+        case agentType = "agent_type"
+    }
+
+    init(sessionId: String, agentType: String? = nil) {
+        self.sessionId = sessionId
+        self.agentType = agentType
     }
 }
 
@@ -1082,6 +1111,7 @@ private struct WMSessionSendParams: Encodable {
     let prompt: String
     let mode: String
     let permissionMode: String
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -1089,6 +1119,7 @@ private struct WMSessionSendParams: Encodable {
         case prompt
         case mode
         case permissionMode = "permission_mode"
+        case agentType = "agent_type"
     }
 
     /// Custom encoder to omit nil fields
@@ -1099,6 +1130,7 @@ private struct WMSessionSendParams: Encodable {
         try container.encode(prompt, forKey: .prompt)
         try container.encode(mode, forKey: .mode)
         try container.encode(permissionMode, forKey: .permissionMode)
+        try container.encodeIfPresent(agentType, forKey: .agentType)
     }
 }
 
@@ -1106,11 +1138,20 @@ private struct WMSessionRespondParams: Encodable {
     let sessionId: String
     let type: String
     let response: String
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case type
         case response
+        case agentType = "agent_type"
+    }
+
+    init(sessionId: String, type: String, response: String, agentType: String? = nil) {
+        self.sessionId = sessionId
+        self.type = type
+        self.response = response
+        self.agentType = agentType
     }
 }
 

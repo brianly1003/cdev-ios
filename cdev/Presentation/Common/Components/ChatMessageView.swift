@@ -339,7 +339,7 @@ private struct ToolBlockView: View {
             // Content
             if showContent {
                 let displayContent = block.type == .toolUse
-                    ? (block.toolInput ?? block.content)
+                    ? toolUseDisplayContent
                     : block.content
 
                 if !displayContent.isEmpty {
@@ -355,6 +355,97 @@ private struct ToolBlockView: View {
                 }
             }
         }
+    }
+
+    private var toolUseDisplayContent: String {
+        let raw = block.toolInput ?? block.content
+        guard let toolName = block.toolName?.lowercased() else { return raw }
+
+        if toolName == "apply_patch" {
+            return summarizeApplyPatch(raw)
+        }
+
+        return raw
+    }
+
+    private func summarizeApplyPatch(_ input: String) -> String {
+        let patchStart = input.range(of: "*** Begin Patch")
+        let patch = patchStart.map { String(input[$0.lowerBound...]) } ?? input
+
+        struct PatchFileChange {
+            var action: String
+            var path: String
+            var added: Int
+            var removed: Int
+        }
+
+        var changes: [PatchFileChange] = []
+        var current: PatchFileChange?
+
+        func flushCurrent() {
+            guard let current else { return }
+            changes.append(current)
+        }
+
+        for line in patch.components(separatedBy: "\n") {
+            if line.hasPrefix("*** Add File: ") {
+                flushCurrent()
+                current = PatchFileChange(
+                    action: "Added",
+                    path: String(line.dropFirst("*** Add File: ".count)).trimmingCharacters(in: .whitespaces),
+                    added: 0,
+                    removed: 0
+                )
+                continue
+            }
+
+            if line.hasPrefix("*** Update File: ") {
+                flushCurrent()
+                current = PatchFileChange(
+                    action: "Updated",
+                    path: String(line.dropFirst("*** Update File: ".count)).trimmingCharacters(in: .whitespaces),
+                    added: 0,
+                    removed: 0
+                )
+                continue
+            }
+
+            if line.hasPrefix("*** Delete File: ") {
+                flushCurrent()
+                current = PatchFileChange(
+                    action: "Deleted",
+                    path: String(line.dropFirst("*** Delete File: ".count)).trimmingCharacters(in: .whitespaces),
+                    added: 0,
+                    removed: 0
+                )
+                continue
+            }
+
+            guard var working = current else { continue }
+            if line.hasPrefix("+") && !line.hasPrefix("+++") {
+                working.added += 1
+                current = working
+                continue
+            }
+
+            if line.hasPrefix("-") && !line.hasPrefix("---") {
+                working.removed += 1
+                current = working
+            }
+        }
+
+        flushCurrent()
+
+        if changes.isEmpty {
+            return "Applied patch"
+        }
+
+        return changes.map { change in
+            if change.action == "Deleted" {
+                return "\(change.action) \(change.path)"
+            }
+            return "\(change.action) \(change.path) (+\(change.added) -\(change.removed))"
+        }.joined(separator: "\n")
     }
 }
 

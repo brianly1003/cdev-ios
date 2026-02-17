@@ -16,6 +16,14 @@ enum ChatContentFilter {
             return true
         }
 
+        // Codex bootstrap/context payloads are transport metadata, not chat content.
+        if trimmed.hasPrefix("# AGENTS.md instructions for ") && lower.contains("<instructions>") {
+            return true
+        }
+        if lower.hasPrefix("<environment_context>") && lower.contains("</environment_context>") {
+            return true
+        }
+
         return false
     }
 }
@@ -900,8 +908,16 @@ extension ChatElement {
                         // Create display string for other tools
                         let display = formatToolDisplay(tool: toolName, params: params)
 
-                        // For Write tool, capture full content
-                        let fullContent = (toolName == "Write") ? params["content"] : nil
+                        // For tools with large text payloads, capture full content for expandable UI.
+                        let fullContent: String?
+                        switch toolName {
+                        case "Write":
+                            fullContent = params["content"]
+                        case "apply_patch":
+                            fullContent = params["input"]
+                        default:
+                            fullContent = nil
+                        }
 
                         elements.append(ChatElement(
                             id: blockId,
@@ -1016,6 +1032,20 @@ private func createToolResultElement(from block: ClaudeMessagePayload.ContentBlo
 
 private func formatToolDisplay(tool: String, params: [String: String]) -> String {
     switch tool {
+    case "exec_command":
+        let cmd = params["command"] ?? params["cmd"] ?? ""
+        if !cmd.isEmpty {
+            let truncated = cmd.count > 140 ? String(cmd.prefix(140)) + "..." : cmd
+            return "Ran \(truncated)"
+        }
+        return "Ran command"
+
+    case "apply_patch":
+        if let patch = params["input"], !patch.isEmpty {
+            return summarizeApplyPatchDisplay(patch)
+        }
+        return "Applied patch"
+
     case "Bash":
         if let cmd = params["command"] {
             let truncated = cmd.count > 60 ? String(cmd.prefix(60)) + "..." : cmd
@@ -1043,6 +1073,48 @@ private func formatToolDisplay(tool: String, params: [String: String]) -> String
         return tool
     }
     return "\(tool)(\(paramStr.prefix(50)))"
+}
+
+private func summarizeApplyPatchDisplay(_ patch: String) -> String {
+    var action = "Applied"
+    var file = ""
+    var added = 0
+    var removed = 0
+
+    for line in patch.components(separatedBy: "\n") {
+        if line.hasPrefix("*** Add File: ") {
+            action = "Added"
+            file = String(line.dropFirst("*** Add File: ".count)).trimmingCharacters(in: .whitespaces)
+            continue
+        }
+        if line.hasPrefix("*** Update File: ") {
+            action = "Updated"
+            file = String(line.dropFirst("*** Update File: ".count)).trimmingCharacters(in: .whitespaces)
+            continue
+        }
+        if line.hasPrefix("*** Delete File: ") {
+            action = "Deleted"
+            file = String(line.dropFirst("*** Delete File: ".count)).trimmingCharacters(in: .whitespaces)
+            continue
+        }
+        if line.hasPrefix("+") && !line.hasPrefix("+++") {
+            added += 1
+            continue
+        }
+        if line.hasPrefix("-") && !line.hasPrefix("---") {
+            removed += 1
+        }
+    }
+
+    if file.isEmpty {
+        return "Applied patch"
+    }
+
+    if action == "Deleted" {
+        return "\(action) \(file)"
+    }
+
+    return "\(action) \(file) (+\(added) -\(removed))"
 }
 
 /// Create ChatElements from session message (history API)
@@ -1162,8 +1234,16 @@ extension ChatElement {
                         // Regular tool call
                         let display = formatToolDisplay(tool: toolName, params: params)
 
-                        // For Write tool, capture full content
-                        let fullContent = (toolName == "Write") ? params["content"] : nil
+                        // For tools with large text payloads, capture full content for expandable UI.
+                        let fullContent: String?
+                        switch toolName {
+                        case "Write":
+                            fullContent = params["content"]
+                        case "apply_patch":
+                            fullContent = params["input"]
+                        default:
+                            fullContent = nil
+                        }
 
                         elements.append(ChatElement(
                             id: blockId,

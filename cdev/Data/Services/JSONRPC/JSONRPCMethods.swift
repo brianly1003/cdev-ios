@@ -89,6 +89,13 @@ enum JSONRPCMethod {
     static let workspaceSessionActivate = "workspace/session/activate"
     static let workspaceSessionDelete = "workspace/session/delete"
 
+    // Agent session operations (multi-agent)
+    static let sessionList = "session/list"
+    static let sessionMessages = "session/messages"
+    static let sessionDelete = "session/delete"
+    static let sessionWatch = "session/watch"
+    static let sessionUnwatch = "session/unwatch"
+
     // Client operations (multi-device awareness)
     static let clientSessionFocus = "client/session/focus"
 
@@ -429,9 +436,111 @@ struct SessionElementsResult: Codable, Sendable {
     }
 }
 
-// MARK: - Session Delete (Legacy)
+// MARK: - Session List (Agent)
 
-/// Session delete request parameters (LEGACY - use WorkspaceSessionDeleteParams)
+/// Session list request parameters
+struct SessionListParams: Codable, Sendable {
+    let agentType: String?
+    let workspaceId: String?
+    let limit: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case agentType = "agent_type"
+        case workspaceId = "workspace_id"
+        case limit
+    }
+
+    init(agentType: String? = nil, workspaceId: String? = nil, limit: Int? = nil) {
+        self.agentType = agentType
+        self.workspaceId = workspaceId
+        self.limit = limit
+    }
+}
+
+/// Session info returned by session/list
+/// Enhanced with rich metadata from Codex CLI sessions (git info, model, first prompt)
+struct SessionListSessionInfo: Codable, Sendable {
+    let sessionId: String
+    let agentType: String?
+    let summary: String?
+    let firstPrompt: String?
+    let messageCount: Int?
+    let startTime: String?
+    let lastUpdated: String?
+    let branch: String?
+    let gitCommit: String?
+    let gitRepo: String?
+    let projectPath: String?
+    let modelProvider: String?
+    let model: String?
+    let cliVersion: String?
+    let fileSize: Int64?
+    let filePath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case agentType = "agent_type"
+        case summary
+        case firstPrompt = "first_prompt"
+        case messageCount = "message_count"
+        case startTime = "start_time"
+        case lastUpdated = "last_updated"
+        case branch
+        case gitCommit = "git_commit"
+        case gitRepo = "git_repo"
+        case projectPath = "project_path"
+        case modelProvider = "model_provider"
+        case model
+        case cliVersion = "cli_version"
+        case fileSize = "file_size"
+        case filePath = "file_path"
+    }
+}
+
+/// Session list response result
+struct SessionListResult: Codable, Sendable {
+    let sessions: [SessionListSessionInfo]?
+    let total: Int?
+}
+
+// MARK: - Session Messages (Agent)
+
+/// Session messages request parameters
+struct SessionMessagesParams: Codable, Sendable {
+    let sessionId: String
+    let agentType: String?
+    let limit: Int?
+    let offset: Int?
+    let order: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case agentType = "agent_type"
+        case limit, offset, order
+    }
+}
+
+/// Session messages response result
+struct SessionMessagesResult: Codable, Sendable {
+    let sessionId: String?
+    let messages: [SessionMessagesResponse.SessionMessage]?
+    let total: Int?
+    let limit: Int?
+    let offset: Int?
+    let hasMore: Bool?
+    let queryTimeMs: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case messages, total, limit, offset
+        case sessionId = "session_id"
+        case hasMore = "has_more"
+        case queryTimeMs = "query_time_ms"
+    }
+}
+
+// MARK: - Session Delete (Agent)
+
+/// Session delete request parameters (session/delete)
 struct SessionDeleteParams: Codable, Sendable {
     let sessionId: String?
     let agentType: String?
@@ -442,7 +551,7 @@ struct SessionDeleteParams: Codable, Sendable {
     }
 }
 
-/// Session delete response result (LEGACY)
+/// Session delete response result
 struct SessionDeleteResult: Codable, Sendable {
     let status: String?
     let deleted: Int?
@@ -455,10 +564,18 @@ struct SessionDeleteResult: Codable, Sendable {
 struct WorkspaceSessionDeleteParams: Codable, Sendable {
     let workspaceId: String
     let sessionId: String
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"
         case sessionId = "session_id"
+        case agentType = "agent_type"
+    }
+
+    init(workspaceId: String, sessionId: String, agentType: String? = nil) {
+        self.workspaceId = workspaceId
+        self.sessionId = sessionId
+        self.agentType = agentType
     }
 }
 
@@ -481,7 +598,7 @@ struct WorkspaceSessionDeleteResult: Codable, Sendable {
 
 // MARK: - Session Control (Multi-Workspace)
 
-/// Session start request parameters (starts Claude for a workspace)
+/// Session start request parameters (starts selected runtime for a workspace)
 /// Use resume_session_id to continue a historical session
 struct SessionStartParams: Codable, Sendable {
     let workspaceId: String
@@ -489,15 +606,18 @@ struct SessionStartParams: Codable, Sendable {
     /// Historical session ID to resume (from workspace/session/history)
     /// When provided, the new session will continue where the historical session left off
     let resumeSessionId: String?
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"
         case resumeSessionId = "resume_session_id"
+        case agentType = "agent_type"
     }
 
-    init(workspaceId: String, resumeSessionId: String? = nil) {
+    init(workspaceId: String, resumeSessionId: String? = nil, agentType: String? = nil) {
         self.workspaceId = workspaceId
         self.resumeSessionId = resumeSessionId
+        self.agentType = agentType
     }
 }
 
@@ -534,14 +654,22 @@ struct SessionSendParams: Codable, Sendable {
     let prompt: String
     let mode: String?  // "new" or "continue"
     let permissionMode: SessionPermissionMode?  // Permission handling mode
+    let agentType: String?  // Optional runtime routing ("claude", "codex")
 
     enum CodingKeys: String, CodingKey {
         case prompt, mode
         case sessionId = "session_id"
         case permissionMode = "permission_mode"
+        case agentType = "agent_type"
     }
 
-    init(sessionId: String?, prompt: String, mode: String? = "continue", permissionMode: SessionPermissionMode? = nil) {
+    init(
+        sessionId: String?,
+        prompt: String,
+        mode: String? = "continue",
+        permissionMode: SessionPermissionMode? = nil,
+        agentType: String? = nil
+    ) {
         // For "new" mode, don't include session_id even if provided
         if mode == "new" {
             self.sessionId = nil
@@ -551,6 +679,7 @@ struct SessionSendParams: Codable, Sendable {
         self.prompt = prompt
         self.mode = mode
         self.permissionMode = permissionMode
+        self.agentType = agentType
     }
 
     /// Custom encoder to omit nil session_id (important for "new" mode)
@@ -560,6 +689,7 @@ struct SessionSendParams: Codable, Sendable {
         try container.encodeIfPresent(mode, forKey: .mode)
         try container.encodeIfPresent(sessionId, forKey: .sessionId)
         try container.encodeIfPresent(permissionMode, forKey: .permissionMode)
+        try container.encodeIfPresent(agentType, forKey: .agentType)
     }
 }
 
@@ -571,9 +701,16 @@ struct SessionSendResult: Codable, Sendable {
 /// Session stop request parameters
 struct SessionStopParams: Codable, Sendable {
     let sessionId: String
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
+        case agentType = "agent_type"
+    }
+
+    init(sessionId: String, agentType: String? = nil) {
+        self.sessionId = sessionId
+        self.agentType = agentType
     }
 }
 
@@ -593,10 +730,19 @@ struct SessionRespondParams: Codable, Sendable {
     let sessionId: String
     let type: String  // "permission" or "question"
     let response: String  // "yes"/"no" for permission, free text for question
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case type, response
         case sessionId = "session_id"
+        case agentType = "agent_type"
+    }
+
+    init(sessionId: String, type: String, response: String, agentType: String? = nil) {
+        self.sessionId = sessionId
+        self.type = type
+        self.response = response
+        self.agentType = agentType
     }
 }
 
@@ -635,24 +781,28 @@ struct SessionInputParams: Codable, Sendable {
     let sessionId: String
     let input: String?  // Raw text input (e.g., "1" for Yes, "2" for Yes all)
     let key: String?    // Special key name (e.g., "enter", "escape")
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case input, key
         case sessionId = "session_id"
+        case agentType = "agent_type"
     }
 
     /// Create input params with text input
-    init(sessionId: String, input: String) {
+    init(sessionId: String, input: String, agentType: String? = nil) {
         self.sessionId = sessionId
         self.input = input
         self.key = nil
+        self.agentType = agentType
     }
 
     /// Create input params with special key
-    init(sessionId: String, key: SessionInputKey) {
+    init(sessionId: String, key: SessionInputKey, agentType: String? = nil) {
         self.sessionId = sessionId
         self.input = nil
         self.key = key.rawValue
+        self.agentType = agentType
     }
 }
 
@@ -945,15 +1095,18 @@ struct WorkspaceGitCheckoutResult: Codable, Sendable {
 struct SessionHistoryParams: Codable, Sendable {
     let workspaceId: String
     let limit: Int?
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case limit
         case workspaceId = "workspace_id"
+        case agentType = "agent_type"
     }
 
-    init(workspaceId: String, limit: Int? = nil) {
+    init(workspaceId: String, limit: Int? = nil, agentType: String? = nil) {
         self.workspaceId = workspaceId
         self.limit = limit
+        self.agentType = agentType
     }
 }
 
@@ -1024,19 +1177,22 @@ struct WorkspaceSessionMessagesParams: Codable, Sendable {
     let limit: Int?
     let offset: Int?
     let order: String?  // "asc" or "desc" (default: "asc")
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case limit, offset, order
         case workspaceId = "workspace_id"
         case sessionId = "session_id"
+        case agentType = "agent_type"
     }
 
-    init(workspaceId: String, sessionId: String, limit: Int? = nil, offset: Int? = nil, order: String? = nil) {
+    init(workspaceId: String, sessionId: String, limit: Int? = nil, offset: Int? = nil, order: String? = nil, agentType: String? = nil) {
         self.workspaceId = workspaceId
         self.sessionId = sessionId
         self.limit = limit
         self.offset = offset
         self.order = order
+        self.agentType = agentType
     }
 }
 
@@ -1084,11 +1240,67 @@ struct WorkspaceSessionMessagesResult: Codable, Sendable {
 struct WorkspaceSessionWatchParams: Codable, Sendable {
     let workspaceId: String
     let sessionId: String
+    let agentType: String?
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"
         case sessionId = "session_id"
+        case agentType = "agent_type"
     }
+
+    init(workspaceId: String, sessionId: String, agentType: String? = nil) {
+        self.workspaceId = workspaceId
+        self.sessionId = sessionId
+        self.agentType = agentType
+    }
+}
+
+/// Workspace session unwatch request parameters
+struct WorkspaceSessionUnwatchParams: Codable, Sendable {
+    let agentType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case agentType = "agent_type"
+    }
+
+    init(agentType: String? = nil) {
+        self.agentType = agentType
+    }
+}
+
+/// Agent session watch request parameters
+struct SessionWatchParams: Codable, Sendable {
+    let sessionId: String
+    let agentType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case agentType = "agent_type"
+    }
+}
+
+struct SessionUnwatchParams: Codable, Sendable {
+    let agentType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case agentType = "agent_type"
+    }
+
+    init(agentType: String? = nil) {
+        self.agentType = agentType
+    }
+}
+
+/// Agent session watch response result
+struct SessionWatchResult: Codable, Sendable {
+    let status: String?
+    let watching: Bool?
+}
+
+/// Agent session unwatch response result
+struct SessionUnwatchResult: Codable, Sendable {
+    let status: String?
+    let watching: Bool?
 }
 
 /// Workspace session watch response result
