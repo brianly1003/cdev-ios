@@ -1597,7 +1597,7 @@ struct EditDiffElementView: View {
 
             // Diff lines (collapsible) with horizontal scroll for long lines
             if isExpanded {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ScrollView([.vertical, .horizontal], showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(filteredLines) { line in
                             EditDiffLineView(line: line, searchText: searchText)
@@ -1605,6 +1605,7 @@ struct EditDiffElementView: View {
                     }
                     .padding(.leading, Spacing.sm)
                 }
+                .frame(maxHeight: 320)
                 .background(ColorSystem.terminalBgHighlight.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -2594,7 +2595,7 @@ struct WriteToolElementView: View {
     private func contentPreview(_ fullContent: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // Full content in scrollable code block
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView([.vertical, .horizontal], showsIndicators: true) {
                 Group {
                     if searchText.isEmpty {
                         Text(fullContent)
@@ -2788,7 +2789,7 @@ struct ApplyPatchToolElementView: View {
 
     private var patchPreview: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
+            ScrollView([.vertical, .horizontal], showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(patchLines.enumerated()), id: \.offset) { _, line in
                         patchLineView(line)
