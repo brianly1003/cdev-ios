@@ -204,6 +204,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         rpcClient = nil
         useJSONRPC = false
         _clientId = nil
+        RuntimeCapabilityRegistryStore.shared.resetToDefaults()
 
         // Cancel WebSocket and session
         webSocket?.cancel(with: .goingAway, reason: nil)
@@ -576,6 +577,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         startTimers()
 
         // JSON-RPC initialization is REQUIRED
+        RuntimeCapabilityRegistryStore.shared.resetToDefaults()
         let supported = await tryJSONRPCInitialize()
         if !supported {
             // Clean up on JSON-RPC init failure
@@ -743,6 +745,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         rpcClient = nil
         useJSONRPC = false
         _clientId = nil
+        RuntimeCapabilityRegistryStore.shared.resetToDefaults()
 
         // Clear connection info to prevent reconnection to old server
         connectionInfo = nil
@@ -988,12 +991,26 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             AppLogger.webSocket("JSON-RPC initialized: server=\(result.serverInfo?.name ?? "unknown") v\(result.serverInfo?.version ?? "?"), clientId=\(result.clientId ?? "none")")
 
             if let capabilities = result.capabilities {
+                RuntimeCapabilityRegistryStore.shared.apply(
+                    supportedAgentIDs: capabilities.declaredAgentIDs,
+                    runtimeRegistry: capabilities.runtimeRegistry
+                )
+
                 if let agents = capabilities.agents {
                     AppLogger.webSocket("Available agents: \(agents.joined(separator: ", "))")
+                }
+                if let supportedAgents = capabilities.supportedAgents {
+                    AppLogger.webSocket("Supported agents: \(supportedAgents.joined(separator: ", "))")
+                }
+                if let runtimeRegistry = capabilities.runtimeRegistry {
+                    let runtimeIDs = runtimeRegistry.runtimes.map(\.id)
+                    AppLogger.webSocket("Runtime registry \(runtimeRegistry.schemaVersion ?? "unknown"): \(runtimeIDs.joined(separator: ", "))")
                 }
                 if let features = capabilities.features {
                     AppLogger.webSocket("Features: \(features.joined(separator: ", "))")
                 }
+            } else {
+                RuntimeCapabilityRegistryStore.shared.resetToDefaults()
             }
 
             // Send 'initialized' notification to confirm we've processed the response
@@ -1005,6 +1022,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             // Fall back to legacy protocol
             AppLogger.webSocket("JSON-RPC initialize failed (using legacy protocol): \(error.localizedDescription)", type: .info)
             useJSONRPC = false
+            RuntimeCapabilityRegistryStore.shared.resetToDefaults()
             return false
         }
     }
@@ -1576,32 +1594,32 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         let client = getJSONRPCClient()
 
-        switch runtime.sessionWatchSource {
-        case .runtimeScoped:
-            AppLogger.webSocket("Starting runtime watch for session: \(sessionId) (runtime: \(runtime.rawValue))")
-            let params = SessionWatchParams(sessionId: sessionId, agentType: runtime.rawValue)
-            let _: SessionWatchResult = try await client.request(
-                method: JSONRPCMethod.sessionWatch,
-                params: params
-            )
-            _watchedWorkspaceId = nil
-        case .workspaceScoped:
-            // Workspace ID is required for workspace/session/watch.
+        let watchMethod = runtime.watchMethodName
+        if runtime.usesWorkspaceScopedWatchMethod {
+            // Workspace ID is required for workspace-scoped watch methods.
             guard let workspaceId = workspaceId else {
                 AppLogger.webSocket("Cannot watch \(runtime.rawValue) session - workspaceId is required", type: .error)
                 throw AppError.workspaceIdRequired
             }
-            AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId) (runtime: \(runtime.rawValue))")
+            AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId) (runtime: \(runtime.rawValue), method: \(watchMethod))")
             let params = WorkspaceSessionWatchParams(
                 workspaceId: workspaceId,
                 sessionId: sessionId,
                 agentType: runtime.rawValue
             )
             let _: WorkspaceSessionWatchResult = try await client.request(
-                method: JSONRPCMethod.workspaceSessionWatch,
+                method: watchMethod,
                 params: params
             )
             _watchedWorkspaceId = workspaceId
+        } else {
+            AppLogger.webSocket("Starting runtime watch for session: \(sessionId) (runtime: \(runtime.rawValue), method: \(watchMethod))")
+            let params = SessionWatchParams(sessionId: sessionId, agentType: runtime.rawValue)
+            let _: SessionWatchResult = try await client.request(
+                method: watchMethod,
+                params: params
+            )
+            _watchedWorkspaceId = nil
         }
 
         _watchedSessionId = sessionId
@@ -1630,19 +1648,21 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         let client = getJSONRPCClient()
-        switch previousRuntime?.sessionWatchSource {
-        case .runtimeScoped:
-            AppLogger.webSocket("Stopping runtime watch for session: \(previousSessionId ?? "unknown") (runtime: \(previousRuntime?.rawValue ?? "unknown"))")
-            let _: SessionUnwatchResult = try await client.request(
-                method: JSONRPCMethod.sessionUnwatch,
-                params: SessionUnwatchParams(agentType: previousRuntime?.rawValue)
-            )
-        case .workspaceScoped, .none:
-            AppLogger.webSocket("Stopping workspace watch for session: \(previousSessionId ?? "unknown")")
-            let params = WorkspaceSessionUnwatchParams(agentType: previousRuntime?.rawValue)
+        let runtime = previousRuntime ?? AgentRuntime.defaultRuntime
+        let unwatchMethod = runtime.unwatchMethodName
+
+        if runtime.usesWorkspaceScopedUnwatchMethod {
+            AppLogger.webSocket("Stopping workspace watch for session: \(previousSessionId ?? "unknown") (runtime: \(runtime.rawValue), method: \(unwatchMethod))")
+            let params = WorkspaceSessionUnwatchParams(agentType: runtime.rawValue)
             let _: WorkspaceSessionUnwatchResult = try await client.request(
-                method: JSONRPCMethod.workspaceSessionUnwatch,
+                method: unwatchMethod,
                 params: params
+            )
+        } else {
+            AppLogger.webSocket("Stopping runtime watch for session: \(previousSessionId ?? "unknown") (runtime: \(runtime.rawValue), method: \(unwatchMethod))")
+            let _: SessionUnwatchResult = try await client.request(
+                method: unwatchMethod,
+                params: SessionUnwatchParams(agentType: runtime.rawValue)
             )
         }
     }

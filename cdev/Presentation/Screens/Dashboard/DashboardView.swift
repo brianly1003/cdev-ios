@@ -237,6 +237,7 @@ struct DashboardView: View {
                                 onFocusChange: nil,
                                 // Agent selector - switch between Claude/Codex/etc.
                                 selectedRuntime: $viewModel.selectedSessionRuntime,
+                                availableRuntimes: viewModel.availableRuntimes,
                                 // Runtime switch orchestration is handled in DashboardViewModel.selectedSessionRuntime didSet.
                                 onAgentChanged: nil,
                                 // Voice input (beta feature - only passed when enabled)
@@ -342,6 +343,7 @@ struct DashboardView: View {
                         isLoadingMore: viewModel.isLoadingMoreSessions,
                         agentRepository: viewModel.agentRepository,
                         selectedRuntime: $viewModel.selectedSessionRuntime,
+                        availableRuntimes: viewModel.availableRuntimes,
                         onSelect: { sessionId in
                             Task { await viewModel.resumeSession(sessionId) }
                         },
@@ -1048,6 +1050,7 @@ struct ActionBarView: View {
 
     // Agent selector - switch between Claude/Codex/etc.
     @Binding var selectedRuntime: AgentRuntime
+    var availableRuntimes: [AgentRuntime] = AgentRuntime.availableRuntimes()
     var onAgentChanged: ((AgentRuntime) -> Void)?
 
     // Voice input (optional - beta feature)
@@ -1351,6 +1354,7 @@ struct ActionBarView: View {
             // Shows: Agent selector | bash mode indicator (same line)
             AgentSelectorBar(
                 selectedRuntime: $selectedRuntime,
+                availableRuntimes: availableRuntimes,
                 isBashMode: isBashMode,
                 onAgentChanged: onAgentChanged
             )
@@ -1582,6 +1586,7 @@ private struct EnhancedWorkspaceBadge: View {
 /// Shows: [icon] Agent Name ▼  |  [icon] bash mode enabled
 struct AgentSelectorBar: View {
     @Binding var selectedRuntime: AgentRuntime
+    let availableRuntimes: [AgentRuntime]
     var isBashMode: Bool = false
     var onAgentChanged: ((AgentRuntime) -> Void)?
 
@@ -1593,17 +1598,15 @@ struct AgentSelectorBar: View {
         ColorSystem.Agent.color(for: selectedRuntime)
     }
 
-    private var sortedRuntimes: [AgentRuntime] {
-        AgentRuntime.allCases.sorted {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }
+    private var runtimeOptions: [AgentRuntime] {
+        availableRuntimes.isEmpty ? AgentRuntime.defaultRuntimeOrder : availableRuntimes
     }
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
             // Agent selector dropdown
             Menu {
-                ForEach(sortedRuntimes) { runtime in
+                ForEach(runtimeOptions) { runtime in
                     Button {
                         if selectedRuntime != runtime {
                             withAnimation(Animations.stateChange) {

@@ -111,6 +111,7 @@ final class DashboardViewModel: ObservableObject {
 
     // Sessions (for /resume command)
     @Published var sessions: [SessionsResponse.SessionInfo] = []
+    @Published var availableRuntimes: [AgentRuntime] = AgentRuntime.availableRuntimes()
     @Published var showSessionPicker: Bool = false
     @Published var selectedSessionRuntime: AgentRuntime = .claude {
         didSet {
@@ -295,6 +296,7 @@ final class DashboardViewModel: ObservableObject {
         // Load persisted session ID from storage and initialize agentStatus
         self.userSelectedSessionId = sessionRepository.selectedSessionId
         self.selectedSessionRuntime = sessionRepository.selectedSessionRuntime
+        reconcileAvailableRuntimes(context: "init")
         if let storedId = userSelectedSessionId {
             AppLogger.log("[Dashboard] Loaded stored sessionId: \(storedId)")
             // Initialize agentStatus with stored sessionId so refreshStatus preserves it
@@ -336,6 +338,7 @@ final class DashboardViewModel: ObservableObject {
                 // Sync workspace IDs first - this enables workspace-aware APIs
                 AppLogger.log("[DashboardViewModel] init Task - syncing workspace IDs")
                 _ = try? await WorkspaceManagerService.shared.listWorkspaces()
+                reconcileAvailableRuntimes(context: "init-connected")
 
                 // Check for pending trust_folder permission that arrived before Dashboard was ready
                 if let pendingEvent = webSocketService.consumePendingTrustFolderPermission() {
@@ -2005,6 +2008,33 @@ final class DashboardViewModel: ObservableObject {
         )
     }
 
+    private func reconcileAvailableRuntimes(context: String) {
+        let supported = AgentRuntime.availableRuntimes()
+
+        if availableRuntimes != supported {
+            availableRuntimes = supported
+            AppLogger.log("[Dashboard] Available runtimes (\(context)): \(supported.map(\.rawValue).joined(separator: ", "))")
+        }
+
+        guard !supported.isEmpty else {
+            if selectedSessionRuntime != AgentRuntime.defaultRuntime {
+                selectedSessionRuntime = AgentRuntime.defaultRuntime
+            }
+            return
+        }
+
+        guard supported.contains(selectedSessionRuntime) else {
+            let preferred = RuntimeCapabilityRegistryStore.shared.defaultRuntime()
+            let fallback = supported.contains(preferred) ? preferred : (supported.first ?? AgentRuntime.defaultRuntime)
+            AppLogger.log(
+                "[Dashboard] Runtime fallback (\(context)): \(selectedSessionRuntime.rawValue) -> \(fallback.rawValue)",
+                type: .warning
+            )
+            selectedSessionRuntime = fallback
+            return
+        }
+    }
+
     private func startListening() {
         AppLogger.log("[DashboardViewModel] startListening - setting up connection state listener")
         // Listen to connection state
@@ -2024,6 +2054,7 @@ final class DashboardViewModel: ObservableObject {
                     // Sync workspace IDs first - this enables workspace-aware APIs
                     AppLogger.log("[Dashboard] Reconnected - syncing workspace IDs")
                     _ = try? await WorkspaceManagerService.shared.listWorkspaces()
+                    self.reconcileAvailableRuntimes(context: "reconnect")
 
                     // Re-subscribe to workspace events
                     if let workspaceId = self.currentWorkspaceId {
@@ -2066,6 +2097,7 @@ final class DashboardViewModel: ObservableObject {
                     AppLogger.log("[Dashboard] Disconnected - resetting watch state")
                     self.isWatchingSession = false
                     self.watchingSessionId = nil
+                    self.reconcileAvailableRuntimes(context: "disconnected")
                 }
             }
         }

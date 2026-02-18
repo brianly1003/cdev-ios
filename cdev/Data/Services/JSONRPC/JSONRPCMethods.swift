@@ -108,6 +108,203 @@ enum JSONRPCMethod {
     static let repositoryIndexRebuild = "repository/index/rebuild"
 }
 
+// MARK: - Runtime Capability Registry
+
+/// Server-driven runtime capability registry from initialize.capabilities.runtimeRegistry.
+/// All fields are optional/tolerant so older servers and future schema extensions remain compatible.
+struct RuntimeCapabilityRegistry: Codable, Sendable {
+    let schemaVersion: String?
+    let generatedAt: String?
+    let defaultRuntime: String?
+    let routing: RuntimeRouting?
+    let runtimes: [RuntimeDescriptor]
+
+    init(
+        schemaVersion: String? = nil,
+        generatedAt: String? = nil,
+        defaultRuntime: String? = nil,
+        routing: RuntimeRouting? = nil,
+        runtimes: [RuntimeDescriptor] = []
+    ) {
+        self.schemaVersion = schemaVersion
+        self.generatedAt = generatedAt
+        self.defaultRuntime = defaultRuntime
+        self.routing = routing
+        self.runtimes = runtimes
+    }
+}
+
+struct RuntimeRouting: Codable, Sendable {
+    let agentTypeField: String?
+    let defaultAgentType: String?
+    let requiredOnMethods: [String]?
+}
+
+struct RuntimeDescriptor: Codable, Sendable {
+    let id: String
+    let displayName: String?
+    let status: String?
+    let sessionListSource: String?
+    let sessionMessagesSource: String?
+    let sessionWatchSource: String?
+    let requiresWorkspaceActivationOnResume: Bool?
+    let requiresSessionResolutionOnNewSession: Bool?
+    let supportsResume: Bool?
+    let supportsInteractiveQuestions: Bool?
+    let supportsPermissions: Bool?
+    let methods: RuntimeMethods?
+}
+
+struct RuntimeMethods: Codable, Sendable {
+    let history: String?
+    let messages: String?
+    let watch: String?
+    let unwatch: String?
+    let start: String?
+    let send: String?
+    let stop: String?
+    let input: String?
+    let respond: String?
+    let state: String?
+}
+
+/// In-memory runtime capability snapshot used by routing/UI.
+/// Falls back to compile-time runtime defaults whenever server metadata is absent or partial.
+final class RuntimeCapabilityRegistryStore: @unchecked Sendable {
+    static let shared = RuntimeCapabilityRegistryStore()
+
+    private let lock = NSLock()
+    private var descriptorByID: [String: RuntimeDescriptor] = [:]
+    private var runtimeOrder: [String] = AgentRuntime.defaultRuntimeOrder.map(\.rawValue)
+    private var defaultRuntimeID: String = AgentRuntime.defaultRuntime.rawValue
+
+    private init() {}
+
+    func apply(
+        supportedAgentIDs: [String]?,
+        runtimeRegistry: RuntimeCapabilityRegistry?
+    ) {
+        lock.withLock {
+            var descriptors: [String: RuntimeDescriptor] = [:]
+            var orderedIDs: [String] = []
+
+            if let runtimeRegistry {
+                for descriptor in runtimeRegistry.runtimes {
+                    let id = Self.normalizeRuntimeID(descriptor.id)
+                    guard !id.isEmpty else { continue }
+
+                    descriptors[id] = descriptor
+                    if !orderedIDs.contains(id) {
+                        orderedIDs.append(id)
+                    }
+                }
+            }
+
+            if orderedIDs.isEmpty {
+                orderedIDs = Self.normalizeRuntimeIDs(supportedAgentIDs ?? [])
+            }
+
+            orderedIDs = AgentRuntime.normalizeKnownRuntimeIDs(orderedIDs)
+            if orderedIDs.isEmpty {
+                orderedIDs = AgentRuntime.defaultRuntimeOrder.map(\.rawValue)
+            }
+
+            var resolvedDefault = Self.normalizeRuntimeID(runtimeRegistry?.defaultRuntime)
+            if resolvedDefault.isEmpty || !orderedIDs.contains(resolvedDefault) {
+                let fallbackDefault = AgentRuntime.defaultRuntime.rawValue
+                if orderedIDs.contains(fallbackDefault) {
+                    resolvedDefault = fallbackDefault
+                } else {
+                    resolvedDefault = orderedIDs.first ?? fallbackDefault
+                }
+            }
+
+            descriptorByID = descriptors
+            runtimeOrder = orderedIDs
+            defaultRuntimeID = resolvedDefault
+        }
+    }
+
+    func resetToDefaults() {
+        lock.withLock {
+            descriptorByID = [:]
+            runtimeOrder = AgentRuntime.defaultRuntimeOrder.map(\.rawValue)
+            defaultRuntimeID = AgentRuntime.defaultRuntime.rawValue
+        }
+    }
+
+    func descriptor(for runtime: AgentRuntime) -> RuntimeDescriptor? {
+        lock.withLock {
+            descriptorByID[runtime.rawValue]
+        }
+    }
+
+    func availableRuntimes() -> [AgentRuntime] {
+        lock.withLock {
+            let runtimes = availableRuntimesLocked()
+            return runtimes.isEmpty ? AgentRuntime.defaultRuntimeOrder : runtimes
+        }
+    }
+
+    func defaultRuntime() -> AgentRuntime {
+        lock.withLock {
+            let available = availableRuntimesLocked()
+            if let configured = AgentRuntime(rawValue: defaultRuntimeID),
+               available.contains(configured) {
+                return configured
+            }
+            if let first = available.first {
+                return first
+            }
+            return AgentRuntime.defaultRuntime
+        }
+    }
+
+    func isSupported(_ runtime: AgentRuntime) -> Bool {
+        lock.withLock {
+            availableRuntimesLocked().contains(runtime)
+        }
+    }
+
+    private func availableRuntimesLocked() -> [AgentRuntime] {
+        var result: [AgentRuntime] = []
+        for id in runtimeOrder {
+            guard let runtime = AgentRuntime(rawValue: id) else { continue }
+            if descriptorByID[id]?.isDisabled == true {
+                continue
+            }
+            result.append(runtime)
+        }
+        return result
+    }
+
+    private static func normalizeRuntimeIDs(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+
+        for id in ids {
+            let normalized = normalizeRuntimeID(id)
+            guard !normalized.isEmpty, !seen.contains(normalized) else { continue }
+            seen.insert(normalized)
+            result.append(normalized)
+        }
+
+        return result
+    }
+
+    private static func normalizeRuntimeID(_ raw: String?) -> String {
+        raw?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+    }
+}
+
+private extension RuntimeDescriptor {
+    var isDisabled: Bool {
+        status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "disabled"
+    }
+}
+
 // MARK: - Initialize
 
 /// Client info sent during initialize handshake
@@ -142,8 +339,36 @@ struct ServerInfo: Codable, Sendable {
 
 /// Server capabilities returned from initialize
 struct ServerCapabilities: Codable, Sendable {
+    /// Legacy server field used by earlier cdev versions.
     let agents: [String]?
+    /// Preferred field introduced by runtime capability registry contract.
+    let supportedAgents: [String]?
     let features: [String]?
+    let runtimeRegistry: RuntimeCapabilityRegistry?
+
+    enum CodingKeys: String, CodingKey {
+        case agents
+        case supportedAgents
+        case features
+        case runtimeRegistry
+    }
+
+    /// Normalized runtime IDs exposed by server capability payload.
+    /// Prefers supportedAgents and falls back to legacy agents.
+    var declaredAgentIDs: [String] {
+        let source = supportedAgents ?? agents ?? []
+        var seen = Set<String>()
+        var result: [String] = []
+
+        for raw in source {
+            let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty, !seen.contains(normalized) else { continue }
+            seen.insert(normalized)
+            result.append(normalized)
+        }
+
+        return result
+    }
 }
 
 /// Initialize response result

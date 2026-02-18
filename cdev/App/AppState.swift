@@ -565,7 +565,18 @@ final class AppState: ObservableObject {
                 AppLogger.log("[AppState] connectToRemoteWorkspace: Using existing session: \(session.id)")
             } else {
                 // Start a new session
-                let runtime = sessionRepository.selectedSessionRuntime
+                let preferredRuntime = sessionRepository.selectedSessionRuntime
+                let runtime: AgentRuntime
+                if RuntimeCapabilityRegistryStore.shared.isSupported(preferredRuntime) {
+                    runtime = preferredRuntime
+                } else {
+                    runtime = RuntimeCapabilityRegistryStore.shared.defaultRuntime()
+                    sessionRepository.selectedSessionRuntime = runtime
+                    AppLogger.log(
+                        "[AppState] connectToRemoteWorkspace: runtime fallback \(preferredRuntime.rawValue) -> \(runtime.rawValue)",
+                        type: .warning
+                    )
+                }
                 AppLogger.log("[AppState] connectToRemoteWorkspace: Starting new session for workspace...")
                 let session = try await WorkspaceManagerService.shared.startSession(
                     workspaceId: remoteWorkspace.id,

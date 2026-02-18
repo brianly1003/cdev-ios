@@ -10,6 +10,7 @@ struct SessionPickerView: View {
     let isLoadingMore: Bool
     let agentRepository: AgentRepositoryProtocol
     @Binding var selectedRuntime: AgentRuntime
+    let availableRuntimes: [AgentRuntime]
     let onSelect: (String) -> Void
     let onDelete: (String) -> Void
     let onDeleteAll: () -> Void
@@ -22,6 +23,10 @@ struct SessionPickerView: View {
 
     private var canResume: Bool {
         selectedRuntime.supportsResume
+    }
+
+    private var runtimeOptions: [AgentRuntime] {
+        availableRuntimes.isEmpty ? AgentRuntime.defaultRuntimeOrder : availableRuntimes
     }
 
     var filteredSessions: [SessionsResponse.SessionInfo] {
@@ -38,7 +43,7 @@ struct SessionPickerView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("Runtime", selection: $selectedRuntime) {
-                    ForEach(AgentRuntime.allCases) { runtime in
+                    ForEach(runtimeOptions) { runtime in
                         Text(runtime.displayName).tag(runtime)
                     }
                 }
