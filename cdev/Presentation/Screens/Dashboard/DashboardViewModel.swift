@@ -20,11 +20,11 @@ final class DashboardViewModel: ObservableObject {
     @Published var agentStatus: AgentStatus = AgentStatus()
 
     // Claude
-    @Published var claudeState: ClaudeState = .idle {
+    @Published var agentState: ClaudeState = .idle {
         didSet {
             #if DEBUG
-            if oldValue != claudeState {
-                AppLogger.log("[DashboardVM] claudeState: \(oldValue) → \(claudeState)")
+            if oldValue != agentState {
+                AppLogger.log("[DashboardVM] agentState: \(oldValue) → \(agentState)")
             }
             #endif
         }
@@ -125,7 +125,17 @@ final class DashboardViewModel: ObservableObject {
 
             runtimeSwitchTask = Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                await self.handleRuntimeSwitch(from: previousRuntime, to: nextRuntime)
+                await self.runtimeCoordinator.handleRuntimeSwitch(
+                    from: previousRuntime,
+                    to: nextRuntime,
+                    selectedRuntime: { self.selectedSessionRuntime },
+                    isCancelled: { Task.isCancelled },
+                    stopWatching: { await self.stopWatchingSession() },
+                    clearRuntimeState: { await self.resetStateForRuntimeSwitch() },
+                    loadSessions: { await self.loadSessions() },
+                    loadRecentHistory: { await self.loadRecentSessionHistory(isReconnection: false) },
+                    refreshStatus: { await self.refreshStatus() }
+                )
             }
         }
     }
@@ -166,6 +176,22 @@ final class DashboardViewModel: ObservableObject {
         attachedImages.contains { $0.canRetry }
     }
 
+    /// Keep bottom thinking bar aligned with run-state UI (top running + stop button).
+    /// If runtime is still running, show the bar even when stream flags momentarily lag.
+    var effectiveIsStreaming: Bool {
+        isStreaming || agentState == .running
+    }
+
+    /// Message shown in the bottom thinking bar.
+    /// Falls back to mobile-friendly interrupt hint while runtime is running.
+    var effectiveSpinnerMessage: String? {
+        if let spinnerMessage, !spinnerMessage.isEmpty {
+            return spinnerMessage
+        }
+        guard effectiveIsStreaming else { return nil }
+        return "Thinking... (\(Self.mobileStopText))"
+    }
+
     // MARK: - Dependencies
 
     private let webSocketService: WebSocketServiceProtocol
@@ -173,6 +199,7 @@ final class DashboardViewModel: ObservableObject {
     private let sendPromptUseCase: SendPromptUseCase
     private let respondToClaudeUseCase: RespondToClaudeUseCase
     private let sessionRepository: SessionRepository
+    private let runtimeCoordinator: DashboardRuntimeCoordinator
 
     /// Public accessor for agentRepository (needed for SessionHistoryView)
     var agentRepository: AgentRepositoryProtocol { _agentRepository }
@@ -278,6 +305,11 @@ final class DashboardViewModel: ObservableObject {
         self.sendPromptUseCase = sendPromptUseCase
         self.respondToClaudeUseCase = respondToClaudeUseCase
         self.sessionRepository = sessionRepository
+        self.runtimeCoordinator = DashboardRuntimeCoordinator(
+            webSocketService: webSocketService,
+            agentRepository: agentRepository,
+            workspaceManager: workspaceManager
+        )
         self.logCache = logCache
         self.diffCache = diffCache
         self.appState = appState
@@ -632,7 +664,7 @@ final class DashboardViewModel: ObservableObject {
         guard !promptText.isBlank else { return }
 
         // Prevent sending while Claude is running
-        guard claudeState != .running else {
+        guard agentState != .running else {
             AppLogger.log("[Dashboard] Blocked send - Claude is already running")
             Haptics.warning()
             return
@@ -689,7 +721,7 @@ final class DashboardViewModel: ObservableObject {
         do {
             // If Claude is waiting for a response, use respondToClaude
             // Otherwise use runClaude with continue mode (Claude CLI handles session)
-            if claudeState == .waiting, let interaction = pendingInteraction {
+            if agentState == .waiting, let interaction = pendingInteraction {
                 try await respondToClaudeUseCase.answerQuestion(
                     response: userMessage,
                     requestId: interaction.requestId,
@@ -1254,7 +1286,7 @@ final class DashboardViewModel: ObservableObject {
             try await _agentRepository.stopClaude(sessionId: userSelectedSessionId, runtime: selectedSessionRuntime)
             // Update state immediately after successful stop
             // (don't wait for WebSocket event which may be delayed or missing)
-            claudeState = .idle
+            agentState = .idle
             isStreaming = false
             streamingStartTime = nil
             spinnerMessage = nil
@@ -1267,7 +1299,7 @@ final class DashboardViewModel: ObservableObject {
             let errorMessage = String(describing: error).lowercased()
             if errorMessage.contains("session not found") || errorMessage.contains("session_not_found") {
                 AppLogger.log("[Dashboard] Session not found during stop - resetting state")
-                claudeState = .idle
+                agentState = .idle
                 isStreaming = false
                 streamingStartTime = nil
                 spinnerMessage = nil
@@ -1611,7 +1643,7 @@ final class DashboardViewModel: ObservableObject {
 
             // Update agentStatus from workspace status
             agentStatus = AgentStatus(
-                claudeState: claudeState,  // Keep current claudeState (updated via events)
+                claudeState: agentState,  // Keep current agentState (updated via events)
                 sessionId: resolvedSessionId,
                 repoName: wsStatus.gitRepoName ?? wsStatus.workspaceName,
                 repoPath: wsStatus.path,
@@ -1680,27 +1712,7 @@ final class DashboardViewModel: ObservableObject {
         Haptics.light()
     }
 
-    /// Handle runtime changes from the agent selector.
-    /// Performs full rebinding so events/messages always match selected runtime.
-    private func handleRuntimeSwitch(from oldRuntime: AgentRuntime, to newRuntime: AgentRuntime) async {
-        guard oldRuntime != newRuntime else { return }
-
-        AppLogger.log("[Dashboard] Runtime switch: \(oldRuntime.rawValue) -> \(newRuntime.rawValue)")
-
-        // Stop active watch first to avoid stale event routing from previous runtime.
-        await stopWatchingSession()
-
-        // Best effort unwatch in case local watch flags drifted from server state.
-        do {
-            try await webSocketService.unwatchSession()
-        } catch {
-            AppLogger.log("[Dashboard] Runtime switch unwatch fallback: \(error.localizedDescription)")
-        }
-        SessionAwarenessManager.shared.clearFocus()
-
-        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
-
-        // Reset local state to avoid cross-runtime session leakage.
+    private func resetStateForRuntimeSwitch() async {
         await clearLogs()
         isSessionPinnedByUser = false
         hasActiveConversation = false
@@ -1709,20 +1721,10 @@ final class DashboardViewModel: ObservableObject {
         pendingInteraction = nil
         setSelectedSession(nil)
 
-        claudeState = .idle
+        agentState = .idle
         isStreaming = false
         spinnerMessage = nil
         streamingStartTime = nil
-
-        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
-
-        await loadSessions()
-        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
-
-        await loadRecentSessionHistory(isReconnection: false)
-        guard !Task.isCancelled, selectedSessionRuntime == newRuntime else { return }
-
-        await refreshStatus()
     }
 
     // MARK: - Private
@@ -2009,29 +2011,19 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func reconcileAvailableRuntimes(context: String) {
-        let supported = AgentRuntime.availableRuntimes()
+        let result = runtimeCoordinator.reconcileRuntimeSelection(currentRuntime: selectedSessionRuntime)
 
-        if availableRuntimes != supported {
-            availableRuntimes = supported
-            AppLogger.log("[Dashboard] Available runtimes (\(context)): \(supported.map(\.rawValue).joined(separator: ", "))")
+        if availableRuntimes != result.availableRuntimes {
+            availableRuntimes = result.availableRuntimes
+            AppLogger.log("[Dashboard] Available runtimes (\(context)): \(result.availableRuntimes.map { $0.rawValue }.joined(separator: ", "))")
         }
 
-        guard !supported.isEmpty else {
-            if selectedSessionRuntime != AgentRuntime.defaultRuntime {
-                selectedSessionRuntime = AgentRuntime.defaultRuntime
-            }
-            return
-        }
-
-        guard supported.contains(selectedSessionRuntime) else {
-            let preferred = RuntimeCapabilityRegistryStore.shared.defaultRuntime()
-            let fallback = supported.contains(preferred) ? preferred : (supported.first ?? AgentRuntime.defaultRuntime)
+        if let fallback = result.fallbackRuntime {
             AppLogger.log(
                 "[Dashboard] Runtime fallback (\(context)): \(selectedSessionRuntime.rawValue) -> \(fallback.rawValue)",
                 type: .warning
             )
             selectedSessionRuntime = fallback
-            return
         }
     }
 
@@ -2198,23 +2190,27 @@ final class DashboardViewModel: ObservableObject {
 
                 let isCodexRuntime = selectedSessionRuntime == .codex
 
-                // Codex CLI-style behavior: route thinking text to bottom streaming bar
-                // and avoid rendering thinking blocks as chat rows.
-                if isCodexRuntime,
-                   let thinkingText = codexThinkingText(from: payload) {
+                // Keep thinking text from claude_message in the bottom streaming bar.
+                // For Codex, we still suppress thinking rows in chat and only show the bar.
+                if let thinkingText = codexThinkingText(from: payload) {
                     spinnerMessage = codexSpinnerMessage(from: thinkingText)
                     if !isStreaming {
                         isStreaming = true
                         streamingStartTime = Date()
                     }
-                    if claudeState != .running {
-                        claudeState = .running
+                    if agentState != .running {
+                        agentState = .running
                     }
                 }
 
                 var elements = ChatElement.from(payload: payload)
                 if isCodexRuntime {
                     elements.removeAll { $0.type == .thinking }
+                }
+                let beforeToolFilter = elements.count
+                elements.removeAll(where: shouldHideToolElementFromChatList)
+                if elements.count != beforeToolFilter {
+                    AppLogger.log("[Dashboard] Filtered \(beforeToolFilter - elements.count) tool element(s) from claude_message")
                 }
 
                 // Queue elements for debounced UI update (batches rapid events)
@@ -2236,23 +2232,28 @@ final class DashboardViewModel: ObservableObject {
                         spinnerMessage = "Thinking... (\(Self.mobileStopText))"
                     }
                     // Also set claude state to running if not already
-                    if claudeState != .running {
-                        claudeState = .running
+                    if agentState != .running {
+                        agentState = .running
                     }
                     AppLogger.log("[Dashboard] Streaming started (thinking)")
                 } else if !isStillStreaming && isStreaming {
-                    // Stopped streaming
+                    // Thinking blocks paused. If runtime is still running, keep the last
+                    // thinking text so the bottom bar remains consistent with stop/running UI.
                     isStreaming = false
-                    spinnerMessage = nil
-                    if let startTime = streamingStartTime {
-                        let duration = Date().timeIntervalSince(startTime)
-                        AppLogger.log("[Dashboard] Streaming stopped after \(String(format: "%.1f", duration))s")
+                    if agentState != .running {
+                        spinnerMessage = nil
+                        if let startTime = streamingStartTime {
+                            let duration = Date().timeIntervalSince(startTime)
+                            AppLogger.log("[Dashboard] Streaming stopped after \(String(format: "%.1f", duration))s")
+                        }
+                        streamingStartTime = nil
+                    } else {
+                        AppLogger.log("[Dashboard] Streaming flag paused while runtime still running - preserving thinking text")
                     }
-                    streamingStartTime = nil
                 }
 
                 // In interactive mode, update isLoading based on claude_message
-                // Note: claudeState is managed by pty_state events in interactive mode
+                // Note: agentState is managed by pty_state events in interactive mode
                 if isInteractiveMode {
                     // Reset isLoading when we receive any assistant message (Claude is responding)
                     if payload.effectiveRole == "assistant" && isLoading {
@@ -2263,12 +2264,12 @@ final class DashboardViewModel: ObservableObject {
                     // Only use stop_reason as a fallback if pty_state isn't working
                     if let stopReason = payload.stopReason, !stopReason.isEmpty {
                         // Claude finished - set to idle
-                        if claudeState == .running {
-                            claudeState = .idle
+                        if agentState == .running {
+                            agentState = .idle
                             AppLogger.log("[Dashboard] Interactive mode: Claude finished (stop_reason: \(stopReason))")
                         }
                     }
-                    // Don't set claudeState = .running here - pty_state handles state transitions
+                    // Don't set agentState = .running here - pty_state handles state transitions
                 }
             }
 
@@ -2304,8 +2305,8 @@ final class DashboardViewModel: ObservableObject {
         case .claudeStatus:
             if case .claudeStatus(let payload) = event.payload,
                let state = payload.state {
-                let previousState = claudeState
-                claudeState = state
+                let previousState = agentState
+                agentState = state
                 if state != .waiting {
                     pendingInteraction = nil
                 }
@@ -2356,7 +2357,7 @@ final class DashboardViewModel: ObservableObject {
                !options.isEmpty,
                options.allSatisfy({ isValidPTYOptionKey($0.key) }) {
                 pendingInteraction = PendingInteraction.fromPTYPermission(event: event)
-                claudeState = .waiting  // Update state to show waiting indicator
+                agentState = .waiting  // Update state to show waiting indicator
                 Haptics.warning()
 
                 // Check if this is a trust_folder permission - session APIs won't work until approved
@@ -2421,10 +2422,10 @@ final class DashboardViewModel: ObservableObject {
 
                 // Update claude state based on the resolution
                 if payload.wasApproved {
-                    claudeState = .running
+                    agentState = .running
                 } else if payload.wasDenied {
                     // Permission was denied, Claude may still be waiting or idle
-                    claudeState = .idle
+                    agentState = .idle
                 }
             }
 
@@ -2484,27 +2485,27 @@ final class DashboardViewModel: ObservableObject {
             // PTY state change (idle, thinking, permission, question, error)
             if case .ptyState(let payload) = event.payload {
                 if let state = payload.state {
-                    let previousClaudeState = claudeState
+                    let previousClaudeState = agentState
                     let wasPendingTrust = isPendingTrustFolder
 
                     // Map PTY state to Claude state
                     switch state {
                     case .idle:
-                        claudeState = .idle
+                        agentState = .idle
                         isLoading = false  // Also reset loading when idle
                         spinnerMessage = nil  // Clear spinner message when idle
                     case .thinking:
-                        claudeState = .running
+                        agentState = .running
                         // Set fallback spinner message for LIVE mode (no pty_spinner events)
                         // if spinnerMessage == nil {
                         //     spinnerMessage = "Thinking... (\(Self.mobileStopText))"
                         // }
                     case .permission, .question:
-                        claudeState = .waiting
+                        agentState = .waiting
                     case .error:
-                        claudeState = .error
+                        agentState = .error
                     }
-                    AppLogger.log("[Dashboard] PTY state: \(state) → claudeState: \(previousClaudeState) → \(claudeState)")
+                    AppLogger.log("[Dashboard] PTY state: \(state) → agentState: \(previousClaudeState) → \(agentState)")
 
                     // Check if trust_folder was just approved
                     // When state changes from permission to idle/thinking, trust was granted
@@ -2539,8 +2540,8 @@ final class DashboardViewModel: ObservableObject {
                 spinnerMessage = message
 
                 // pty_spinner indicates Claude is actively working - set to running
-                if claudeState != .running {
-                    claudeState = .running
+                if agentState != .running {
+                    agentState = .running
                 }
 
                 // If not already streaming, start streaming when we receive spinner events
@@ -2616,7 +2617,7 @@ final class DashboardViewModel: ObservableObject {
         case .statusResponse:
             if case .statusResponse(let payload) = event.payload {
                 agentStatus = AgentStatus.from(payload: payload)
-                claudeState = agentStatus.claudeState
+                agentState = agentStatus.claudeState
             }
 
         case .error:
@@ -2708,7 +2709,7 @@ final class DashboardViewModel: ObservableObject {
                let realId = payload.realId {
                 let workspaceId = payload.workspaceId
                 AppLogger.log("[Dashboard] Session ID resolved: temp=\(tempId) → real=\(realId), workspace=\(workspaceId ?? "nil")")
-                AppLogger.log("[Dashboard] Current state: userSelectedSessionId=\(userSelectedSessionId ?? "nil"), claudeState=\(claudeState), watchingSessionId=\(watchingSessionId ?? "nil")")
+                AppLogger.log("[Dashboard] Current state: userSelectedSessionId=\(userSelectedSessionId ?? "nil"), agentState=\(agentState), watchingSessionId=\(watchingSessionId ?? "nil")")
 
                 // Determine if we should accept this session ID:
                 // 1. If our current session matches the temp ID
@@ -2717,7 +2718,7 @@ final class DashboardViewModel: ObservableObject {
                 //    (happens when starting new session while already having a previous session)
                 // 3. If we have no session selected AND Claude is running
                 let shouldAccept = userSelectedSessionId == tempId ||
-                                   claudeState == .running ||
+                                   agentState == .running ||
                                    (userSelectedSessionId == nil) ||
                                    (userSelectedSessionId?.isEmpty == true)
 
@@ -2773,7 +2774,7 @@ final class DashboardViewModel: ObservableObject {
                         }
                     }
                 } else {
-                    AppLogger.log("[Dashboard] Session ID resolution for different session (current=\(userSelectedSessionId ?? "nil"), temp=\(tempId), claudeState=\(claudeState))")
+                    AppLogger.log("[Dashboard] Session ID resolution for different session (current=\(userSelectedSessionId ?? "nil"), temp=\(tempId), agentState=\(agentState))")
                 }
             }
 
@@ -2813,7 +2814,7 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Cleared failed session - forceNewSession=true for next prompt")
 
             // Reset claude state to idle (ready for new input)
-            claudeState = .idle
+            agentState = .idle
 
             // Stay on Dashboard - user can send a new message to start a fresh session
             AppLogger.log("[Dashboard] Session failed - staying on Dashboard, ready for new session")
@@ -2825,16 +2826,16 @@ final class DashboardViewModel: ObservableObject {
                 let messagesEmitted = payload.messagesEmitted ?? 0
                 let fileOffset = payload.fileOffset ?? 0
                 let fileSize = payload.fileSize ?? 0
-                AppLogger.log("[Dashboard] Stream read complete - messages: \(messagesEmitted), offset: \(fileOffset), size: \(fileSize), claudeState: \(claudeState)")
+                AppLogger.log("[Dashboard] Stream read complete - messages: \(messagesEmitted), offset: \(fileOffset), size: \(fileSize), agentState: \(agentState)")
 
                 // When file_offset == file_size, we've read the entire file - Claude is done
                 if fileOffset == fileSize && fileSize > 0 {
-                    AppLogger.log("[Dashboard] Setting claudeState to .idle (was: \(claudeState))")
-                    claudeState = .idle
+                    AppLogger.log("[Dashboard] Setting agentState to .idle (was: \(agentState))")
+                    agentState = .idle
                     isStreaming = false
                     streamingStartTime = nil
                     spinnerMessage = nil
-                    AppLogger.log("[Dashboard] Claude finished - stream read complete (offset == size), claudeState: \(claudeState)")
+                    AppLogger.log("[Dashboard] Claude finished - stream read complete (offset == size), agentState: \(agentState)")
                 } else {
                     AppLogger.log("[Dashboard] NOT setting idle: offset=\(fileOffset), size=\(fileSize)")
                 }
@@ -2859,7 +2860,7 @@ final class DashboardViewModel: ObservableObject {
                     AppLogger.log("[Dashboard] Current session was stopped by another device")
 
                     // Reset session state
-                    claudeState = .idle
+                    agentState = .idle
                     isStreaming = false
                     streamingStartTime = nil
                     spinnerMessage = nil
@@ -2891,7 +2892,7 @@ final class DashboardViewModel: ObservableObject {
 
                     // Clear session and workspace state
                     setSelectedSession(nil)
-                    claudeState = .idle
+                    agentState = .idle
                     isStreaming = false
                     streamingStartTime = nil
                     spinnerMessage = nil
@@ -2981,7 +2982,7 @@ final class DashboardViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(self.streamWatchdogInterval * 1_000_000_000))
                 guard self.isAppActive else { continue }
                 guard self.connectionState.isConnected else { continue }
-                guard self.isStreaming || self.claudeState == .running else { continue }
+                guard self.isStreaming || self.agentState == .running else { continue }
 
                 let lastEvent = self.lastStreamEventAt ?? self.streamingStartTime
                 if let lastEvent, Date().timeIntervalSince(lastEvent) < self.streamStaleThreshold {
@@ -3013,8 +3014,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func applyStatus(_ status: AgentStatus, context: String) {
-        let previous = claudeState
-        claudeState = status.claudeState
+        let previous = agentState
+        agentState = status.claudeState
 
         if status.claudeState != .running {
             isStreaming = false
@@ -3025,7 +3026,7 @@ final class DashboardViewModel: ObservableObject {
             }
         }
 
-        AppLogger.log("[Dashboard] reconcileStatus(\(context)) \(previous) → \(claudeState)")
+        AppLogger.log("[Dashboard] reconcileStatus(\(context)) \(previous) → \(agentState)")
     }
 
     private func syncCurrentSessionRuntimeState(context: String) async {
@@ -3037,9 +3038,9 @@ final class DashboardViewModel: ObservableObject {
         do {
             let runtimeState = try await workspaceManager.getSessionState(sessionId: sessionId)
             let syncedState = Self.mapClaudeState(from: runtimeState)
-            let previousState = claudeState
+            let previousState = agentState
 
-            claudeState = syncedState
+            agentState = syncedState
             agentStatus = AgentStatus(
                 claudeState: syncedState,
                 sessionId: agentStatus.sessionId ?? sessionId,
@@ -3066,7 +3067,7 @@ final class DashboardViewModel: ObservableObject {
                 workspaceManager.updateWorkspaceSession(workspaceId: workspaceId, session: runtimeState.toSession())
             }
 
-            AppLogger.log("[Dashboard] session/state sync (\(context)): session=\(sessionId), claudeState \(previousState) → \(syncedState), isRunning=\(runtimeState.isRunning ?? false), waitingForInput=\(runtimeState.waitingForInput ?? false), pendingTool=\(runtimeState.pendingToolName ?? "nil")")
+            AppLogger.log("[Dashboard] session/state sync (\(context)): session=\(sessionId), agentState \(previousState) → \(syncedState), isRunning=\(runtimeState.isRunning ?? false), waitingForInput=\(runtimeState.waitingForInput ?? false), pendingTool=\(runtimeState.pendingToolName ?? "nil")")
         } catch {
             if isSessionNotFoundError(error) {
                 AppLogger.log("[Dashboard] session/state sync (\(context)) skipped - session not active: \(sessionId)")
@@ -3439,60 +3440,12 @@ final class DashboardViewModel: ObservableObject {
         limit: Int,
         offset: Int
     ) async throws -> SessionsResponse {
-        switch runtime.sessionListSource {
-        case .runtimeScoped:
-            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
-                AppLogger.log("[Dashboard] Cannot load \(runtime.rawValue) sessions - no workspace ID", type: .warning)
-                return SessionsResponse(sessions: [], total: 0, limit: limit, offset: offset)
-            }
-            return try await _agentRepository.getAgentSessions(
-                runtime: runtime,
-                workspaceId: workspaceId,
-                limit: limit,
-                offset: offset
-            )
-
-        case .workspaceHistory:
-            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
-                AppLogger.log("[Dashboard] Cannot load sessions - no workspace ID", type: .warning)
-                return SessionsResponse(sessions: [], total: 0, limit: limit, offset: offset)
-            }
-
-            // workspace/session/history currently has no offset support.
-            guard offset == 0 else {
-                return SessionsResponse(sessions: [], total: 0, limit: limit, offset: offset)
-            }
-
-            let historyResponse = try await workspaceManager.getSessionHistory(
-                workspaceId: workspaceId,
-                limit: limit,
-                runtime: runtime
-            )
-            let mapped = (historyResponse.sessions ?? []).map { historySession in
-                let status = historySession.status.flatMap { SessionsResponse.SessionStatus(rawValue: $0) }
-                return SessionsResponse.SessionInfo(
-                    sessionId: historySession.sessionId,
-                    summary: historySession.summary ?? "No summary",
-                    messageCount: historySession.messageCount ?? 0,
-                    lastUpdated: historySession.lastUpdated ?? "",
-                    branch: historySession.branch,
-                    agentType: runtime,
-                    status: status,
-                    workspaceId: workspaceId,
-                    startedAt: historySession.startedAt,
-                    lastActive: historySession.lastActive,
-                    viewers: historySession.viewers
-                )
-            }
-
-            // Force total to mapped.count so hasMore remains false for this API.
-            return SessionsResponse(
-                sessions: mapped,
-                total: mapped.count,
-                limit: limit,
-                offset: 0
-            )
-        }
+        try await runtimeCoordinator.fetchSessionsPage(
+            runtime: runtime,
+            workspaceId: currentWorkspaceId,
+            limit: limit,
+            offset: offset
+        )
     }
 
     private func fetchSessionMessagesPage(
@@ -3502,28 +3455,14 @@ final class DashboardViewModel: ObservableObject {
         offset: Int,
         order: String
     ) async throws -> SessionMessagesResponse {
-        switch runtime.sessionMessagesSource {
-        case .runtimeScoped:
-            return try await _agentRepository.getAgentSessionMessages(
-                runtime: runtime,
-                sessionId: sessionId,
-                limit: limit,
-                offset: offset,
-                order: order
-            )
-        case .workspaceScoped:
-            guard let workspaceId = currentWorkspaceId, !workspaceId.isEmpty else {
-                throw AppError.workspaceIdRequired
-            }
-            return try await _agentRepository.getSessionMessages(
-                runtime: runtime,
-                sessionId: sessionId,
-                workspaceId: workspaceId,
-                limit: limit,
-                offset: offset,
-                order: order
-            )
-        }
+        try await runtimeCoordinator.fetchSessionMessagesPage(
+            runtime: runtime,
+            sessionId: sessionId,
+            workspaceId: currentWorkspaceId,
+            limit: limit,
+            offset: offset,
+            order: order
+        )
     }
 
     private func deleteSessionForRuntime(
@@ -3531,50 +3470,22 @@ final class DashboardViewModel: ObservableObject {
         sessionId: String,
         workspaceId: String?
     ) async throws {
-        switch runtime.sessionListSource {
-        case .runtimeScoped:
-            _ = try await _agentRepository.deleteAgentSession(runtime: runtime, sessionId: sessionId)
-        case .workspaceHistory:
-            guard let workspaceId = workspaceId, !workspaceId.isEmpty else {
-                throw AppError.workspaceIdRequired
-            }
-            _ = try await _agentRepository.deleteSession(runtime: runtime, sessionId: sessionId, workspaceId: workspaceId)
-        }
-    }
-
-    private struct DeleteAllSessionsSummary {
-        let deletedCount: Int
-        let failedCount: Int
+        try await runtimeCoordinator.deleteSessionForRuntime(
+            runtime: runtime,
+            sessionId: sessionId,
+            workspaceId: workspaceId
+        )
     }
 
     private func deleteAllSessionsForRuntime(
         runtime: AgentRuntime,
         workspaceId: String?
-    ) async throws -> DeleteAllSessionsSummary {
-        switch runtime.sessionListSource {
-        case .runtimeScoped:
-            let response = try await _agentRepository.deleteAllAgentSessions(runtime: runtime)
-            return DeleteAllSessionsSummary(deletedCount: response.deleted, failedCount: 0)
-
-        case .workspaceHistory:
-            guard let workspaceId = workspaceId, !workspaceId.isEmpty else {
-                throw AppError.workspaceIdRequired
-            }
-
-            var deletedCount = 0
-            var failedCount = 0
-            for session in sessions {
-                do {
-                    _ = try await _agentRepository.deleteSession(runtime: runtime, sessionId: session.sessionId, workspaceId: workspaceId)
-                    deletedCount += 1
-                } catch {
-                    failedCount += 1
-                    AppLogger.log("[Dashboard] Failed to delete session \(session.sessionId): \(error)", type: .error)
-                }
-            }
-
-            return DeleteAllSessionsSummary(deletedCount: deletedCount, failedCount: failedCount)
-        }
+    ) async throws -> DashboardDeleteAllSessionsSummary {
+        try await runtimeCoordinator.deleteAllSessionsForRuntime(
+            runtime: runtime,
+            workspaceId: workspaceId,
+            sessions: sessions
+        )
     }
 
     private func selectLatestAgentSessionId(from sessions: [SessionsResponse.SessionInfo]) -> String? {
@@ -3787,7 +3698,22 @@ final class DashboardViewModel: ObservableObject {
 
     /// Keep Codex thinking output in the bottom thinking bar, not in chat rows.
     private func shouldHideElementFromChatList(_ element: ChatElement) -> Bool {
-        selectedSessionRuntime == .codex && element.type == .thinking
+        if selectedSessionRuntime == .codex && element.type == .thinking {
+            return true
+        }
+
+        return shouldHideToolElementFromChatList(element)
+    }
+
+    /// Hide tool rows from chat list.
+    /// Keep edit diff rows so patch previews can still render.
+    private func shouldHideToolElementFromChatList(_ element: ChatElement) -> Bool {
+        switch element.type {
+        case .toolCall, .task, .toolResult:
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - Workspace Management
@@ -3908,7 +3834,7 @@ final class DashboardViewModel: ObservableObject {
         hasActiveConversation = false
         isSessionPinnedByUser = false
         connectionState = .disconnected
-        claudeState = .idle
+        agentState = .idle
         agentStatus = AgentStatus()
         pendingInteraction = nil
         promptText = ""
@@ -3961,7 +3887,7 @@ final class DashboardViewModel: ObservableObject {
 
         // Update agentStatus with new workspace info
         agentStatus = AgentStatus(
-            claudeState: claudeState,
+            claudeState: agentState,
             sessionId: effectiveSessionId,
             repoName: name,
             repoPath: agentStatus.repoPath,

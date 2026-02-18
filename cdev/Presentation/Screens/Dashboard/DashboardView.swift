@@ -67,7 +67,7 @@ struct DashboardView: View {
                     // Hide session ID when pending temp session (waiting for session_id_resolved)
                     StatusBarView(
                         connectionState: viewModel.connectionState,
-                        claudeState: viewModel.claudeState,
+                        agentState: viewModel.agentState,
                         repoName: viewModel.agentStatus.repoName,
                         sessionId: viewModel.isPendingTempSession ? nil : viewModel.agentStatus.sessionId,
                         isWatchingSession: viewModel.isWatchingSession,
@@ -140,8 +140,8 @@ struct DashboardView: View {
                             onClear: { Task { await viewModel.clearLogs() } },
                             isVisible: viewModel.selectedTab == .logs,
                             isInputFocused: isTextFieldEditing,
-                            isStreaming: viewModel.isStreaming,
-                            spinnerMessage: viewModel.spinnerMessage,
+                            isStreaming: viewModel.effectiveIsStreaming,
+                            spinnerMessage: viewModel.effectiveSpinnerMessage,
                             hasMoreMessages: viewModel.messagesHasMore,
                             isLoadingMore: viewModel.isLoadingMoreMessages,
                             onLoadMore: { await viewModel.loadMoreMessages() },
@@ -224,7 +224,7 @@ struct DashboardView: View {
                             }
 
                             ActionBarView(
-                                claudeState: viewModel.claudeState,
+                                agentState: viewModel.agentState,
                                 promptText: $viewModel.promptText,
                                 isBashMode: $viewModel.isBashMode,
                                 isLoading: viewModel.isLoading,
@@ -605,7 +605,7 @@ struct DashboardView: View {
                 )
             }
         }
-        .onChange(of: viewModel.claudeState) { _, newState in
+        .onChange(of: viewModel.agentState) { _, newState in
             if let activeId = workspaceStore.activeWorkspaceId {
                 workspaceStateManager.updateClaudeState(
                     workspaceId: activeId,
@@ -677,7 +677,7 @@ struct DashboardView: View {
 
 struct StatusBarView: View {
     let connectionState: ConnectionState
-    let claudeState: ClaudeState
+    let agentState: ClaudeState
     let repoName: String?
     let sessionId: String?
     var isWatchingSession: Bool = false
@@ -702,17 +702,17 @@ struct StatusBarView: View {
                 // Claude state with pulse animation
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(ColorSystem.Status.color(for: claudeState))
+                        .fill(ColorSystem.Status.color(for: agentState))
                         .frame(width: 6, height: 6)
                         .shadow(
-                            color: ColorSystem.Status.glow(for: claudeState),
-                            radius: (isPulsing && claudeState == .running) ? 2.0 : 1.0
+                            color: ColorSystem.Status.glow(for: agentState),
+                            radius: (isPulsing && agentState == .running) ? 2.0 : 1.0
                         )
-                        .scaleEffect(isPulsing && claudeState == .running ? 1.2 : 1.0)
+                        .scaleEffect(isPulsing && agentState == .running ? 1.2 : 1.0)
 
-                    Text(claudeState.rawValue.capitalized)
+                    Text(agentState.rawValue.capitalized)
                         .font(Typography.statusLabel)
-                        .foregroundStyle(ColorSystem.Status.color(for: claudeState))
+                        .foregroundStyle(ColorSystem.Status.color(for: agentState))
                 }
 
                 // Live indicator when watching session (only when connected)
@@ -802,9 +802,9 @@ struct StatusBarView: View {
         }
         .background(ColorSystem.terminalBgElevated)
         .onAppear {
-            isPulsing = claudeState == .running
+            isPulsing = agentState == .running
         }
-        .onChange(of: claudeState) { _, newState in
+        .onChange(of: agentState) { _, newState in
             withAnimation(newState == .running ? Animations.pulse : .none) {
                 isPulsing = newState == .running
             }
@@ -953,12 +953,37 @@ struct BuiltInCommand: Identifiable {
 
     /// Filter commands based on input
     static func matching(_ input: String) -> [BuiltInCommand] {
-        guard input.hasPrefix("/") else { return [] }
-        let query = input.lowercased()
+        guard let query = activeSlashToken(in: input)?.lowercased() else { return [] }
         if query == "/" {
             return all
         }
         return all.filter { $0.command.lowercased().hasPrefix(query) }
+    }
+
+    /// Replace the currently edited slash token (e.g. "/re") with a selected command.
+    static func replacingActiveSlashToken(in input: String, with command: String) -> String {
+        guard let range = activeSlashRange(in: input) else { return command }
+        var updated = input
+        updated.replaceSubrange(range, with: command)
+        return updated
+    }
+
+    private static func activeSlashToken(in input: String) -> String? {
+        guard let range = activeSlashRange(in: input) else { return nil }
+        return String(input[range])
+    }
+
+    private static func activeSlashRange(in input: String) -> Range<String.Index>? {
+        guard let slashIndex = input.lastIndex(of: "/") else { return nil }
+
+        if slashIndex != input.startIndex {
+            let previous = input[input.index(before: slashIndex)]
+            guard previous.isWhitespace else { return nil }
+        }
+
+        let range = slashIndex..<input.endIndex
+        guard !input[range].contains(where: { $0.isWhitespace }) else { return nil }
+        return range
     }
 }
 
@@ -1036,7 +1061,7 @@ struct CommandSuggestionsView: View {
 // MARK: - Pulse Terminal Action Bar
 
 struct ActionBarView: View {
-    let claudeState: ClaudeState
+    let agentState: ClaudeState
     @Binding var promptText: String
     @Binding var isBashMode: Bool
     let isLoading: Bool
@@ -1119,23 +1144,22 @@ struct ActionBarView: View {
 
     /// Whether to show command suggestions
     private var showSuggestions: Bool {
-        // Slash commands only activate when "/" is the first character.
-        !suggestedCommands.isEmpty && promptText.hasPrefix("/")
+        !suggestedCommands.isEmpty
     }
 
     /// Whether sending is disabled (Claude is running or waiting)
     private var isSendDisabled: Bool {
-        promptText.isBlank || isLoading || claudeState == .running
+        promptText.isBlank || isLoading || agentState == .running
     }
 
     /// Show stop indicator when Claude is running/waiting (replaces send button)
     private var shouldShowStopIndicator: Bool {
-        (claudeState == .running || claudeState == .waiting) && !hasPTYPermission
+        (agentState == .running || agentState == .waiting) && !hasPTYPermission
     }
 
     /// Placeholder text based on Claude state and bash mode
     private var placeholderText: String {
-        if claudeState == .running {
+        if agentState == .running {
             return "\(selectedRuntime.displayName) is running..."
         }
         return isBashMode ? "Run bash command..." : "Ask \(selectedRuntime.displayName)..."
@@ -1192,6 +1216,39 @@ struct ActionBarView: View {
     private func cancelAutoShowTimer() {
         autoShowTask?.cancel()
         autoShowTask = nil
+    }
+
+    private func setKeyboardHeight(_ value: CGFloat, animated: Bool = true, duration: Double = 0.25) {
+        let clamped = max(0, value)
+        guard abs(clamped - keyboardHeight) >= 0.5 else { return }
+
+        if animated {
+            withAnimation(.easeOut(duration: duration)) {
+                keyboardHeight = clamped
+            }
+        } else {
+            keyboardHeight = clamped
+        }
+    }
+
+    /// Shared transition for keyboard-driven layout changes (input bar + action row).
+    private var keyboardTransitionAnimation: Animation {
+        .easeOut(duration: Animations.Duration.standard)
+    }
+
+    private func updateKeyboardHeight(from notification: Notification) {
+        guard isEditing else { return }
+        guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+
+        let safeAreaBottom = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.bottom ?? 0
+
+        let screenHeight = UIScreen.main.bounds.height
+        let overlap = max(0, screenHeight - keyboardFrame.minY - safeAreaBottom)
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+
+        setKeyboardHeight(overlap, animated: true, duration: duration)
     }
 
     var body: some View {
@@ -1274,7 +1331,7 @@ struct ActionBarView: View {
                         axis: .vertical,
                         lineLimit: 1...3,
                         maxHeight: 120,  // ~6 lines max, then scroll
-                        isDisabled: claudeState == .running,
+                        isDisabled: agentState == .running,
                         onSubmit: {
                             if !isSendDisabled {
                                 onSend()
@@ -1368,7 +1425,7 @@ struct ActionBarView: View {
             // Only show suggestions when attachment menu is NOT open
             if showSuggestions && !isAttachmentMenuOpen {
                 CommandSuggestionsView(commands: suggestedCommands) { command in
-                    promptText = command
+                    promptText = BuiltInCommand.replacingActiveSlashToken(in: promptText, with: command)
                 }
                 .padding(.horizontal, containerPadding)
                 .padding(.trailing, 58)  // Space for floating toolkit
@@ -1426,17 +1483,16 @@ struct ActionBarView: View {
         .padding(.bottom, isEditing ? keyboardHeight : 0)
         // Background for keyboard padding area (prevents black gap)
         .background(ColorSystem.terminalBg)
-        .animation(Animations.stateChange, value: claudeState)
+        .animation(Animations.stateChange, value: agentState)
         .animation(Animations.stateChange, value: showSuggestions)
         .animation(Animations.stateChange, value: showAttachmentMenu?.wrappedValue)
         .animation(Animations.stateChange, value: areActionsExpanded)  // Animate manual expand/collapse
         .animation(Animations.stateChange, value: shouldAutoShowButtons)  // Animate auto-show after 5s
-        .animation(Animations.stateChange, value: isEditing)  // Animate when focus changes
+        .animation(keyboardTransitionAnimation, value: isEditing)  // Match keyboard show/hide motion
         .animation(Animations.stateChange, value: isBashMode)  // Animate bash mode indicator
         .animation(Animations.stateChange, value: popupOffset)  // Animate popup position when bash mode changes
-        .animation(.easeOut(duration: 0.25), value: keyboardHeight)
         // Dismiss keyboard when Claude starts running - don't auto-focus when done
-        .onChange(of: claudeState) { _, newState in
+        .onChange(of: agentState) { _, newState in
             if newState == .running {
                 isFocused.wrappedValue = false
             }
@@ -1444,9 +1500,9 @@ struct ActionBarView: View {
         // Messenger-style: Collapse action buttons when input gains focus
         .onChange(of: isEditing) { oldValue, newValue in
             AppLogger.log("[ActionBar] isEditing changed: \(oldValue) -> \(newValue)")
-            // Reset keyboard offset when editing ends.
+            // Animate keyboard offset reset when editing ends to avoid jumpy layout.
             if !newValue {
-                keyboardHeight = 0
+                setKeyboardHeight(0, animated: true, duration: Animations.Duration.standard)
             }
             if newValue {
                 // Focus gained - collapse action buttons (show chevron)
@@ -1465,9 +1521,12 @@ struct ActionBarView: View {
             } else {
                 // Focus lost - cancel timer and reset states
                 cancelAutoShowTimer()
-                shouldAutoShowButtons = false
-                // Also close menu when focus is lost
-                showAttachmentMenu?.wrappedValue = false
+                withAnimation(keyboardTransitionAnimation) {
+                    shouldAutoShowButtons = false
+                    areActionsExpanded = false
+                    // Also close menu when focus is lost
+                    showAttachmentMenu?.wrappedValue = false
+                }
                 AppLogger.log("[ActionBar] Focus lost - reset states")
             }
         }
@@ -1485,19 +1544,14 @@ struct ActionBarView: View {
                 areActionsExpanded = false
             }
         }
-        // Track keyboard height for positioning above keyboard
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
-            // Only track keyboard when this input is actively editing
-            guard isEditing else { return }
-            guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            // Subtract safe area bottom since we're inside the safe area
-            let safeAreaBottom = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first?.windows.first?.safeAreaInsets.bottom ?? 0
-            keyboardHeight = keyboardFrame.height - safeAreaBottom
+        // Track keyboard frame changes for smoother input bar + popup positioning
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            updateKeyboardHeight(from: notification)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardHeight = 0
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
+                ?? Animations.Duration.standard
+            setKeyboardHeight(0, animated: true, duration: duration)
         }
     }
 }

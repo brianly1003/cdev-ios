@@ -33,6 +33,7 @@
 		37AA4A5CBACDCEE87222B25B /* LogCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3996C447C3E3C0DD8965DF /* LogCache.swift */; };
 		38901FD12918C2AB36A1CC09 /* AppError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C484303F2FC2111266820F0 /* AppError.swift */; };
 		392351B51470E7878C11C95B /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F12FAB8F50F3909047844B7 /* DashboardViewModel.swift */; };
+		7C72F8F04D5D4B3DA8A2B1E9 /* DashboardRuntimeCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A6E1B7B26D4A0D8C1B5A42 /* DashboardRuntimeCoordinator.swift */; };
 		39652C25BDCADB1BE3843A37 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DEEDA73290D219852F86879 /* Haptics.swift */; };
 		3A7B56A607F11436FB96598A /* AgentConnectionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C7C1B6D88119D24BA35CCC0 /* AgentConnectionProtocol.swift */; };
 		3D2696264B83A12E4CD141C8 /* Animations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7160C0A48ECEA1726CE774CD /* Animations.swift */; };
@@ -214,6 +215,7 @@
 		5AF636F66805287E5C89A9CF /* Icons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icons.swift; sourceTree = "<group>"; };
 		5E88E1B4FB5E8961B16FE2B0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5F12FAB8F50F3909047844B7 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
+		F9A6E1B7B26D4A0D8C1B5A42 /* DashboardRuntimeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardRuntimeCoordinator.swift; sourceTree = "<group>"; };
 		5F56AF3E06A7A6CFE5EF36A2 /* Typography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typography.swift; sourceTree = "<group>"; };
 		6161838FAA4AF761A99BD329 /* DebugLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogStore.swift; sourceTree = "<group>"; };
 		624A07A99501D68A8E6C516B /* SessionPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPickerView.swift; sourceTree = "<group>"; };
@@ -410,6 +412,7 @@
 			children = (
 				6A8C4D8842CD324E7E0199BF /* DashboardView.swift */,
 				5F12FAB8F50F3909047844B7 /* DashboardViewModel.swift */,
+				F9A6E1B7B26D4A0D8C1B5A42 /* DashboardRuntimeCoordinator.swift */,
 				698FC29E9915D24DC82AB7FC /* Components */,
 				A75794D2C09305A7691F967F /* VoiceInputViewModel.swift */,
 			);
@@ -1189,6 +1192,7 @@
 				9D0F34112D1728D5F371F1C9 /* Constants.swift in Sources */,
 				69B8681B0ADAA035D9D68658 /* DashboardView.swift in Sources */,
 				392351B51470E7878C11C95B /* DashboardViewModel.swift in Sources */,
+				7C72F8F04D5D4B3DA8A2B1E9 /* DashboardRuntimeCoordinator.swift in Sources */,
 				08108E84EE0C80FB559EB9C6 /* Date+Extensions.swift in Sources */,
 				E681624986A943C9494AD835 /* DebugLogDetailView.swift in Sources */,
 				8307BF71BF15CB91BBCDD040 /* DebugLogStore.swift in Sources */,
