@@ -920,15 +920,22 @@ private struct MarkdownTextView: View {
     private func textBlockView(lines: [String]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                let parsed = parseMarkdownLine(line)
-                switch parsed {
+                switch parseMarkdownLine(line) {
                 case .heading(let level, let content):
                     headingView(level: level, content: content)
+                case .bullet(let content):
+                    bulletLineView(content)
+                case .separator:
+                    separatorLineView
+                case .exploredHeader(let title):
+                    exploredHeaderView(title)
+                case .treeEntry(let entry):
+                    treeEntryView(entry)
                 case .text(let content):
                     if !content.isEmpty {
                         inlineMarkdownText(content)
                     } else {
-                        Text(" ")  // Preserve empty lines
+                        Text(" ")
                             .font(Typography.terminal)
                     }
                 }
@@ -953,6 +960,74 @@ private struct MarkdownTextView: View {
     }
 
     @ViewBuilder
+    private func bulletLineView(_ content: String) -> some View {
+        HStack(alignment: .top, spacing: Spacing.xxs) {
+            Text("•")
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textPrimary)
+
+            if searchText.isEmpty {
+                Text(inlineMarkdown(content))
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.Log.stdout)
+            } else {
+                HighlightedText(content, highlighting: searchText)
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.Log.stdout)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var separatorLineView: some View {
+        Rectangle()
+            .fill(ColorSystem.textQuaternary.opacity(0.3))
+            .frame(height: 1)
+            .padding(.vertical, Spacing.xs)
+    }
+
+    @ViewBuilder
+    private func exploredHeaderView(_ title: String) -> some View {
+        Text(title)
+            .font(Typography.terminal)
+            .fontWeight(.semibold)
+            .foregroundStyle(ColorSystem.textPrimary)
+    }
+
+    @ViewBuilder
+    private func treeEntryView(_ entry: CodexTreeEntry) -> some View {
+        HStack(alignment: .top, spacing: Spacing.xxs) {
+            Text(entry.prefix)
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textQuaternary)
+
+            if searchText.isEmpty {
+                if entry.action.isEmpty {
+                    Text(entry.remainder)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                } else {
+                    Text(entry.action)
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.Tool.name)
+                    if !entry.remainder.isEmpty {
+                        Text(" \(entry.remainder)")
+                            .font(Typography.terminal)
+                            .foregroundStyle(ColorSystem.textSecondary)
+                    }
+                }
+            } else {
+                HighlightedText(entry.rawLine, highlighting: searchText)
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.textSecondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
     private func inlineMarkdownText(_ content: String) -> some View {
         if searchText.isEmpty {
             Text(inlineMarkdown(content))
@@ -973,9 +1048,25 @@ private struct MarkdownTextView: View {
         return AttributedString(text)
     }
 
-    /// Parse a line to detect headings
+    /// Parse a line to detect Codex CLI-oriented markdown patterns.
     private func parseMarkdownLine(_ line: String) -> MarkdownLine {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        if trimmed == "**Explored**" || trimmed == "Explored" {
+            return .exploredHeader("Explored")
+        }
+
+        if isSeparatorLine(trimmed) {
+            return .separator
+        }
+
+        if let bullet = parseBulletLine(trimmed) {
+            return .bullet(bullet)
+        }
+
+        if let entry = parseTreeEntry(trimmed) {
+            return .treeEntry(entry)
+        }
 
         // Check for heading patterns: # ## ###
         if trimmed.hasPrefix("###") {
@@ -992,6 +1083,59 @@ private struct MarkdownTextView: View {
 
         return .text(line)
     }
+
+    private func isSeparatorLine(_ trimmed: String) -> Bool {
+        guard trimmed.count >= 3 else { return false }
+        let separatorChars = CharacterSet(charactersIn: "-─")
+        return trimmed.unicodeScalars.allSatisfy { separatorChars.contains($0) }
+    }
+
+    private func parseBulletLine(_ trimmed: String) -> String? {
+        if trimmed.hasPrefix("- ") {
+            return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        }
+        if trimmed.hasPrefix("• ") {
+            return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    private func parseTreeEntry(_ trimmed: String) -> CodexTreeEntry? {
+        let prefix: String
+        if trimmed.hasPrefix("├ ") {
+            prefix = "├"
+        } else if trimmed.hasPrefix("└ ") {
+            prefix = "└"
+        } else {
+            return nil
+        }
+
+        let payload = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        guard !payload.isEmpty else {
+            return CodexTreeEntry(prefix: prefix, action: "", remainder: "", rawLine: trimmed)
+        }
+
+        let parts = payload.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard let first = parts.first else {
+            return CodexTreeEntry(prefix: prefix, action: "", remainder: payload, rawLine: trimmed)
+        }
+
+        let action = String(first)
+        let remainder = parts.count > 1 ? String(parts[1]) : ""
+
+        if codexTreeActionKeywords.contains(action) {
+            return CodexTreeEntry(prefix: prefix, action: action, remainder: remainder, rawLine: trimmed)
+        }
+
+        return CodexTreeEntry(prefix: prefix, action: "", remainder: payload, rawLine: trimmed)
+    }
+
+    private var codexTreeActionKeywords: Set<String> {
+        [
+            "Read", "Search", "List", "Ran", "Added", "Updated", "Deleted",
+            "Created", "Moved", "Opened", "Wrote", "Edited"
+        ]
+    }
 }
 
 /// Parsed markdown block types
@@ -1000,9 +1144,21 @@ private enum MarkdownBlock {
     case textBlock(lines: [String])
 }
 
+/// Codex-style tree entry (for Explored blocks).
+private struct CodexTreeEntry {
+    let prefix: String
+    let action: String
+    let remainder: String
+    let rawLine: String
+}
+
 /// Parsed markdown line type
 private enum MarkdownLine {
     case heading(level: Int, content: String)
+    case bullet(String)
+    case separator
+    case exploredHeader(String)
+    case treeEntry(CodexTreeEntry)
     case text(String)
 }
 
@@ -2637,15 +2793,26 @@ struct WriteToolElementView: View {
 struct ApplyPatchToolElementView: View {
     let content: ToolCallContent
     var searchText: String = ""
-    @State private var isExpanded = false
+    @State private var isExpanded = true
 
-    private let previewLineCount = 6
+    private let previewLineCount = 3
 
     private var patchLines: [String] {
         guard let full = content.fullContent, !full.isEmpty else { return [] }
         return full.components(separatedBy: "\n").filter { line in
             !line.hasPrefix("*** Begin Patch") && !line.hasPrefix("*** End Patch")
         }
+    }
+
+    /// Prefer showing actual changed code lines in collapsed mode, not only patch metadata.
+    private var collapsedPreviewLines: [String] {
+        let codeLines = patchLines.filter { line in
+            isPatchContentLine(line)
+        }
+        if !codeLines.isEmpty {
+            return Array(codeLines.prefix(previewLineCount))
+        }
+        return Array(patchLines.prefix(previewLineCount))
     }
 
     private var toolDisplay: String {
@@ -2733,8 +2900,8 @@ struct ApplyPatchToolElementView: View {
     }
 
     private var patchSummary: some View {
-        let preview = patchLines.prefix(previewLineCount)
-        let hasMore = patchLines.count > previewLineCount
+        let preview = collapsedPreviewLines
+        let hasMore = patchLines.count > preview.count
 
         return Group {
             if hasMore {
@@ -2755,7 +2922,7 @@ struct ApplyPatchToolElementView: View {
     }
 
     private func patchSummaryContent(
-        preview: ArraySlice<String>,
+        preview: [String],
         hasMore: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -2778,7 +2945,7 @@ struct ApplyPatchToolElementView: View {
                     Text("…")
                         .font(Typography.terminal)
                         .foregroundStyle(ColorSystem.textQuaternary)
-                    Text("+\(patchLines.count - previewLineCount) lines (tap to expand)")
+                    Text("+\(max(0, patchLines.count - preview.count)) lines (tap to expand)")
                         .font(Typography.terminalSmall)
                         .foregroundStyle(ColorSystem.textQuaternary)
                 }
@@ -2871,5 +3038,20 @@ struct ApplyPatchToolElementView: View {
         if line.hasPrefix("+") && !line.hasPrefix("+++") { return ColorSystem.Diff.addedBg }
         if line.hasPrefix("-") && !line.hasPrefix("---") { return ColorSystem.Diff.removedBg }
         return .clear
+    }
+
+    private func isPatchContentLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        if trimmed.hasPrefix("*** Add File:") ||
+            trimmed.hasPrefix("*** Update File:") ||
+            trimmed.hasPrefix("*** Delete File:") ||
+            trimmed.hasPrefix("*** Move to:") ||
+            trimmed.hasPrefix("@@") {
+            return false
+        }
+
+        return true
     }
 }

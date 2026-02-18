@@ -26,6 +26,32 @@ enum ChatContentFilter {
 
         return false
     }
+
+    /// Strip Codex/Claude image wrapper tags from user-visible text while keeping
+    /// the logical placeholder and accompanying message text.
+    static func normalizedUserText(_ text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        let filtered = lines.filter { line in
+            !isImageWrapperTagLine(line)
+        }
+        return filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Returns true for wrapper lines like `<image name=[Image #1]>` and `</image>`.
+    private static func isImageWrapperTagLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        if trimmed == "</image>" {
+            return true
+        }
+
+        if trimmed.hasPrefix("<image"), trimmed.hasSuffix(">") {
+            return true
+        }
+
+        return false
+    }
 }
 
 // MARK: - Element Types (matching Elements API spec)
@@ -762,12 +788,13 @@ extension ChatElement {
             switch effectiveContent {
             case .text(let text):
                 // Simple text input
-                if !text.isEmpty {
+                let displayText = ChatContentFilter.normalizedUserText(text)
+                if !displayText.isEmpty {
                     elements.append(ChatElement(
                         id: baseId,
                         type: .userInput,
                         timestamp: timestamp,
-                        content: .userInput(UserInputContent(text: text))
+                        content: .userInput(UserInputContent(text: displayText))
                     ))
                 }
 
@@ -784,23 +811,27 @@ extension ChatElement {
 
                     case "text":
                         // Text block in user message
-                        if let text = block.text, !text.isEmpty {
+                        if let text = block.text {
+                            let displayText = ChatContentFilter.normalizedUserText(text)
+                            guard !displayText.isEmpty else { continue }
                             elements.append(ChatElement(
                                 id: "\(baseId)-text-\(index)",
                                 type: .userInput,
                                 timestamp: timestamp,
-                                content: .userInput(UserInputContent(text: text))
+                                content: .userInput(UserInputContent(text: displayText))
                             ))
                         }
 
                     default:
                         // Unknown block type - treat as text if has content
-                        if let text = block.text ?? block.content, !text.isEmpty {
+                        if let text = block.text ?? block.content {
+                            let displayText = ChatContentFilter.normalizedUserText(text)
+                            guard !displayText.isEmpty else { continue }
                             elements.append(ChatElement(
                                 id: "\(baseId)-\(index)",
                                 type: .userInput,
                                 timestamp: timestamp,
-                                content: .userInput(UserInputContent(text: text))
+                                content: .userInput(UserInputContent(text: displayText))
                             ))
                         }
                     }
@@ -1149,11 +1180,13 @@ extension ChatElement {
         case .string(let text):
             if !text.isEmpty {
                 if sessionMessage.type == "user" {
+                    let displayText = ChatContentFilter.normalizedUserText(text)
+                    guard !displayText.isEmpty else { break }
                     elements.append(ChatElement(
                         id: "\(baseId)-text-0",
                         type: .userInput,
                         timestamp: timestamp,
-                        content: .userInput(UserInputContent(text: text))
+                        content: .userInput(UserInputContent(text: displayText))
                     ))
                 } else {
                     elements.append(ChatElement(
@@ -1173,11 +1206,13 @@ extension ChatElement {
                 case "text":
                     if let text = block.text, !text.isEmpty {
                         if sessionMessage.type == "user" {
+                            let displayText = ChatContentFilter.normalizedUserText(text)
+                            guard !displayText.isEmpty else { continue }
                             elements.append(ChatElement(
                                 id: "\(baseId)-text-\(index)",
                                 type: .userInput,
                                 timestamp: timestamp,
-                                content: .userInput(UserInputContent(text: text))
+                                content: .userInput(UserInputContent(text: displayText))
                             ))
                         } else {
                             elements.append(ChatElement(

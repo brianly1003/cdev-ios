@@ -3705,9 +3705,13 @@ final class DashboardViewModel: ObservableObject {
         return shouldHideToolElementFromChatList(element)
     }
 
-    /// Hide tool rows from chat list.
-    /// Keep edit diff rows so patch previews can still render.
+    /// Hide tool rows from chat list for non-Codex runtimes.
+    /// Codex should keep tool rows (Ran/Added/Updated) to match CLI behavior.
     private func shouldHideToolElementFromChatList(_ element: ChatElement) -> Bool {
+        if selectedSessionRuntime == .codex {
+            return false
+        }
+
         switch element.type {
         case .toolCall, .task, .toolResult:
             return true
