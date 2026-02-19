@@ -8,6 +8,7 @@ struct WorkspaceManagerView: View {
     @StateObject private var viewModel = WorkspaceManagerViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Callback when user wants to connect to a workspace
     /// Returns true if connection succeeded (dismisses view), false otherwise (stays on page)
@@ -213,6 +214,20 @@ struct WorkspaceManagerView: View {
                 } else {
                     // No saved manager - show setup
                     viewModel.showSetupSheet = true
+                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+
+                Task {
+                    if viewModel.isConnected {
+                        // Ensure list repopulates after long background/foreground cycles.
+                        if viewModel.workspaces.isEmpty {
+                            await viewModel.refreshWorkspaces()
+                        }
+                    } else if viewModel.hasSavedManager && !viewModel.isConnecting {
+                        await viewModel.retryConnection()
+                    }
                 }
             }
             .sheet(isPresented: $showDebugLogs) {

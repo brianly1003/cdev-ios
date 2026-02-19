@@ -491,6 +491,7 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
     }
 
     private let managerService = WorkspaceManagerService.shared
+    private let sessionRepository = DependencyContainer.shared.sessionRepository
     private var refreshPollTask: Task<Void, Never>?
 
     /// Parse search paths from input
@@ -652,7 +653,8 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
 
             // Start a session for the workspace if none active
             if !workspace.hasActiveSession {
-                _ = try await managerService.startSession(workspaceId: workspace.id)
+                let runtime = resolveRuntime(for: workspace)
+                _ = try await managerService.startSession(workspaceId: workspace.id, runtime: runtime)
             }
 
             // Refresh workspace to get updated sessions
@@ -700,7 +702,8 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
 
             // Start a session for the workspace if none active
             if !workspace.hasActiveSession {
-                _ = try await managerService.startSession(workspaceId: workspace.id)
+                let runtime = resolveRuntime(for: workspace)
+                _ = try await managerService.startSession(workspaceId: workspace.id, runtime: runtime)
             }
 
             // Refresh workspace to get updated sessions
@@ -723,6 +726,28 @@ final class RepositoryDiscoveryViewModel: ObservableObject {
             Haptics.error()
             return nil
         }
+    }
+
+    private func resolveRuntime(for workspace: RemoteWorkspace) -> AgentRuntime {
+        let storedRuntime = sessionRepository.selectedSessionRuntime
+        let workspaceRuntime = workspace.activeRuntime
+        let preferredRuntime = workspaceRuntime ?? storedRuntime
+
+        let runtime: AgentRuntime
+        if RuntimeCapabilityRegistryStore.shared.isSupported(preferredRuntime) {
+            runtime = preferredRuntime
+        } else {
+            runtime = RuntimeCapabilityRegistryStore.shared.defaultRuntime()
+            AppLogger.log(
+                "[Discovery] Runtime fallback for workspace \(workspace.id): \(preferredRuntime.rawValue) -> \(runtime.rawValue)",
+                type: .warning
+            )
+        }
+
+        if sessionRepository.selectedSessionRuntime != runtime {
+            sessionRepository.selectedSessionRuntime = runtime
+        }
+        return runtime
     }
 }
 

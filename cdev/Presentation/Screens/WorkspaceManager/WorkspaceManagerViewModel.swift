@@ -104,6 +104,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Retry configuration
     let maxRetryAttempts = 10
+    private let retryCooldownAfterCycle: TimeInterval = 5
     private var currentRetryAttempt = 0
     private var connectionCancelled = false
 
@@ -141,6 +142,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
     private let managerStore: ManagerStore
     private let webSocketService: WebSocketServiceProtocol
     private let httpService: HTTPServiceProtocol
+    private let sessionRepository: SessionRepository
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Computed Properties
@@ -191,12 +193,14 @@ final class WorkspaceManagerViewModel: ObservableObject {
         managerService: WorkspaceManagerService? = nil,
         managerStore: ManagerStore? = nil,
         webSocketService: WebSocketServiceProtocol? = nil,
-        httpService: HTTPServiceProtocol? = nil
+        httpService: HTTPServiceProtocol? = nil,
+        sessionRepository: SessionRepository? = nil
     ) {
         self.managerService = managerService ?? .shared
         self.managerStore = managerStore ?? .shared
         self.webSocketService = webSocketService ?? DependencyContainer.shared.webSocketService
         self.httpService = httpService ?? DependencyContainer.shared.httpService
+        self.sessionRepository = sessionRepository ?? DependencyContainer.shared.sessionRepository
 
         // Initialize currentWorkspaceId from the active workspace's remoteWorkspaceId
         // This ensures "Current" badge shows correctly when reopening the view
@@ -422,6 +426,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Connect to server with automatic retry
     /// Shows progress in serverStatus
     func connectWithRetry(to host: String, token: String? = nil) async {
+        // Prevent duplicate retry loops.
+        if isConnecting {
+            AppLogger.log("[WorkspaceManager] Skipping connect - retry loop already active")
+            return
+        }
+
         // Skip if already connected (prevents duplicate connections from AppState + WorkspaceManagerView race)
         if webSocketService.isConnected {
             AppLogger.log("[WorkspaceManager] Skipping connect - already connected")
@@ -441,61 +451,72 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
         // Tell WebSocket we're managing our own retry loop (prevents .failed state flickering)
         webSocketService.isExternalRetryInProgress = true
+        defer {
+            webSocketService.isExternalRetryInProgress = false
+            if connectionCancelled {
+                currentRetryAttempt = 0
+            }
+            isConnecting = false
+        }
 
         // Save host early so UI can show it (do not persist pairing token)
         managerStore.saveHost(host, token: nil)
         managerService.setCurrentHost(host)
 
         // Resolve access token (pairing -> exchange, or stored)
-        var accessToken: String? = nil
+        var fallbackAccessToken: String? = nil
         if let providedToken = token {
             if TokenType.from(token: providedToken) == .pairing {
                 AppLogger.log("[WorkspaceManager] Detected pairing token, exchanging for access/refresh pair")
                 do {
                     let tokenPair = try await exchangePairingToken(providedToken, host: host)
-                    accessToken = tokenPair.accessToken
+                    fallbackAccessToken = tokenPair.accessToken
                     AppLogger.log("[WorkspaceManager] Token exchange successful, access token expires: \(tokenPair.accessTokenExpiresAt)")
                 } catch {
                     AppLogger.log("[WorkspaceManager] Token exchange failed: \(error)", type: .error)
                     let (code, message) = Self.rpcErrorInfo(from: error)
                     self.error = .rpcError(code: code, message: message)
                     self.showError = true
-                    self.isConnecting = false
-                    self.webSocketService.isExternalRetryInProgress = false
                     self.serverStatus = .unreachable(lastError: message)
                     return
                 }
             } else {
-                accessToken = providedToken
+                fallbackAccessToken = providedToken
             }
-        } else if let storedHost = TokenManager.shared.getStoredHost(),
-                  storedHost == host,
-                  let storedToken = await TokenManager.shared.getValidAccessToken() {
-            AppLogger.log("[WorkspaceManager] Using stored access token for host: \(host)")
-            accessToken = storedToken
         }
 
-        if let accessToken = accessToken {
-            managerStore.saveHost(host, token: accessToken)
-        }
-
-        // Build connection info with access token
-        let connectionInfo = buildConnectionInfo(for: host, token: accessToken)
-        httpService.baseURL = connectionInfo.httpURL
-        httpService.authToken = accessToken
-
-        // Retry loop
-        while currentRetryAttempt < maxRetryAttempts && !connectionCancelled {
+        // Retry loop persists until success or explicit cancellation.
+        while !connectionCancelled && !Task.isCancelled {
             currentRetryAttempt += 1
+            if currentRetryAttempt > maxRetryAttempts {
+                AppLogger.log(
+                    "[WorkspaceManager] Retry cycle exhausted (\(maxRetryAttempts) attempts), continuing after \(Int(retryCooldownAfterCycle))s cooldown",
+                    type: .warning
+                )
+                currentRetryAttempt = 1
+                await waitForRetry(seconds: retryCooldownAfterCycle)
+                if connectionCancelled || Task.isCancelled { break }
+            }
+
             serverStatus = .connecting(attempt: currentRetryAttempt, maxAttempts: maxRetryAttempts)
             AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt)/\(maxRetryAttempts) to \(host)")
+
+            let accessToken = await resolveAccessTokenForReconnect(host: host, fallbackToken: fallbackAccessToken)
+            if accessToken != fallbackAccessToken {
+                fallbackAccessToken = accessToken
+            }
+            if let accessToken {
+                managerStore.saveHost(host, token: accessToken)
+            }
+
+            let connectionInfo = buildConnectionInfo(for: host, token: accessToken)
+            httpService.baseURL = connectionInfo.httpURL
+            httpService.authToken = accessToken
 
             do {
                 try await webSocketService.connect(to: connectionInfo)
                 // Success!
-                webSocketService.isExternalRetryInProgress = false
                 serverStatus = .connected
-                isConnecting = false
                 currentRetryAttempt = 0
                 if !hasAutoLoadedForCurrentConnection {
                     hasAutoLoadedForCurrentConnection = true
@@ -510,36 +531,24 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 // Check if cancelled
                 if connectionCancelled {
                     AppLogger.log("[WorkspaceManager] Connection cancelled by user")
-                    webSocketService.isExternalRetryInProgress = false
-                    serverStatus = .disconnected
-                    isConnecting = false
+                    return
+                }
+
+                if Self.shouldStopRetryLoop(for: error) {
+                    let (code, message) = Self.rpcErrorInfo(from: error)
+                    self.error = .rpcError(code: code, message: message)
+                    self.showError = true
+                    self.serverStatus = .unreachable(lastError: message)
+                    connectionCancelled = true
                     return
                 }
 
                 // If not last attempt, wait before retry
                 if currentRetryAttempt < maxRetryAttempts {
-                    // Sleep in small increments to check for cancellation
-                    for _ in 0..<20 {  // 20 x 100ms = 2 seconds
-                        if connectionCancelled { break }
-                        try? await Task.sleep(nanoseconds: 100_000_000)
-                    }
-                } else {
-                    // All retries exhausted
-                    serverStatus = .unreachable(lastError: error.localizedDescription)
-                    self.error = .rpcError(code: -1, message: "Could not connect after \(maxRetryAttempts) attempts")
-                    Haptics.error()
+                    await waitForRetry(seconds: 2)
                 }
             }
         }
-
-        // Clear external retry flag and update final state
-        webSocketService.isExternalRetryInProgress = false
-
-        // Final check if cancelled during loop
-        if connectionCancelled {
-            serverStatus = .disconnected
-        }
-        isConnecting = false
     }
 
     /// Single connection attempt (for manual retry)
@@ -610,6 +619,48 @@ final class WorkspaceManagerViewModel: ObservableObject {
             }
         }
         return (-1, error.localizedDescription)
+    }
+
+    private func resolveAccessTokenForReconnect(host: String, fallbackToken: String?) async -> String? {
+        if let storedHost = TokenManager.shared.getStoredHost(),
+           storedHost == host,
+           let refreshedToken = await TokenManager.shared.getValidAccessToken() {
+            if refreshedToken != fallbackToken {
+                AppLogger.log("[WorkspaceManager] Using refreshed access token for host: \(host)")
+            }
+            return refreshedToken
+        }
+        return fallbackToken
+    }
+
+    private func waitForRetry(seconds: TimeInterval) async {
+        guard seconds > 0 else { return }
+        let intervalNs: UInt64 = 100_000_000 // 100ms
+        let iterations = Int((seconds * 1_000_000_000) / Double(intervalNs))
+        for _ in 0..<max(iterations, 1) {
+            if connectionCancelled || Task.isCancelled { break }
+            try? await Task.sleep(nanoseconds: intervalNs)
+        }
+    }
+
+    private static func shouldStopRetryLoop(for error: Error) -> Bool {
+        if let appError = error as? AppError {
+            switch appError {
+            case .tokenInvalid, .tokenExpired, .refreshTokenExpired:
+                return true
+            case .authorizationFailed(let statusCode):
+                return statusCode == 401 || statusCode == 403
+            case .httpRequestFailed(let statusCode, _):
+                return statusCode == 401 || statusCode == 403
+            default:
+                break
+            }
+        }
+
+        let message = error.localizedDescription.lowercased()
+        return message.contains("authentication failed")
+            || message.contains("unauthorized")
+            || message.contains("forbidden")
     }
 
     /// Check if host is a local network address
@@ -692,7 +743,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
         do {
             // Start a new session for this workspace
-            _ = try await managerService.startSession(workspaceId: workspace.id)
+            let runtime = resolveRuntime(for: workspace)
+            _ = try await managerService.startSession(workspaceId: workspace.id, runtime: runtime)
             Haptics.success()
         } catch let error as WorkspaceManagerError {
             self.error = error
@@ -772,7 +824,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
         do {
             // Stop all active sessions for this workspace
             for session in workspace.sessions where session.status == .running {
-                try await managerService.stopSession(sessionId: session.id)
+                try await managerService.stopSession(sessionId: session.id, runtime: session.runtime)
             }
             // Also clear unreachable status when stopped
             managerService.clearUnreachableStatus(workspace.id)
@@ -837,7 +889,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
             // Start new session
             AppLogger.log("[WorkspaceManagerVM] Starting new session for workspace")
             currentOperation = .starting
-            _ = try await managerService.startSession(workspaceId: workspace.id)
+            let runtime = resolveRuntime(for: workspace)
+            _ = try await managerService.startSession(workspaceId: workspace.id, runtime: runtime)
             AppLogger.log("[WorkspaceManagerVM] Session started")
 
             // Refresh to get updated workspace with sessions (only after starting)
@@ -875,6 +928,28 @@ final class WorkspaceManagerViewModel: ObservableObject {
             await refreshWorkspaces()
             return nil
         }
+    }
+
+    private func resolveRuntime(for workspace: RemoteWorkspace) -> AgentRuntime {
+        let storedRuntime = sessionRepository.selectedSessionRuntime
+        let workspaceRuntime = workspace.activeRuntime
+        let preferredRuntime = workspaceRuntime ?? storedRuntime
+
+        let runtime: AgentRuntime
+        if RuntimeCapabilityRegistryStore.shared.isSupported(preferredRuntime) {
+            runtime = preferredRuntime
+        } else {
+            runtime = RuntimeCapabilityRegistryStore.shared.defaultRuntime()
+            AppLogger.log(
+                "[WorkspaceManagerVM] Runtime fallback for workspace \(workspace.id): \(preferredRuntime.rawValue) -> \(runtime.rawValue)",
+                type: .warning
+            )
+        }
+
+        if sessionRepository.selectedSessionRuntime != runtime {
+            sessionRepository.selectedSessionRuntime = runtime
+        }
+        return runtime
     }
 
     /// Called when connection to a workspace agent fails
@@ -1000,7 +1075,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
         do {
             // Step 1: Stop the session
-            try await managerService.stopSession(sessionId: sessionId)
+            let runtime = runtimeForSession(sessionId: sessionId, in: info.workspace)
+            try await managerService.stopSession(sessionId: sessionId, runtime: runtime)
             AppLogger.log("[WorkspaceManager] Session stopped, proceeding with removal")
 
             // Wait briefly for session to fully stop
@@ -1078,7 +1154,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
         do {
             // Stop all sessions first if any are running
             if info.hasActiveSession, let sessionId = info.activeSessionId {
-                try await managerService.stopSession(sessionId: sessionId)
+                let runtime = runtimeForSession(sessionId: sessionId, in: info.workspace)
+                try await managerService.stopSession(sessionId: sessionId, runtime: runtime)
             }
 
             // Remove workspace from manager (server broadcasts to all clients)
@@ -1114,6 +1191,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
         removalInfo = nil
         loadingWorkspaceId = nil
         currentOperation = nil
+    }
+
+    private func runtimeForSession(sessionId: String, in workspace: RemoteWorkspace) -> AgentRuntime {
+        workspace.sessions.first(where: { $0.id == sessionId })?.runtime
+        ?? workspace.activeRuntime
+        ?? sessionRepository.selectedSessionRuntime
     }
 
     /// Legacy removal method - now redirects to new multi-device aware flow

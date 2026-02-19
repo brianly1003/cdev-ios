@@ -304,7 +304,8 @@ final class WorkspaceManagerService: ObservableObject {
             workspaceId: response.workspaceId,
             status: response.status,
             startedAt: response.startedAt,
-            lastActive: response.lastActive
+            lastActive: response.lastActive,
+            agentType: runtime
         )
         updateWorkspaceSession(workspaceId: workspaceId, session: newSession)
 
@@ -316,7 +317,8 @@ final class WorkspaceManagerService: ObservableObject {
             workspaceId: response.workspaceId,
             status: response.status,
             startedAt: response.startedAt,
-            lastActive: response.lastActive
+            lastActive: response.lastActive,
+            agentType: runtime
         )
     }
 

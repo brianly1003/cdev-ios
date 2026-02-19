@@ -64,8 +64,9 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     let path: String            // "/Users/dev/backend" - full path
     let autoStart: Bool         // Auto-start session on server launch
     let createdAt: Date?        // When workspace was registered
-    var sessions: [Session]     // Active Claude sessions for this workspace
+    var sessions: [Session]     // Active sessions for this workspace
     let activeSessionId: String? // Currently active session ID (for multi-device)
+    let activeAgentType: AgentRuntime? // Runtime for the active session (claude/codex)
     let git: WorkspaceGitInfo?  // Git state info (from workspace/add response)
 
     // New top-level git state fields (from workspace/add enhancement)
@@ -77,6 +78,7 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         case autoStart = "auto_start"
         case createdAt = "created_at"
         case activeSessionId = "active_session_id"
+        case activeAgentType = "active_agent_type"
         case isGitRepo = "is_git_repo"
         case gitState = "git_state"
     }
@@ -91,6 +93,7 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         createdAt: Date? = nil,
         sessions: [Session] = [],
         activeSessionId: String? = nil,
+        activeAgentType: AgentRuntime? = nil,
         git: WorkspaceGitInfo? = nil,
         isGitRepo: Bool? = nil,
         gitState: String? = nil
@@ -102,6 +105,7 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         self.createdAt = createdAt
         self.sessions = sessions
         self.activeSessionId = activeSessionId
+        self.activeAgentType = activeAgentType
         self.git = git
         self.isGitRepo = isGitRepo
         self.gitState = gitState
@@ -126,6 +130,8 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
         // Sessions may be missing from workspace/add response - default to empty array
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
         activeSessionId = try container.decodeIfPresent(String.self, forKey: .activeSessionId)
+        let activeAgentTypeRaw = try container.decodeIfPresent(String.self, forKey: .activeAgentType)
+        activeAgentType = AgentRuntime.runtimeForID(activeAgentTypeRaw)
 
         // Git info from workspace/add response (nested object)
         git = try container.decodeIfPresent(WorkspaceGitInfo.self, forKey: .git)
@@ -169,7 +175,26 @@ struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
 
     /// Most recent active session (for quick access)
     var activeSession: Session? {
-        sessions.first { $0.status.canSendPrompts }
+        if let activeSessionId,
+           let active = sessions.first(where: { $0.id == activeSessionId }) {
+            return active
+        }
+        return sessions.first { $0.status.canSendPrompts }
+    }
+
+    /// Active runtime for this workspace.
+    /// Prefers server-provided active_agent_type, then session metadata.
+    var activeRuntime: AgentRuntime? {
+        if let activeAgentType {
+            return activeAgentType
+        }
+        if let activeSession {
+            return activeSession.runtime
+        }
+        if let mostRecentSession {
+            return mostRecentSession.runtime
+        }
+        return nil
     }
 
     /// Most recently active session (running or not)
@@ -248,6 +273,7 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     let summary: String?            // First prompt summary (historical only)
     let messageCount: Int?          // Number of messages (historical only)
     let lastUpdated: Date?          // Last updated time (historical only)
+    let agentType: AgentRuntime?    // Runtime that owns this session (claude/codex)
 
     // Runtime state (from session/state call)
     let claudeState: String?        // "idle", "running", "waiting"
@@ -262,6 +288,7 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, status, viewers, summary
+        case agentType = "agent_type"
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"
@@ -286,6 +313,7 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
         summary: String? = nil,
         messageCount: Int? = nil,
         lastUpdated: Date? = nil,
+        agentType: AgentRuntime? = nil,
         claudeState: String? = nil,
         claudeSessionId: String? = nil,
         isRunning: Bool? = nil,
@@ -302,6 +330,7 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
         self.summary = summary
         self.messageCount = messageCount
         self.lastUpdated = lastUpdated
+        self.agentType = agentType
         self.claudeState = claudeState
         self.claudeSessionId = claudeSessionId
         self.isRunning = isRunning
@@ -328,6 +357,8 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
         // Historical session fields
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
         messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCount)
+        let agentTypeRaw = try container.decodeIfPresent(String.self, forKey: .agentType)
+        agentType = AgentRuntime.runtimeForID(agentTypeRaw)
 
         // Runtime state
         claudeState = try container.decodeIfPresent(String.self, forKey: .claudeState)
@@ -361,6 +392,11 @@ struct Session: Codable, Identifiable, Equatable, Hashable {
     }
 
     // MARK: - Computed Properties
+
+    /// Runtime for this session.
+    var runtime: AgentRuntime {
+        agentType ?? .claude
+    }
 
     /// Display summary - use summary for historical, or generate for running
     var displaySummary: String {
@@ -621,6 +657,7 @@ struct SessionStateResponse: Codable {
     let status: SessionStatus
     let startedAt: Date?
     let lastActive: Date?
+    let agentType: AgentRuntime?
 
     // Historical session fields
     let summary: String?
@@ -641,6 +678,7 @@ struct SessionStateResponse: Codable {
     enum CodingKeys: String, CodingKey {
         case id = "session_id"  // Server uses session_id, not id
         case status, viewers, summary
+        case agentType = "agent_type"
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"
@@ -665,6 +703,7 @@ struct SessionStateResponse: Codable {
             summary: summary,
             messageCount: messageCount,
             lastUpdated: lastUpdated,
+            agentType: agentType,
             claudeState: claudeState,
             claudeSessionId: claudeSessionId,
             isRunning: isRunning,
