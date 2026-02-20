@@ -144,7 +144,7 @@ enum ConnectionState: Equatable {
         case .connected:
             return "Connected"
         case .reconnecting(let attempt):
-            return "Reconnecting (\(attempt))..."
+            return "Retrying to connect (\(attempt))..."
         case .failed(let reason):
             return "Failed: \(reason)"
         }

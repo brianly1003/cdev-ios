@@ -41,7 +41,7 @@ struct ConnectionBanner: View {
             return (
                 "arrow.triangle.2.circlepath",
                 ColorSystem.warning,
-                "Reconnecting... (\(attempt)/\(Constants.Network.maxReconnectAttempts))",
+                "Retrying to connect... (\(attempt)/\(Constants.Network.maxReconnectAttempts))",
                 true
             )
         case .failed(let reason):
@@ -293,7 +293,7 @@ struct ConnectionBanner: View {
         case .connecting:
             return "Establishing secure connection..."
         case .reconnecting:
-            return "Connection will resume automatically"
+            return "Retrying to connect automatically"
         case .failed:
             return "Tap Retry to attempt connection again"
         case .connected:
@@ -357,8 +357,8 @@ struct ConnectionStatusIndicator: View {
             return ("circle.fill", ColorSystem.success, "Online", false)
         case .connecting:
             return ("antenna.radiowaves.left.and.right", ColorSystem.info, "Connecting", true)
-        case .reconnecting(let attempt):
-            return ("arrow.triangle.2.circlepath", ColorSystem.warning, "Retry \(attempt)", true)
+        case .reconnecting(_):
+            return ("arrow.triangle.2.circlepath", ColorSystem.warning, "Retrying", true)
         case .disconnected:
             return ("wifi.slash", ColorSystem.textTertiary, "Offline", false)
         case .failed:

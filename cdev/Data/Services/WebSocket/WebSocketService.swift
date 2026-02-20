@@ -1672,8 +1672,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 }
             }
         case .connecting:
-            // Connection failed during initial connect - update state
-            updateState(.failed(reason: errorMessage))
+            // Connection failed during initial connect
+            if isTransient && shouldAutoReconnect {
+                AppLogger.webSocket("Transient connect failure: \(errorMessage) - retrying")
+                Task {
+                    try? await reconnect()
+                }
+            } else {
+                updateState(.failed(reason: errorMessage))
+            }
         case .reconnecting:
             // Ignore during reconnection - will be handled by reconnect flow
             break

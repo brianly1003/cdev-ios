@@ -617,9 +617,9 @@ private struct ElementsScrollView: View {
                     .padding(.bottom, Spacing.xl)
                 }
                 .refreshable {
-                    // Pull-to-refresh triggers load more (older messages)
-                    // Use detached task to prevent cancellation when refresh gesture ends
-                    if hasMoreMessages, let onLoadMore = onLoadMore {
+                    // Pull-to-refresh triggers load more (older messages) or refreshes latest.
+                    // Use detached task to prevent cancellation when refresh gesture ends.
+                    if let onLoadMore = onLoadMore {
                         AppLogger.log("[ElementsScrollView] Pull-to-refresh triggered")
                         didTriggerLoadMore = true  // Set flag before loading
                         await withCheckedContinuation { continuation in

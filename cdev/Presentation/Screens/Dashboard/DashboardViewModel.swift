@@ -991,12 +991,17 @@ final class DashboardViewModel: ObservableObject {
             await loadRecentSessionHistory(isReconnection: false)
             return
         }
-        guard messagesHasMore, !isLoadingMoreMessages else { return }
-        guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else { return }
+        guard !isLoadingMoreMessages else { return }
         guard !isPendingTempSession else {
             AppLogger.log("[Dashboard] loadMoreMessages skipped - pending session_id_resolved")
             return
         }
+        if !messagesHasMore {
+            AppLogger.log("[Dashboard] loadMoreMessages no more pages - refreshing latest")
+            await loadRecentSessionHistory(isReconnection: true)
+            return
+        }
+        guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else { return }
 
         isLoadingMoreMessages = true
         do {
