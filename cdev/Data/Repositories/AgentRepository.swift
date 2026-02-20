@@ -50,6 +50,9 @@ final class AgentRepository: AgentRepositoryProtocol {
     /// Get the current workspace ID
     @MainActor
     private var currentWorkspaceId: String? {
+        if let activeId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId, !activeId.isEmpty {
+            return activeId
+        }
         let workspaces = WorkspaceManagerService.shared.workspaces
         return workspaces.first { $0.hasActiveSession }?.id
     }
@@ -101,9 +104,10 @@ final class AgentRepository: AgentRepositoryProtocol {
         // Use session/send with mode "new" and no session_id
         let workspaceId = await MainActor.run { self.currentWorkspaceId }
         if workspaceId != nil {
-            AppLogger.log("[AgentRepository] Sending prompt with mode 'new' (no session_id), runtime: \(runtime.rawValue)")
+            AppLogger.log("[AgentRepository] Sending prompt with mode 'new' (no session_id), runtime: \(runtime.rawValue), workspaceId: \(workspaceId ?? "nil")")
             try await WorkspaceManagerService.shared.sendPrompt(
                 sessionId: nil,  // No session_id for new sessions
+                workspaceId: workspaceId,
                 prompt: prompt,
                 mode: "new",
                 runtime: runtime

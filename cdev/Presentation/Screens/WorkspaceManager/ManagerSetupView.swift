@@ -9,12 +9,13 @@ struct ManagerSetupView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
 
-    /// Callback when user enters a host to connect (host, optional token)
-    let onConnect: (String, String?) -> Void
+    /// Callback when user enters a host to connect (host, optional token, optional pairing code)
+    let onConnect: (String, String?, String?) -> Void
 
     // State
     @State private var hostInput: String = ""
     @State private var tokenInput: String? = nil  // Auth token from QR code
+    @State private var pairingCodeInput: String = ""
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var hasCameraPermission: Bool = false
@@ -134,6 +135,7 @@ struct ManagerSetupView: View {
                     // Manual entry
                     ManagerManualEntry(
                         host: $hostInput,
+                        pairingCode: $pairingCodeInput,
                         onConnect: {
                             connectWithHost()
                         },
@@ -233,6 +235,7 @@ struct ManagerSetupView: View {
 
                     ManagerManualEntry(
                         host: $hostInput,
+                        pairingCode: $pairingCodeInput,
                         onConnect: {
                             connectWithHost()
                         }
@@ -401,6 +404,7 @@ struct ManagerSetupView: View {
         Haptics.success()
         hostInput = finalHost
         tokenInput = token  // Store the extracted token
+        pairingCodeInput = ""
         connectWithHost()
     }
 
@@ -445,7 +449,14 @@ struct ManagerSetupView: View {
         saveLastHost(host)
 
         Haptics.medium()
-        onConnect(host, tokenInput)  // Pass both host and token
+        let trimmedCode = pairingCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tokenInput == nil && trimmedCode.isEmpty {
+            errorMessage = "Pairing code required for manual connection. Open /pair on your computer and enter the code."
+            showError = true
+            return
+        }
+
+        onConnect(host, tokenInput, trimmedCode.isEmpty ? nil : trimmedCode)  // Pass host, token, pairing code
         dismiss()
     }
 
@@ -728,9 +739,11 @@ private struct ManagerDivider: View {
 
 private struct ManagerManualEntry: View {
     @Binding var host: String
+    @Binding var pairingCode: String
     let onConnect: () -> Void
     var onFocusChange: ((Bool) -> Void)? = nil
     @FocusState private var isFocused: Bool
+    @FocusState private var isCodeFocused: Bool
 
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
@@ -798,8 +811,64 @@ private struct ManagerManualEntry: View {
             Text("Enter the IP address or hostname of your laptop")
                 .font(Typography.caption2)
                 .foregroundStyle(ColorSystem.textQuaternary)
+
+            Text("Pairing Code (manual)")
+                .font(layout.captionFont)
+                .foregroundStyle(ColorSystem.textTertiary)
+                .padding(.top, Spacing.xs)
+
+            HStack(spacing: layout.contentSpacing) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: layout.iconMedium))
+                    .foregroundStyle(ColorSystem.textTertiary)
+
+                TextField("6-digit code from /pair", text: $pairingCode)
+                    .font(layout.terminalFont)
+                    .foregroundStyle(ColorSystem.textPrimary)
+                    .keyboardType(.numberPad)
+                    .focused($isCodeFocused)
+                    .onChange(of: pairingCode) { _, newValue in
+                        let filtered = newValue.filter { $0.isNumber }
+                        if filtered.count > 6 {
+                            pairingCode = String(filtered.prefix(6))
+                        } else if filtered != newValue {
+                            pairingCode = filtered
+                        }
+                    }
+
+                if !pairingCode.isEmpty {
+                    Button {
+                        pairingCode = ""
+                        Haptics.light()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: layout.iconLarge))
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, layout.smallPadding)
+            .padding(.vertical, layout.smallPadding)
+            .frame(minHeight: layout.inputHeight)
+            .background(ColorSystem.terminalBgHighlight)
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(
+                        isCodeFocused ? ColorSystem.primary.opacity(0.5) : ColorSystem.terminalBgSelected,
+                        lineWidth: layout.borderWidth
+                    )
+            )
+
+            Text("Required when auth is enabled and you connect without a QR code.")
+                .font(Typography.caption2)
+                .foregroundStyle(ColorSystem.textQuaternary)
         }
         .onChange(of: isFocused) { _, newValue in
+            onFocusChange?(newValue)
+        }
+        .onChange(of: isCodeFocused) { _, newValue in
             onFocusChange?(newValue)
         }
     }
@@ -891,6 +960,11 @@ private struct ManagerHelpText: View {
                 .padding(.vertical, Spacing.xs)
                 .background(ColorSystem.terminalBgElevated)
                 .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+
+            Text("Manual connect requires the pairing code shown on /pair")
+                .font(Typography.caption2)
+                .foregroundStyle(ColorSystem.textTertiary)
+                .multilineTextAlignment(.center)
         }
         .padding(.bottom, Spacing.xl)
     }
@@ -941,7 +1015,7 @@ private struct ManagerConnectingOverlay: View {
 // MARK: - Preview
 
 #Preview {
-    ManagerSetupView { host, token in
-        print("Connect to: \(host), token: \(token != nil ? "present" : "none")")
+    ManagerSetupView { host, token, pairingCode in
+        print("Connect to: \(host), token: \(token != nil ? "present" : "none"), code: \(pairingCode ?? "none")")
     }
 }

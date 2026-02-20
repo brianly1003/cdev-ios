@@ -7,6 +7,7 @@ struct ConnectionInfo: Codable, Equatable {
     let httpURL: URL
     let sessionId: String
     let repoName: String
+    let authRequired: Bool?
     let token: String?  // Access token for HTTP/WebSocket auth
     let tokenExpiresAtString: String?  // ISO8601 expiry time from server
 
@@ -15,6 +16,7 @@ struct ConnectionInfo: Codable, Equatable {
     /// - http: HTTP API URL
     /// - session: Session ID
     /// - repo: Repository name
+    /// - auth_required: Whether authentication is required
     /// - token: Optional pairing token
     /// - token_expires_at: Optional ISO8601 expiry time
     enum CodingKeys: String, CodingKey {
@@ -22,15 +24,17 @@ struct ConnectionInfo: Codable, Equatable {
         case httpURL = "http"
         case sessionId = "session"
         case repoName = "repo"
+        case authRequired = "auth_required"
         case token
         case tokenExpiresAtString = "token_expires_at"
     }
 
-    init(webSocketURL: URL, httpURL: URL, sessionId: String, repoName: String, token: String? = nil, tokenExpiresAt: String? = nil) {
+    init(webSocketURL: URL, httpURL: URL, sessionId: String, repoName: String, authRequired: Bool? = nil, token: String? = nil, tokenExpiresAt: String? = nil) {
         self.webSocketURL = webSocketURL
         self.httpURL = httpURL
         self.sessionId = sessionId
         self.repoName = repoName
+        self.authRequired = authRequired
         self.token = token
         self.tokenExpiresAtString = tokenExpiresAt
     }
@@ -86,6 +90,7 @@ struct ConnectionInfo: Codable, Equatable {
 
         self.sessionId = try container.decode(String.self, forKey: .sessionId)
         self.repoName = try container.decode(String.self, forKey: .repoName)
+        self.authRequired = try container.decodeIfPresent(Bool.self, forKey: .authRequired)
         self.token = try container.decodeIfPresent(String.self, forKey: .token)
         self.tokenExpiresAtString = try container.decodeIfPresent(String.self, forKey: .tokenExpiresAtString)
     }

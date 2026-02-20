@@ -287,7 +287,11 @@ final class AppState: ObservableObject {
             AppLogger.log("[AppState] Auto-connecting to manager at: \(managerHost)")
 
             // Determine URL scheme based on host type
-            let isLocal = isLocalHost(managerHost)
+            let parts = splitHostPort(managerHost)
+            let hostOnly = parts.host
+            let port = parts.port
+            let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+            let isLocal = isLocalHost(hostOnly)
             let wsScheme = isLocal ? "ws" : "wss"
             let httpScheme = isLocal ? "http" : "https"
 
@@ -295,17 +299,18 @@ final class AppState: ObservableObject {
             let httpURL: URL
 
             if isLocal {
-                wsURL = URL(string: "\(wsScheme)://\(managerHost):\(ServerConnection.serverPort)/ws")!
-                httpURL = URL(string: "\(httpScheme)://\(managerHost):\(ServerConnection.serverPort)")!
+                let resolvedPort = port ?? ServerConnection.serverPort
+                wsURL = URL(string: "\(wsScheme)://\(hostOnly):\(resolvedPort)/ws")!
+                httpURL = URL(string: "\(httpScheme)://\(hostOnly):\(resolvedPort)")!
             } else {
-                wsURL = URL(string: "\(wsScheme)://\(managerHost)/ws")!
-                httpURL = URL(string: "\(httpScheme)://\(managerHost)")!
+                wsURL = URL(string: "\(wsScheme)://\(hostWithPort)/ws")!
+                httpURL = URL(string: "\(httpScheme)://\(hostWithPort)")!
             }
 
             // Retrieve stored token for this host (if available)
             var accessToken: String?
             if let storedHost = TokenManager.shared.getStoredHost(),
-               storedHost == managerHost {
+               storedHost == hostWithPort {
                 accessToken = await TokenManager.shared.getValidAccessToken()
                 if accessToken != nil {
                     AppLogger.log("[AppState] Retrieved stored token for auto-reconnect")
@@ -349,29 +354,33 @@ final class AppState: ObservableObject {
         AppLogger.log("[AppState] Connecting to cdev-agent at \(host)")
 
         // Determine URL scheme based on host type
-        let isLocal = isLocalHost(host)
-        let wsScheme = isLocal ? "ws" : "wss"
-        let httpScheme = isLocal ? "http" : "https"
+            let parts = splitHostPort(host)
+            let hostOnly = parts.host
+            let port = parts.port
+            let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+            let isLocal = isLocalHost(hostOnly)
+            let wsScheme = isLocal ? "ws" : "wss"
+            let httpScheme = isLocal ? "http" : "https"
 
         // cdev-agent ports (for local connections)
         // For dev tunnels, port is embedded in the hostname
         let wsURL: URL
         let httpURL: URL
 
-        if isLocal {
-            // Local network: explicit ports
-            wsURL = URL(string: "\(wsScheme)://\(host):8765/ws")!
-            httpURL = URL(string: "\(httpScheme)://\(host):8766")!
-        } else {
-            // Dev tunnels: port is in subdomain, no explicit port needed
-            // e.g., abc123x4-8765.asse.devtunnels.ms for WebSocket
-            // Need to handle HTTP separately (port 8766 tunnel)
-            wsURL = URL(string: "\(wsScheme)://\(host)/ws")!
-            // For HTTP, user needs to provide the 8766 tunnel URL separately
-            // For now, assume same host (might need adjustment)
-            let httpHost = host.replacingOccurrences(of: "-8765.", with: "-8766.")
-            httpURL = URL(string: "\(httpScheme)://\(httpHost)")!
-        }
+            if isLocal {
+                // Local network: explicit ports
+                wsURL = URL(string: "\(wsScheme)://\(hostOnly):8765/ws")!
+                httpURL = URL(string: "\(httpScheme)://\(hostOnly):8766")!
+            } else {
+                // Dev tunnels: port is in subdomain, no explicit port needed
+                // e.g., abc123x4-8765.asse.devtunnels.ms for WebSocket
+                // Need to handle HTTP separately (port 8766 tunnel)
+                wsURL = URL(string: "\(wsScheme)://\(hostWithPort)/ws")!
+                // For HTTP, user needs to provide the 8766 tunnel URL separately
+                // For now, assume same host (might need adjustment)
+                let httpHost = hostWithPort.replacingOccurrences(of: "-8765.", with: "-8766.")
+                httpURL = URL(string: "\(httpScheme)://\(httpHost)")!
+            }
 
         // Create workspace entry
         let workspace = Workspace(
@@ -389,7 +398,7 @@ final class AppState: ObservableObject {
         // Retrieve stored token for this host (if available)
         var accessToken: String?
         if let storedHost = TokenManager.shared.getStoredHost(),
-           storedHost == host {
+           storedHost == hostWithPort {
             accessToken = await TokenManager.shared.getValidAccessToken()
             if accessToken != nil {
                 AppLogger.log("[AppState] Retrieved stored token for agent connection")
@@ -421,20 +430,38 @@ final class AppState: ObservableObject {
 
     /// Check if host is a local network address
     private func isLocalHost(_ host: String) -> Bool {
-        if host == "localhost" || host == "127.0.0.1" {
+        let hostOnly = splitHostPort(host).host
+        if hostOnly == "localhost" || hostOnly == "127.0.0.1" {
             return true
         }
         // IP address pattern
         let ipPattern = #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#
         if let regex = try? NSRegularExpression(pattern: ipPattern),
-           regex.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)) != nil {
+           regex.firstMatch(in: hostOnly, range: NSRange(hostOnly.startIndex..., in: hostOnly)) != nil {
             return true
         }
         // .local domains (Bonjour)
-        if host.hasSuffix(".local") {
+        if hostOnly.hasSuffix(".local") {
             return true
         }
         return false
+    }
+
+    private func splitHostPort(_ host: String) -> (host: String, port: Int?) {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let colonIndex = trimmed.lastIndex(of: ":") else {
+            return (trimmed, nil)
+        }
+
+        let portPart = trimmed[trimmed.index(after: colonIndex)...]
+        if let port = Int(portPart), port > 0 && port <= 65535 {
+            let hostOnly = String(trimmed[..<colonIndex])
+            if !hostOnly.isEmpty {
+                return (hostOnly, port)
+            }
+        }
+
+        return (trimmed, nil)
     }
 
     /// Extract a readable workspace name from host

@@ -145,9 +145,9 @@ struct WorkspaceManagerView: View {
                 }
             }
             .sheet(isPresented: $viewModel.showSetupSheet) {
-                ManagerSetupView { host, token in
+                ManagerSetupView { host, token, pairingCode in
                     Task {
-                        await viewModel.connect(to: host, token: token)
+                        await viewModel.connect(to: host, token: token, pairingCode: pairingCode)
                     }
                 }
                 .presentationDetents([.large])
@@ -193,6 +193,22 @@ struct WorkspaceManagerView: View {
                     }
                 )
                 .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $viewModel.showCodexStartPromptSheet) {
+                CodexStartPromptSheet(
+                    workspaceName: viewModel.codexStartWorkspace?.name ?? "Workspace",
+                    prompt: $viewModel.codexStartPrompt,
+                    onCancel: {
+                        viewModel.showCodexStartPromptSheet = false
+                        viewModel.codexStartPrompt = ""
+                        viewModel.codexStartWorkspace = nil
+                    },
+                    onStart: {
+                        Task { await viewModel.startCodexWorkspaceWithPrompt() }
+                    }
+                )
+                .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
             }
             .task {
@@ -883,6 +899,80 @@ struct ServerConnectionBanner: View {
         case .unreachable:
             return ColorSystem.error.opacity(0.08)
         }
+    }
+}
+
+// MARK: - Codex Start Prompt Sheet
+
+private struct CodexStartPromptSheet: View {
+    let workspaceName: String
+    @Binding var prompt: String
+    let onCancel: () -> Void
+    let onStart: () -> Void
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        VStack(spacing: layout.standardPadding) {
+            VStack(spacing: Spacing.xxs) {
+                Text("Start Codex Session")
+                    .font(Typography.title3)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text(workspaceName)
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
+            }
+
+            Text("Codex requires an initial prompt to start a new session.")
+                .font(Typography.caption2)
+                .foregroundStyle(ColorSystem.textTertiary)
+                .multilineTextAlignment(.center)
+
+            ZStack(alignment: .topLeading) {
+                if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Describe what you want Codex to do…")
+                        .font(Typography.body)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                        .padding(.horizontal, layout.smallPadding + 4)
+                        .padding(.vertical, layout.smallPadding + 2)
+                }
+
+                TextEditor(text: $prompt)
+                    .font(Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
+                    .padding(.horizontal, layout.smallPadding)
+                    .padding(.vertical, layout.smallPadding / 2)
+                    .frame(minHeight: 120)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            }
+
+            HStack(spacing: layout.contentSpacing) {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .font(Typography.buttonLabel)
+                .foregroundStyle(ColorSystem.textSecondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Spacing.sm)
+                .background(ColorSystem.terminalBgHighlight)
+                .clipShape(Capsule())
+
+                Button("Start") {
+                    onStart()
+                }
+                .font(Typography.buttonLabel)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Spacing.sm)
+                .background(ColorSystem.primary)
+                .clipShape(Capsule())
+            }
+        }
+        .padding(layout.standardPadding)
+        .background(ColorSystem.terminalBg.ignoresSafeArea())
     }
 }
 

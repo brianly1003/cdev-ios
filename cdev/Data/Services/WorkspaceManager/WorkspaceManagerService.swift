@@ -148,6 +148,42 @@ final class WorkspaceManagerService: ObservableObject {
         AppLogger.log("[WorkspaceManager] Session not found for removal: \(sessionId)", type: .warning)
     }
 
+    /// Mark a workspace idle in local state by removing active sessions.
+    /// Used for immediate UI correction when a session fails to initialize (e.g. trust declined).
+    func markWorkspaceIdle(workspaceId: String, failedSessionId: String? = nil) {
+        guard let index = workspaces.firstIndex(where: { $0.id == workspaceId }) else {
+            AppLogger.log("[WorkspaceManager] Workspace not found for idle update: \(workspaceId)", type: .warning)
+            return
+        }
+
+        var workspace = workspaces[index]
+        let beforeCount = workspace.sessions.count
+        var removedSessionIds = Set<String>()
+
+        if let failedSessionId,
+           !failedSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            workspace.sessions.removeAll { session in
+                guard session.id == failedSessionId else { return false }
+                removedSessionIds.insert(session.id)
+                return true
+            }
+        }
+
+        workspace.sessions.removeAll { session in
+            guard session.status.canSendPrompts else { return false }
+            removedSessionIds.insert(session.id)
+            return true
+        }
+
+        workspaces[index] = workspace
+
+        if removedSessionIds.isEmpty {
+            AppLogger.log("[WorkspaceManager] markWorkspaceIdle: no active sessions removed for workspace \(workspaceId) (before=\(beforeCount), after=\(workspace.sessions.count))", type: .warning)
+        } else {
+            AppLogger.log("[WorkspaceManager] markWorkspaceIdle: removed sessions \(Array(removedSessionIds).sorted()) for workspace \(workspaceId)")
+        }
+    }
+
     /// Remove a workspace from local list (called when workspace_removed event is received)
     /// This is for handling server-side removals broadcast to all clients
     func handleWorkspaceRemoved(workspaceId: String) {
@@ -278,7 +314,7 @@ final class WorkspaceManagerService: ObservableObject {
     /// Start a new runtime session for a workspace
     func startSession(
         workspaceId: String,
-        runtime: AgentRuntime = .claude,
+        runtime: AgentRuntime,
         resumeSessionId: String? = nil
     ) async throws -> Session {
         guard let ws = webSocketService else {
@@ -374,7 +410,9 @@ final class WorkspaceManagerService: ObservableObject {
         // Get from first workspace with active session or first workspace
         let effectiveWorkspaceId: String?
         if mode == "new" && workspaceId == nil {
-            effectiveWorkspaceId = workspaces.first(where: { $0.hasActiveSession })?.id ?? workspaces.first?.id
+            effectiveWorkspaceId = WorkspaceStore.shared.activeWorkspace?.remoteWorkspaceId
+                ?? workspaces.first(where: { $0.hasActiveSession })?.id
+                ?? workspaces.first?.id
         } else {
             effectiveWorkspaceId = workspaceId
         }
@@ -1077,7 +1115,7 @@ private struct DiscoverParams: Encodable {
 private struct WMSessionStartParams: Encodable {
     let workspaceId: String
     let resumeSessionId: String?
-    let agentType: String?
+    let agentType: String
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id"
@@ -1085,7 +1123,7 @@ private struct WMSessionStartParams: Encodable {
         case agentType = "agent_type"
     }
 
-    init(workspaceId: String, resumeSessionId: String? = nil, agentType: String? = nil) {
+    init(workspaceId: String, resumeSessionId: String? = nil, agentType: String) {
         self.workspaceId = workspaceId
         self.resumeSessionId = resumeSessionId
         self.agentType = agentType

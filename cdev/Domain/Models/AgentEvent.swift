@@ -820,12 +820,14 @@ struct SessionIDResolvedPayload: Codable {
 /// Sent when session ID resolution fails (e.g., user declined trust_folder)
 struct SessionIDFailedPayload: Codable {
     let temporaryId: String?      // The temporary UUID that failed to resolve
+    let sessionId: String?        // Session ID in event payload (if provided)
     let workspaceId: String?
     let reason: String?           // Reason for failure (e.g., "trust_declined")
     let message: String?          // Human-readable message
 
     enum CodingKeys: String, CodingKey {
         case temporaryId = "temporary_id"
+        case sessionId = "session_id"
         case workspaceId = "workspace_id"
         case reason
         case message

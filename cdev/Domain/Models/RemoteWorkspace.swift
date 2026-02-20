@@ -441,33 +441,43 @@ enum SessionStatus: String, Codable, Equatable {
     case stopping   // Session is stopping
     case error      // Session failed
     case attached   // Session attached to LIVE mode
+    case started    // Session started (interactive mode)
+    case existing   // Existing managed session returned
+    case notFound = "not_found" // Session not found
 
     /// User-friendly display text
     var displayText: String {
         switch self {
-        case .running, .attached: return "Running"
+        case .running, .attached, .started, .existing: return "Running"
         case .historical: return "Historical"
         case .stopped: return "Stopped"
         case .starting: return "Starting..."
         case .stopping: return "Stopping..."
         case .error: return "Error"
+        case .notFound: return "Not Found"
         }
     }
 
     /// SF Symbol icon for status
     var iconName: String {
         switch self {
-        case .running, .attached: return "checkmark.circle.fill"
+        case .running, .attached, .started, .existing: return "checkmark.circle.fill"
         case .historical: return "clock.arrow.circlepath"
         case .stopped: return "stop.circle"
         case .starting, .stopping: return "arrow.triangle.2.circlepath"
         case .error: return "exclamationmark.triangle.fill"
+        case .notFound: return "questionmark.circle"
         }
     }
 
     /// Whether prompts can be sent to this session directly
     var canSendPrompts: Bool {
-        self == .running || self == .attached
+        switch self {
+        case .running, .attached, .started, .existing:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Whether this session needs to be resumed before sending prompts

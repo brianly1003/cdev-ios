@@ -82,6 +82,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private let pendingRequestMethodsLock = NSLock()
     private static let pendingRequestTimeout: TimeInterval = 60  // Clean up after 60 seconds
 
+    /// Runtime inference cache for notifications that may omit agent_type.
+    /// Keys are session/workspace IDs learned from outgoing requests and typed events.
+    private var inferredAgentTypeBySessionId: [String: String] = [:]
+    private var inferredAgentTypeByWorkspaceId: [String: String] = [:]
+    private var lastInferredAgentType: String?
+    private let inferredAgentTypeLock = NSLock()
+    private static let inferredAgentTypeMaxEntries = 200
+
     // MARK: - Session Watching State
 
     /// Currently watched session ID (publicly accessible)
@@ -205,6 +213,12 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         useJSONRPC = false
         _clientId = nil
         RuntimeCapabilityRegistryStore.shared.resetToDefaults()
+
+        inferredAgentTypeLock.withLock {
+            inferredAgentTypeBySessionId.removeAll()
+            inferredAgentTypeByWorkspaceId.removeAll()
+            lastInferredAgentType = nil
+        }
 
         // Cancel WebSocket and session
         webSocket?.cancel(with: .goingAway, reason: nil)
@@ -920,6 +934,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         let (method, requestId) = extractJSONRPCMethodAndId(data: data)
         let displayMethod = method ?? "request"
 
+        if let context = extractAgentTypeInferenceContext(data: data) {
+            persistAgentTypeInference(
+                agentType: context.agentType,
+                sessionId: context.sessionId,
+                workspaceId: context.workspaceId
+            )
+        }
+
         // Track request ID -> method for response correlation
         if let requestId = requestId, let method = method {
             pendingRequestMethodsLock.withLock {
@@ -1350,14 +1372,15 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         // Strip "event/" prefix from method name if present
         // JSON-RPC uses "event/claude_message" but AgentEventType expects "claude_message"
-        let eventType = method.hasPrefix("event/") ? String(method.dropFirst(6)) : method
-        AppLogger.log("[WS] convertNotification: eventType=\(eventType), paramsKeys=\(paramsDict.keys.sorted())")
+        let rawEventType = method.hasPrefix("event/") ? String(method.dropFirst(6)) : method
+        let eventType = normalizedEventType(rawEventType)
+        AppLogger.log("[WS] convertNotification: rawEventType=\(rawEventType), eventType=\(eventType), paramsKeys=\(paramsDict.keys.sorted())")
 
         // Extract workspace_id and session_id from params for event filtering
         // Server sends these at the top level of the event for multi-device filtering
-        let workspaceId = paramsDict["workspace_id"] as? String
-        let sessionId = paramsDict["session_id"] as? String
-        let topLevelAgentType = paramsDict["agent_type"] as? String
+        let topLevelWorkspaceId = paramsDict["workspace_id"] as? String
+        let topLevelSessionId = paramsDict["session_id"] as? String
+        let topLevelAgentType = normalizeAgentType(paramsDict["agent_type"] as? String)
 
         // Extract payload - could be nested in "payload" key or params itself contains the payload
         let payload: [String: Any]
@@ -1367,6 +1390,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             // Params IS the payload (minus workspace_id/session_id)
             payload = paramsDict
         }
+
+        let payloadWorkspaceId = payload["workspace_id"] as? String
+        let payloadSessionId = payload["session_id"] as? String
+        let payloadTemporaryId = payload["temporary_id"] as? String
+        let payloadAgentType = normalizeAgentType(payload["agent_type"] as? String)
+
+        let workspaceId = topLevelWorkspaceId ?? payloadWorkspaceId
+        let sessionId = topLevelSessionId ?? payloadSessionId ?? payloadTemporaryId
 
         // Re-encode params to Data for AgentEvent decoding
         // AgentEvent expects: { "event": "...", "payload": {...}, "workspace_id": "...", "session_id": "...", "id": "...", "timestamp": "..." }
@@ -1384,9 +1415,29 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             if let sessionId = sessionId {
                 eventDict["session_id"] = sessionId
             }
-            // Add agent_type for runtime routing; support both top-level and payload-provided forms.
-            if let agentType = topLevelAgentType ?? (payload["agent_type"] as? String) {
+            // Add agent_type for runtime routing; infer for lifecycle events when omitted by server.
+            let inferredAgentType = inferredAgentTypeForNotification(
+                rawEventType: rawEventType,
+                sessionId: sessionId,
+                workspaceId: workspaceId
+            )
+            if let agentType = topLevelAgentType ?? payloadAgentType ?? inferredAgentType {
                 eventDict["agent_type"] = agentType
+                persistAgentTypeInference(
+                    agentType: agentType,
+                    sessionId: sessionId,
+                    workspaceId: workspaceId
+                )
+
+                if eventType == AgentEventType.sessionIdResolved.rawValue,
+                   let realId = payload["real_id"] as? String,
+                   !realId.isEmpty {
+                    persistAgentTypeInference(
+                        agentType: agentType,
+                        sessionId: realId,
+                        workspaceId: workspaceId
+                    )
+                }
             }
 
             let eventData = try JSONSerialization.data(withJSONObject: eventDict)
@@ -1398,6 +1449,133 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             AppLogger.webSocket("Failed to convert notification '\(eventType)': \(error)", type: .warning)
             return nil
         }
+    }
+
+    private struct AgentTypeInferenceContext {
+        let agentType: String
+        let sessionId: String?
+        let workspaceId: String?
+    }
+
+    private func normalizedEventType(_ eventType: String) -> String {
+        switch eventType {
+        // cdev-agent may emit session_id_approved while client expects session_id_resolved.
+        case "session_id_approved":
+            return AgentEventType.sessionIdResolved.rawValue
+        default:
+            return eventType
+        }
+    }
+
+    private func normalizeAgentType(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        let lowercased = raw.lowercased()
+        if let runtime = AgentRuntime(rawValue: lowercased) {
+            return runtime.rawValue
+        }
+        return lowercased
+    }
+
+    private func shouldInferAgentType(for rawEventType: String) -> Bool {
+        switch rawEventType {
+        case AgentEventType.sessionIdFailed.rawValue,
+             AgentEventType.sessionIdResolved.rawValue,
+             "session_id_approved":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func inferredAgentTypeForNotification(
+        rawEventType: String,
+        sessionId: String?,
+        workspaceId: String?
+    ) -> String? {
+        guard shouldInferAgentType(for: rawEventType) else {
+            return nil
+        }
+
+        let trimmedSessionId = sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedWorkspaceId = workspaceId?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let inferred = inferredAgentTypeLock.withLock({
+            if let sessionId = trimmedSessionId,
+               !sessionId.isEmpty,
+               let agentType = inferredAgentTypeBySessionId[sessionId] {
+                return agentType
+            }
+            if let workspaceId = trimmedWorkspaceId,
+               !workspaceId.isEmpty,
+               let agentType = inferredAgentTypeByWorkspaceId[workspaceId] {
+                return agentType
+            }
+            return lastInferredAgentType
+        }) {
+            return inferred
+        }
+
+        if let watchedRuntime = _watchedRuntime {
+            return watchedRuntime.rawValue
+        }
+
+        return nil
+    }
+
+    private func persistAgentTypeInference(
+        agentType: String,
+        sessionId: String?,
+        workspaceId: String?
+    ) {
+        guard let normalizedAgentType = normalizeAgentType(agentType) else {
+            return
+        }
+
+        inferredAgentTypeLock.withLock {
+            lastInferredAgentType = normalizedAgentType
+
+            if let sessionId = sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !sessionId.isEmpty {
+                inferredAgentTypeBySessionId[sessionId] = normalizedAgentType
+            }
+
+            if let workspaceId = workspaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspaceId.isEmpty {
+                inferredAgentTypeByWorkspaceId[workspaceId] = normalizedAgentType
+            }
+
+            while inferredAgentTypeBySessionId.count > Self.inferredAgentTypeMaxEntries,
+                  let key = inferredAgentTypeBySessionId.keys.first {
+                inferredAgentTypeBySessionId.removeValue(forKey: key)
+            }
+
+            while inferredAgentTypeByWorkspaceId.count > Self.inferredAgentTypeMaxEntries,
+                  let key = inferredAgentTypeByWorkspaceId.keys.first {
+                inferredAgentTypeByWorkspaceId.removeValue(forKey: key)
+            }
+        }
+    }
+
+    private func extractAgentTypeInferenceContext(data: Data) -> AgentTypeInferenceContext? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let params = json["params"] as? [String: Any] else {
+            return nil
+        }
+
+        guard let agentType = normalizeAgentType(params["agent_type"] as? String) else {
+            return nil
+        }
+
+        let sessionId = params["session_id"] as? String
+        let workspaceId = params["workspace_id"] as? String
+        return AgentTypeInferenceContext(
+            agentType: agentType,
+            sessionId: sessionId,
+            workspaceId: workspaceId
+        )
     }
 
     // MARK: - JSON-RPC Parsing Helpers (Optimized - single parse)

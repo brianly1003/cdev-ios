@@ -136,6 +136,11 @@ final class WorkspaceManagerViewModel: ObservableObject {
     @Published var showTokenExpiryWarning: Bool = false
     @Published var tokenTimeRemaining: TimeInterval = 0
 
+    /// Codex start prompt sheet state
+    @Published var showCodexStartPromptSheet: Bool = false
+    @Published var codexStartPrompt: String = ""
+    @Published var codexStartWorkspace: RemoteWorkspace?
+
     // MARK: - Dependencies
 
     private let managerService: WorkspaceManagerService
@@ -283,23 +288,65 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Exchange pairing token for access/refresh token pair
     private func exchangePairingToken(_ pairingToken: String, host: String) async throws -> TokenPair {
         // Set up HTTP service with the correct base URL before exchange
-        let isLocal = isLocalHost(host)
+        let normalizedHost = normalizeHostInput(host)
+        let parts = splitHostPort(normalizedHost)
+        let hostOnly = parts.host
+        let port = parts.port
+        let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+        let isLocal = isLocalHost(hostOnly)
         let httpScheme = isLocal ? "http" : "https"
         let baseURL: URL
         if isLocal {
-            baseURL = URL(string: "\(httpScheme)://\(host):\(ServerConnection.serverPort)")!
+            let resolvedPort = port ?? ServerConnection.serverPort
+            baseURL = URL(string: "\(httpScheme)://\(hostOnly):\(resolvedPort)")!
         } else {
-            baseURL = URL(string: "\(httpScheme)://\(host)")!
+            baseURL = URL(string: "\(httpScheme)://\(hostWithPort)")!
         }
         httpService.baseURL = baseURL
 
         // Exchange the pairing token
-        let tokenPair = try await TokenManager.shared.exchangePairingToken(pairingToken, host: host)
+        let tokenPair = try await TokenManager.shared.exchangePairingToken(pairingToken, host: hostWithPort)
 
         // Update HTTP service with new access token
         httpService.authToken = tokenPair.accessToken
 
         return tokenPair
+    }
+
+    private struct PairingCodeRequest: Encodable {
+        let code: String
+    }
+
+    private struct PairingCodeResponse: Decodable {
+        let pairingToken: String
+
+        enum CodingKeys: String, CodingKey {
+            case pairingToken = "pairing_token"
+        }
+    }
+
+    private func exchangePairingCode(_ code: String, host: String) async throws -> String {
+        let normalizedHost = normalizeHostInput(host)
+        let parts = splitHostPort(normalizedHost)
+        let hostOnly = parts.host
+        let port = parts.port
+        let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+        let isLocal = isLocalHost(hostOnly)
+        let httpScheme = isLocal ? "http" : "https"
+        let baseURL: URL
+        if isLocal {
+            let resolvedPort = port ?? ServerConnection.serverPort
+            baseURL = URL(string: "\(httpScheme)://\(hostOnly):\(resolvedPort)")!
+        } else {
+            baseURL = URL(string: "\(httpScheme)://\(hostWithPort)")!
+        }
+
+        httpService.baseURL = baseURL
+        let response: PairingCodeResponse = try await httpService.post(
+            path: "api/pair/code",
+            body: PairingCodeRequest(code: code)
+        )
+        return response.pairingToken
     }
 
     private func setupTokenExpiryWarning() {
@@ -426,6 +473,13 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Connect to server with automatic retry
     /// Shows progress in serverStatus
     func connectWithRetry(to host: String, token: String? = nil) async {
+        let normalizedHost = normalizeHostInput(host)
+        guard !normalizedHost.isEmpty else {
+            self.error = .rpcError(code: -1, message: "Please enter a valid IP address or hostname")
+            self.showError = true
+            return
+        }
+
         // Prevent duplicate retry loops.
         if isConnecting {
             AppLogger.log("[WorkspaceManager] Skipping connect - retry loop already active")
@@ -460,8 +514,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
         }
 
         // Save host early so UI can show it (do not persist pairing token)
-        managerStore.saveHost(host, token: nil)
-        managerService.setCurrentHost(host)
+        managerStore.saveHost(normalizedHost, token: nil)
+        managerService.setCurrentHost(normalizedHost)
 
         // Resolve access token (pairing -> exchange, or stored)
         var fallbackAccessToken: String? = nil
@@ -469,7 +523,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
             if TokenType.from(token: providedToken) == .pairing {
                 AppLogger.log("[WorkspaceManager] Detected pairing token, exchanging for access/refresh pair")
                 do {
-                    let tokenPair = try await exchangePairingToken(providedToken, host: host)
+                    let tokenPair = try await exchangePairingToken(providedToken, host: normalizedHost)
                     fallbackAccessToken = tokenPair.accessToken
                     AppLogger.log("[WorkspaceManager] Token exchange successful, access token expires: \(tokenPair.accessTokenExpiresAt)")
                 } catch {
@@ -499,17 +553,17 @@ final class WorkspaceManagerViewModel: ObservableObject {
             }
 
             serverStatus = .connecting(attempt: currentRetryAttempt, maxAttempts: maxRetryAttempts)
-            AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt)/\(maxRetryAttempts) to \(host)")
+            AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt)/\(maxRetryAttempts) to \(normalizedHost)")
 
-            let accessToken = await resolveAccessTokenForReconnect(host: host, fallbackToken: fallbackAccessToken)
+            let accessToken = await resolveAccessTokenForReconnect(host: normalizedHost, fallbackToken: fallbackAccessToken)
             if accessToken != fallbackAccessToken {
                 fallbackAccessToken = accessToken
             }
             if let accessToken {
-                managerStore.saveHost(host, token: accessToken)
+                managerStore.saveHost(normalizedHost, token: accessToken)
             }
 
-            let connectionInfo = buildConnectionInfo(for: host, token: accessToken)
+            let connectionInfo = buildConnectionInfo(for: normalizedHost, token: accessToken)
             httpService.baseURL = connectionInfo.httpURL
             httpService.authToken = accessToken
 
@@ -523,7 +577,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
                     await refreshWorkspacesAfterConnection()
                 }
                 Haptics.success()
-                AppLogger.log("[WorkspaceManager] Connected successfully to \(host)")
+                AppLogger.log("[WorkspaceManager] Connected successfully to \(normalizedHost)")
                 return
             } catch {
                 AppLogger.log("[WorkspaceManager] Connection attempt \(currentRetryAttempt) failed: \(error.localizedDescription)")
@@ -552,8 +606,53 @@ final class WorkspaceManagerViewModel: ObservableObject {
     }
 
     /// Single connection attempt (for manual retry)
-    func connect(to host: String, token: String? = nil) async {
-        await connectWithRetry(to: host, token: token)
+    func connect(to host: String, token: String? = nil, pairingCode: String? = nil) async {
+        let normalizedHost = normalizeHostInput(host)
+        guard !normalizedHost.isEmpty else {
+            self.error = .rpcError(code: -1, message: "Please enter a valid IP address or hostname")
+            self.showError = true
+            return
+        }
+
+        var resolvedToken = token
+        let trimmedCode = pairingCode?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if resolvedToken == nil {
+            do {
+                let pairingInfo = try await fetchPairingInfo(for: normalizedHost)
+                let authRequired = pairingInfo.authRequired ?? false
+
+                if authRequired {
+                    guard let code = trimmedCode, !code.isEmpty else {
+                        self.error = .rpcError(code: 401, message: "Pairing code required. Open /pair on your computer and enter the code.")
+                        self.showError = true
+                        self.serverStatus = .unreachable(lastError: "Pairing code required")
+                        return
+                    }
+
+                    let pairingToken = try await exchangePairingCode(code, host: normalizedHost)
+                    let tokenPair = try await exchangePairingToken(pairingToken, host: normalizedHost)
+                    resolvedToken = tokenPair.accessToken
+                } else if let tokenFromInfo = pairingInfo.token {
+                    if let expiresAt = pairingInfo.tokenExpiresAt, Date() > expiresAt {
+                        self.error = .rpcError(code: 401, message: "Pairing token expired. Please refresh the QR code on your computer.")
+                        self.showError = true
+                        self.serverStatus = .unreachable(lastError: "Pairing token expired")
+                        return
+                    }
+                    let tokenPair = try await exchangePairingToken(tokenFromInfo, host: normalizedHost)
+                    resolvedToken = tokenPair.accessToken
+                }
+            } catch {
+                let (code, message) = Self.rpcErrorInfo(from: error)
+                self.error = .rpcError(code: code, message: message)
+                self.showError = true
+                self.serverStatus = .unreachable(lastError: message)
+                return
+            }
+        }
+
+        await connectWithRetry(to: normalizedHost, token: resolvedToken)
     }
 
     /// Retry connection to current saved host
@@ -579,7 +678,11 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     /// Build connection info for a host
     private func buildConnectionInfo(for host: String, token: String? = nil) -> ConnectionInfo {
-        let isLocal = isLocalHost(host)
+        let parts = splitHostPort(host)
+        let hostOnly = parts.host
+        let port = parts.port
+        let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+        let isLocal = isLocalHost(hostOnly)
         let wsScheme = isLocal ? "ws" : "wss"
         let httpScheme = isLocal ? "http" : "https"
 
@@ -587,11 +690,12 @@ final class WorkspaceManagerViewModel: ObservableObject {
         let httpURL: URL
 
         if isLocal {
-            wsURL = URL(string: "\(wsScheme)://\(host):\(ServerConnection.serverPort)/ws")!
-            httpURL = URL(string: "\(httpScheme)://\(host):\(ServerConnection.serverPort)")!
+            let resolvedPort = port ?? ServerConnection.serverPort
+            wsURL = URL(string: "\(wsScheme)://\(hostOnly):\(resolvedPort)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(hostOnly):\(resolvedPort)")!
         } else {
-            wsURL = URL(string: "\(wsScheme)://\(host)/ws")!
-            httpURL = URL(string: "\(httpScheme)://\(host)")!
+            wsURL = URL(string: "\(wsScheme)://\(hostWithPort)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(hostWithPort)")!
         }
 
         AppLogger.log("[WorkspaceManager] Building ConnectionInfo with token: \(token != nil ? "present" : "none")")
@@ -663,19 +767,82 @@ final class WorkspaceManagerViewModel: ObservableObject {
             || message.contains("forbidden")
     }
 
+    private struct HostParts {
+        let host: String
+        let port: Int?
+    }
+
+    private func normalizeHostInput(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        var host = trimmed
+        let schemes = ["https://", "http://", "wss://", "ws://", "cdev-manager://"]
+        for scheme in schemes where host.hasPrefix(scheme) {
+            host = String(host.dropFirst(scheme.count))
+            break
+        }
+
+        if let slashIndex = host.firstIndex(of: "/") {
+            host = String(host[..<slashIndex])
+        }
+
+        return host.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func splitHostPort(_ host: String) -> HostParts {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let colonIndex = trimmed.lastIndex(of: ":") else {
+            return HostParts(host: trimmed, port: nil)
+        }
+
+        let portPart = trimmed[trimmed.index(after: colonIndex)...]
+        if let port = Int(portPart), port > 0 && port <= 65535 {
+            let hostOnly = String(trimmed[..<colonIndex])
+            if !hostOnly.isEmpty {
+                return HostParts(host: hostOnly, port: port)
+            }
+        }
+
+        return HostParts(host: trimmed, port: nil)
+    }
+
+    private func fetchPairingInfo(for host: String) async throws -> ConnectionInfo {
+        let parts = splitHostPort(host)
+        let hostOnly = parts.host
+        let port = parts.port
+        let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+        let isLocal = isLocalHost(hostOnly)
+        let httpScheme = isLocal ? "http" : "https"
+
+        let baseURL: URL
+        if isLocal {
+            let resolvedPort = port ?? ServerConnection.serverPort
+            baseURL = URL(string: "\(httpScheme)://\(hostOnly):\(resolvedPort)")!
+        } else {
+            baseURL = URL(string: "\(httpScheme)://\(hostWithPort)")!
+        }
+
+        AppLogger.log("[WorkspaceManager] Fetching pairing info from \(baseURL.absoluteString)")
+        httpService.baseURL = baseURL
+        let info: ConnectionInfo = try await httpService.get(path: "api/pair/info", queryItems: nil)
+        return info
+    }
+
     /// Check if host is a local network address
     private func isLocalHost(_ host: String) -> Bool {
-        if host == "localhost" || host == "127.0.0.1" {
+        let hostOnly = splitHostPort(host).host
+        if hostOnly == "localhost" || hostOnly == "127.0.0.1" {
             return true
         }
         // IP address pattern
         let ipPattern = #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#
         if let regex = try? NSRegularExpression(pattern: ipPattern),
-           regex.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)) != nil {
+           regex.firstMatch(in: hostOnly, range: NSRange(hostOnly.startIndex..., in: hostOnly)) != nil {
             return true
         }
         // .local domains (Bonjour)
-        if host.hasSuffix(".local") {
+        if hostOnly.hasSuffix(".local") {
             return true
         }
         return false
@@ -734,6 +901,14 @@ final class WorkspaceManagerViewModel: ObservableObject {
             return
         }
 
+        let runtime = resolveRuntime(for: workspace)
+        if runtime == .codex {
+            codexStartWorkspace = workspace
+            codexStartPrompt = ""
+            showCodexStartPromptSheet = true
+            return
+        }
+
         loadingWorkspaceId = workspace.id
         currentOperation = .starting
         defer {
@@ -743,9 +918,48 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
         do {
             // Start a new session for this workspace
-            let runtime = resolveRuntime(for: workspace)
             _ = try await managerService.startSession(workspaceId: workspace.id, runtime: runtime)
             Haptics.success()
+        } catch let error as WorkspaceManagerError {
+            self.error = error
+            self.showError = true
+            Haptics.error()
+        } catch {
+            self.error = .rpcError(code: -1, message: error.localizedDescription)
+            self.showError = true
+            Haptics.error()
+        }
+    }
+
+    func startCodexWorkspaceWithPrompt() async {
+        guard let workspace = codexStartWorkspace else { return }
+        let prompt = codexStartPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            self.error = .rpcError(code: -1, message: "Enter a prompt to start a Codex session.")
+            self.showError = true
+            return
+        }
+
+        loadingWorkspaceId = workspace.id
+        currentOperation = .starting
+        defer {
+            loadingWorkspaceId = nil
+            currentOperation = nil
+        }
+
+        do {
+            try await managerService.sendPrompt(
+                sessionId: nil,
+                workspaceId: workspace.id,
+                prompt: prompt,
+                mode: "new",
+                runtime: .codex
+            )
+            showCodexStartPromptSheet = false
+            codexStartPrompt = ""
+            codexStartWorkspace = nil
+            Haptics.success()
+            await refreshWorkspaces()
         } catch let error as WorkspaceManagerError {
             self.error = error
             self.showError = true

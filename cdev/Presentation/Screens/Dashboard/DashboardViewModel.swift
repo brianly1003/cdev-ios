@@ -704,10 +704,11 @@ final class DashboardViewModel: ObservableObject {
         var userMessage = promptText
         promptText = "" // Clear immediately for fast UX
 
-        // Check for built-in commands FIRST (before bash mode prefix)
-        // Slash commands like /resume, /clear, /new should work regardless of bash mode
-        if userMessage.hasPrefix("/") {
-            await handleCommand(userMessage)
+        // Check for built-in app commands FIRST (before bash mode prefix).
+        // IMPORTANT: Only intercept known app commands so runtime slash commands
+        // (e.g. /model, /bash, /... from Codex/Claude) still reach the agent.
+        if let appCommand = appCommandIfSupported(userMessage) {
+            await handleCommand(appCommand)
             return
         }
 
@@ -892,6 +893,17 @@ final class DashboardViewModel: ObservableObject {
     }
 
     // MARK: - Built-in Commands
+
+    /// Return the normalized built-in app command if supported.
+    /// Unknown slash commands should pass through to the selected runtime.
+    private func appCommandIfSupported(_ input: String) -> String? {
+        let normalized = input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        let supported: Set<String> = ["/resume", "/new", "/clear", "/sessions", "/help"]
+        return supported.contains(normalized) ? normalized : nil
+    }
 
     /// Handle built-in commands (start with /)
     private func handleCommand(_ input: String) async {
@@ -2159,7 +2171,10 @@ final class DashboardViewModel: ObservableObject {
         }
 
         // Route agent-specific stream events by runtime to prevent Claude/Codex cross-talk.
-        if !event.matchesRuntime(selectedSessionRuntime) && !shouldAcceptLegacyUntypedEvent(event) {
+        // Some lifecycle events are runtime-agnostic and must pass even without agent_type.
+        if !event.matchesRuntime(selectedSessionRuntime)
+            && !shouldBypassRuntimeRouting(for: event)
+            && !shouldAcceptLegacyUntypedEvent(event) {
             AppLogger.log("[Dashboard] Skipping \(event.type.rawValue) event for agent_type=\(event.agentType ?? "nil"), selected_runtime=\(selectedSessionRuntime.rawValue)")
             return
         }
@@ -2833,16 +2848,24 @@ final class DashboardViewModel: ObservableObject {
 
             // Extract payload details if available
             var tempId = "unknown"
+            var failedSessionId = event.sessionId
+            var workspaceId = event.workspaceId
             var reason = "unknown"
             var message = "Session failed to start"
 
             if case .sessionIdFailed(let payload) = event.payload {
                 tempId = payload.temporaryId ?? "unknown"
+                failedSessionId = payload.sessionId ?? payload.temporaryId ?? failedSessionId
+                workspaceId = payload.workspaceId ?? workspaceId
                 reason = payload.reason ?? "unknown"
                 message = payload.message ?? "Session failed to start"
             }
 
-            AppLogger.log("[Dashboard] Session ID failed: temp=\(tempId), reason=\(reason), message=\(message)")
+            if (failedSessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) && tempId != "unknown" {
+                failedSessionId = tempId
+            }
+
+            AppLogger.log("[Dashboard] Session ID failed: temp=\(tempId), session=\(failedSessionId ?? "nil"), workspace=\(workspaceId ?? "nil"), reason=\(reason), message=\(message)")
 
             // Clear pending states since session failed
             isPendingTempSession = false
@@ -2864,9 +2887,29 @@ final class DashboardViewModel: ObservableObject {
 
             // Reset claude state to idle (ready for new input)
             agentState = .idle
+            hasActiveConversation = false
 
-            // Stay on Dashboard - user can send a new message to start a fresh session
-            AppLogger.log("[Dashboard] Session failed - staying on Dashboard, ready for new session")
+            // If user declined trust, return to workspace list and mark workspace idle
+            if reason == "trust_declined" {
+                let targetWorkspaceId = workspaceId ?? currentWorkspaceId
+                if let workspaceId = targetWorkspaceId {
+                    WorkspaceManagerService.shared.markWorkspaceIdle(
+                        workspaceId: workspaceId,
+                        failedSessionId: failedSessionId
+                    )
+                } else if let failedSessionId, !failedSessionId.isEmpty {
+                    WorkspaceManagerService.shared.removeSessionFromWorkspace(sessionId: failedSessionId)
+                }
+
+                await stopWatchingSession()
+                WorkspaceStore.shared.clearActive()
+                Task { _ = try? await WorkspaceManagerService.shared.listWorkspaces() }
+                shouldShowWorkspaceList = true
+                AppLogger.log("[Dashboard] Trust declined - returning to workspace list and marking workspace idle (workspace=\(targetWorkspaceId ?? "nil"), session=\(failedSessionId ?? "nil"))")
+            } else {
+                // Stay on Dashboard - user can send a new message to start a fresh session
+                AppLogger.log("[Dashboard] Session failed - staying on Dashboard, ready for new session")
+            }
 
         case .streamReadComplete:
             // JSONL reader caught up to end of file - signal that Claude is done
@@ -3171,6 +3214,17 @@ final class DashboardViewModel: ObservableObject {
             return eventSessionId == selectedSessionId
         }
         return true
+    }
+
+    /// Events that should not be blocked by runtime routing.
+    /// session_id_failed may be emitted without agent_type but still needs immediate UI recovery.
+    private func shouldBypassRuntimeRouting(for event: AgentEvent) -> Bool {
+        switch event.type {
+        case .sessionIdFailed:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Legacy cdev builds may omit agent_type in event envelopes.
