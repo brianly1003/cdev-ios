@@ -241,13 +241,12 @@ final class AppState: ObservableObject {
                 AppLogger.log("[AppState] Re-subscribed to workspace events")
             }
 
-            // Restore session context in DashboardViewModel
-            if let sessionId = workspace.sessionId ?? sessionRepository.selectedSessionId {
-                _dashboardViewModel?.setWorkspaceContext(
-                    name: workspace.name,
-                    sessionId: sessionId
-                )
-            }
+            // Restore workspace context without trusting a global persisted session ID.
+            // Runtime-specific history loading will pick the correct session after reconnect.
+            _dashboardViewModel?.setWorkspaceContext(
+                name: workspace.name,
+                sessionId: workspace.sessionId
+            )
 
             clearExpectedDisconnection()
             Haptics.success()
@@ -502,12 +501,13 @@ final class AppState: ObservableObject {
             httpURL = URL(string: "\(httpScheme)://\(host)")!
         }
 
-        // Create local workspace entry
+        // Create local workspace entry.
+        // Resolve runtime-specific session ID later to avoid persisting a mismatched runtime session.
         let workspace = Workspace(
             name: remoteWorkspace.name,
             webSocketURL: wsURL,
             httpURL: httpURL,
-            sessionId: remoteWorkspace.activeSession?.id,  // Use active session if exists
+            sessionId: nil,
             branch: nil,
             remoteWorkspaceId: remoteWorkspace.id  // Server-side workspace ID for workspace-aware APIs
         )
@@ -583,10 +583,14 @@ final class AppState: ObservableObject {
             // Get or create session for this workspace
             var activeSessionId: String?
 
-            if remoteWorkspace.hasActiveSession, let session = remoteWorkspace.activeSession {
-                // Use existing active session
+            let runtimeSessions = remoteWorkspace.sessions
+                .filter { $0.runtime == runtime && $0.status.canSendPrompts }
+                .sorted { ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast) }
+
+            if let session = runtimeSessions.first {
+                // Use existing active session for the selected runtime only.
                 activeSessionId = session.id
-                AppLogger.log("[AppState] connectToRemoteWorkspace: Using existing session: \(session.id), runtime: \(runtime.rawValue)")
+                AppLogger.log("[AppState] connectToRemoteWorkspace: Using existing \(runtime.rawValue) session: \(session.id)")
             } else {
                 // Start a new session
                 AppLogger.log("[AppState] connectToRemoteWorkspace: Starting new session for workspace with runtime: \(runtime.rawValue)")

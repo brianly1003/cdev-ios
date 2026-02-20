@@ -118,6 +118,10 @@ final class DashboardViewModel: ObservableObject {
             guard oldValue != selectedSessionRuntime else { return }
 
             sessionRepository.selectedSessionRuntime = selectedSessionRuntime
+            // Clear runtime-agnostic stored session immediately to avoid cross-runtime leakage
+            // if the user sends before async runtime-switch orchestration finishes.
+            setSelectedSession(nil)
+            isSessionPinnedByUser = false
 
             runtimeSwitchTask?.cancel()
             let previousRuntime = oldValue
@@ -430,17 +434,43 @@ final class DashboardViewModel: ObservableObject {
     /// Elements are deduplicated and batched before updating the UI
     /// Tasks are tracked and grouped by agent type
     private func queueChatElements(_ elements: [ChatElement]) {
-        // Filter duplicates and process tasks
+        // Filter duplicates and process tasks.
+        // For real-time streaming updates (same element ID, evolving content),
+        // upsert existing entries so ChatView reflects incremental output.
         for element in elements {
             if shouldHideElementFromChatList(element) {
                 continue
             }
 
-            // Primary: ID-based deduplication
-            guard !seenElementIds.contains(element.id) else { continue }
-
-            // Secondary: Content-based deduplication (catches WebSocket vs History duplicates)
             let contentHash = generateContentHash(for: element)
+
+            if seenElementIds.contains(element.id) {
+                // Exact duplicate (same ID + same content) - skip.
+                if seenContentHashes.contains(contentHash) {
+                    continue
+                }
+
+                // Update pending element in the same debounce window.
+                if let pendingIndex = pendingChatElements.lastIndex(where: { $0.id == element.id }) {
+                    pendingChatElements[pendingIndex] = element
+                    seenContentHashes.insert(contentHash)
+                    continue
+                }
+
+                // Update element already rendered to keep streaming text live.
+                if let existingIndex = chatElements.lastIndex(where: { $0.id == element.id }) {
+                    chatElements[existingIndex] = element
+                    seenContentHashes.insert(contentHash)
+                    AppLogger.log("[Dashboard] Updated streamed element: \(element.id)")
+                    continue
+                }
+
+                // ID seen but no element found (e.g., trimmed). Treat as stale duplicate.
+                continue
+            }
+
+            // Primary: ID-based deduplication
+            // Secondary: Content-based deduplication (catches WebSocket vs History duplicates)
             guard !seenContentHashes.contains(contentHash) else {
                 AppLogger.log("[Dashboard] Skipping duplicate content: \(element.type) at \(element.timestamp)")
                 continue
@@ -1622,20 +1652,17 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] refreshStatus: using workspace/status for \(workspaceId)")
             let wsStatus = try await _agentRepository.getWorkspaceStatus(workspaceId: workspaceId)
 
-            // IMPORTANT: Preserve sessionId from multiple sources (priority order):
-            // 1. watchedSessionId from API (if actively watching and not empty)
-            // 2. Current agentStatus.sessionId (set by setWorkspaceContext)
-            // 3. userSelectedSessionId (user's explicit selection)
-            // Note: API may return empty string "" instead of null, so check for both
+            // IMPORTANT: Preserve user/runtime-selected session context.
+            // Note: workspace/status watchedSessionId may reflect another runtime.
             let currentSessionId = agentStatus.sessionId
             let watchedId = wsStatus.watchedSessionId
             let resolvedSessionId: String?
-            if let watched = watchedId, !watched.isEmpty {
+            if let userSelected = userSelectedSessionId, !userSelected.isEmpty {
+                resolvedSessionId = userSelected
+            } else if let watched = watchedId, !watched.isEmpty {
                 resolvedSessionId = watched
             } else if let current = currentSessionId, !current.isEmpty {
                 resolvedSessionId = current
-            } else if let userSelected = userSelectedSessionId, !userSelected.isEmpty {
-                resolvedSessionId = userSelected
             } else {
                 resolvedSessionId = nil
             }
@@ -2071,9 +2098,9 @@ final class DashboardViewModel: ObservableObject {
                         // Reset watch state to ensure re-establishment
                         self.isWatchingSession = false
                         self.watchingSessionId = nil
-                        // Set userSelectedSessionId if not set
+                        // Keep session tracking/persistence consistent after reconnect.
                         if self.userSelectedSessionId == nil {
-                            self.userSelectedSessionId = sessionId
+                            self.setSelectedSession(sessionId)
                         }
                         // Use force=true to ensure watch is re-established even if state seems correct
                         await self.startWatchingCurrentSession(force: true)
@@ -2110,7 +2137,7 @@ final class DashboardViewModel: ObservableObject {
         }
 
         // Route agent-specific stream events by runtime to prevent Claude/Codex cross-talk.
-        if !event.matchesRuntime(selectedSessionRuntime) {
+        if !event.matchesRuntime(selectedSessionRuntime) && !shouldAcceptLegacyUntypedEvent(event) {
             AppLogger.log("[Dashboard] Skipping \(event.type.rawValue) event for agent_type=\(event.agentType ?? "nil"), selected_runtime=\(selectedSessionRuntime.rawValue)")
             return
         }
@@ -3116,12 +3143,38 @@ final class DashboardViewModel: ObservableObject {
 
     private func shouldMarkStreamEvent(_ event: AgentEvent) -> Bool {
         guard isStreamEvent(event.type) else { return false }
-        guard event.matchesRuntime(selectedSessionRuntime) else { return false }
+        guard event.matchesRuntime(selectedSessionRuntime) || shouldAcceptLegacyUntypedEvent(event) else { return false }
         guard let selectedSessionId = userSelectedSessionId, !selectedSessionId.isEmpty else { return true }
         if let eventSessionId = event.sessionId, !eventSessionId.isEmpty {
             return eventSessionId == selectedSessionId
         }
         return true
+    }
+
+    /// Legacy cdev builds may omit agent_type in event envelopes.
+    /// Accept untyped stream events only when they target the active/watched session.
+    private func shouldAcceptLegacyUntypedEvent(_ event: AgentEvent) -> Bool {
+        let hasTypedRuntime = (event.agentType?.isEmpty == false)
+        guard !hasTypedRuntime else { return false }
+
+        // Keep old behavior for Claude when runtime tag is missing.
+        if selectedSessionRuntime == .claude {
+            return true
+        }
+
+        // For non-Claude runtimes, only accept stream events that are clearly
+        // scoped to the currently selected/watched session.
+        guard isStreamEvent(event.type) else { return false }
+        guard let eventSessionId = event.sessionId, !eventSessionId.isEmpty else { return false }
+
+        if let selectedSessionId = userSelectedSessionId, !selectedSessionId.isEmpty, eventSessionId == selectedSessionId {
+            return true
+        }
+        if let watchedSessionId = watchingSessionId, !watchedSessionId.isEmpty, eventSessionId == watchedSessionId {
+            return true
+        }
+
+        return false
     }
 
     private func markStreamEvent(source: String) {
@@ -3871,22 +3924,15 @@ final class DashboardViewModel: ObservableObject {
         isPendingTempSession = false  // Reset temp session state for new workspace
         isSessionPinnedByUser = false
 
-        // IMPORTANT: When connecting to a workspace, always use the passed sessionId
-        // The passed sessionId is the ACTIVE session for the workspace we're connecting to
-        // The stored userSelectedSessionId might be from a different workspace or an old session
-        // that no longer exists (e.g., from a previous app run)
+        // IMPORTANT: When connecting to a workspace, only trust the passed sessionId.
+        // A previously stored userSelectedSessionId may belong to a different runtime/workspace.
         let effectiveSessionId: String?
         if let passedSessionId = sessionId, !passedSessionId.isEmpty {
-            // Use the session ID from the workspace (this is the active session)
             effectiveSessionId = passedSessionId
             AppLogger.log("[Dashboard] setWorkspaceContext: using passed session \(passedSessionId)")
-        } else if let currentSession = userSelectedSessionId, !currentSession.isEmpty {
-            // Fallback to stored session only if no session was passed
-            effectiveSessionId = currentSession
-            AppLogger.log("[Dashboard] setWorkspaceContext: no session passed, keeping stored session \(currentSession)")
         } else {
             effectiveSessionId = nil
-            AppLogger.log("[Dashboard] setWorkspaceContext: no session available")
+            AppLogger.log("[Dashboard] setWorkspaceContext: no session passed, clearing stored session")
         }
 
         // Update agentStatus with new workspace info

@@ -1357,6 +1357,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // Server sends these at the top level of the event for multi-device filtering
         let workspaceId = paramsDict["workspace_id"] as? String
         let sessionId = paramsDict["session_id"] as? String
+        let topLevelAgentType = paramsDict["agent_type"] as? String
 
         // Extract payload - could be nested in "payload" key or params itself contains the payload
         let payload: [String: Any]
@@ -1382,6 +1383,10 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             }
             if let sessionId = sessionId {
                 eventDict["session_id"] = sessionId
+            }
+            // Add agent_type for runtime routing; support both top-level and payload-provided forms.
+            if let agentType = topLevelAgentType ?? (payload["agent_type"] as? String) {
+                eventDict["agent_type"] = agentType
             }
 
             let eventData = try JSONSerialization.data(withJSONObject: eventDict)

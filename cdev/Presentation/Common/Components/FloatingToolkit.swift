@@ -5,7 +5,7 @@ import UIKit
 
 /// UIViewRepresentable that wraps the button and handles ALL touch events
 /// Detects force touch (3D Touch) or long press (Haptic Touch fallback), normal taps, and drags
-private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
+private struct ForceTouchButtonWrapper<Content: View>: UIViewControllerRepresentable {
     let content: Content
     let buttonSize: CGFloat
     let onTap: () -> Void
@@ -25,40 +25,24 @@ private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
     /// Distance threshold to distinguish tap from drag
     private let dragThreshold: CGFloat = 10
 
-    func makeUIView(context: Context) -> ForceTouchContainerView {
+    func makeUIViewController(context: Context) -> ForceTouchContainerViewController {
         let size = buttonSize + 20
-        let view = ForceTouchContainerView(frame: CGRect(x: 0, y: 0, width: size, height: size))
-        view.backgroundColor = .clear
-        view.delegate = context.coordinator
-
-        // Add SwiftUI content as hosted view (avoid UIHostingController to prevent reparenting warnings)
-        let hostingConfig = UIHostingConfiguration { content }
-            .margins(.all, 0)
-        let hostingView = hostingConfig.makeContentView()
-        hostingView.backgroundColor = .clear
-        hostingView.frame = CGRect(x: 0, y: 0, width: size, height: size)
-        hostingView.isUserInteractionEnabled = false // Let container handle touches
-
-        view.addSubview(hostingView)
-
-        context.coordinator.hostingView = hostingView
-        context.coordinator.containerSize = size
-
-        return view
+        let controller = ForceTouchContainerViewController(content: AnyView(content), size: size)
+        controller.containerView.delegate = context.coordinator
+        return controller
     }
 
-    func updateUIView(_ uiView: ForceTouchContainerView, context: Context) {
-        let hostingConfig = UIHostingConfiguration { content }
-            .margins(.all, 0)
-        context.coordinator.hostingView?.configuration = hostingConfig
-        // Update frame when SwiftUI layout changes
+    func updateUIViewController(_ uiViewController: ForceTouchContainerViewController, context: Context) {
         let size = buttonSize + 20
-        context.coordinator.containerSize = size
-        uiView.frame = CGRect(x: 0, y: 0, width: size, height: size)
-        context.coordinator.hostingView?.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        uiViewController.containerView.delegate = context.coordinator
+        uiViewController.update(content: AnyView(content), size: size)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ForceTouchContainerView, context: Context) -> CGSize? {
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiViewController: ForceTouchContainerViewController,
+        context: Context
+    ) -> CGSize? {
         let size = buttonSize + 20
         return CGSize(width: size, height: size)
     }
@@ -79,8 +63,6 @@ private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, ForceTouchContainerDelegate {
-        var hostingView: (UIView & UIContentView)?
-
         let forceThreshold: CGFloat
         let longPressDuration: TimeInterval
         let dragThreshold: CGFloat
@@ -100,7 +82,6 @@ private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
         var touchStartTime: Date?
         var longPressTimer: Timer?
         var has3DTouch = false  // Will be determined on first touch
-        var containerSize: CGFloat = 68  // Default size, will be updated
 
         init(forceThreshold: CGFloat,
              longPressDuration: TimeInterval,
@@ -257,6 +238,54 @@ private struct ForceTouchButtonWrapper<Content: View>: UIViewRepresentable {
                 self.onForceActivated()
             }
         }
+    }
+}
+
+private final class ForceTouchContainerViewController: UIViewController {
+    let containerView: ForceTouchContainerView
+    private let hostingController: UIHostingController<AnyView>
+
+    init(content: AnyView, size: CGFloat) {
+        containerView = ForceTouchContainerView(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        hostingController = UIHostingController(rootView: content)
+        super.init(nibName: nil, bundle: nil)
+        preferredContentSize = CGSize(width: size, height: size)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = containerView
+        view.backgroundColor = .clear
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        addChild(hostingController)
+        let hostedView = hostingController.view
+        hostedView?.translatesAutoresizingMaskIntoConstraints = false
+        hostedView?.backgroundColor = .clear
+        hostedView?.isUserInteractionEnabled = false
+
+        if let hostedView {
+            containerView.addSubview(hostedView)
+            NSLayoutConstraint.activate([
+                hostedView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+                hostedView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+                hostedView.topAnchor.constraint(equalTo: containerView.topAnchor),
+                hostedView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+            ])
+        }
+        hostingController.didMove(toParent: self)
+    }
+
+    func update(content: AnyView, size: CGFloat) {
+        hostingController.rootView = content
+        preferredContentSize = CGSize(width: size, height: size)
     }
 }
 
