@@ -37,6 +37,32 @@ enum ChatContentFilter {
         return filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Extract turn_aborted tag content for interrupted UI.
+    static func extractTurnAbortedMessage(_ text: String) -> String? {
+        guard text.lowercased().contains("<turn_aborted>") else { return nil }
+        let pattern = #"<turn_aborted>([\s\S]*?)</turn_aborted>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let matchRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        let message = text[matchRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? nil : message
+    }
+
+    static func normalizeTurnAbortedMessage(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return trimmed
+        }
+        var normalized = trimmed.replacingOccurrences(of: "\n", with: " ")
+        normalized = normalized.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return normalized
+    }
+
     /// Returns true for wrapper lines like `<image name=[Image #1]>` and `</image>`.
     private static func isImageWrapperTagLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -784,6 +810,19 @@ extension ChatElement {
             // Same content + same timestamp = deduplicated (streaming duplicates)
             // Same content + different timestamp = both shown (repeated commands)
             let baseId = payload.uuid ?? generateTimestampBasedId(role: "user", text: textContent, timestamp: payload.timestamp)
+
+            if let abortedMessage = ChatContentFilter.extractTurnAbortedMessage(textContent) {
+                let message = ChatContentFilter.normalizeTurnAbortedMessage(abortedMessage)
+                if !message.isEmpty {
+                    elements.append(ChatElement(
+                        id: "\(baseId)-interrupted",
+                        type: .interrupted,
+                        timestamp: timestamp,
+                        content: .interrupted(InterruptedContent(toolCallId: "", message: message))
+                    ))
+                }
+                return elements
+            }
 
             switch effectiveContent {
             case .text(let text):

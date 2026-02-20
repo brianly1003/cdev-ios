@@ -131,14 +131,10 @@ struct AgentEvent: Codable, Identifiable {
     }
 
     /// Check if this event matches the selected runtime (claude/codex).
-    /// Legacy events without agent_type are treated as Claude-only.
+    /// Strict mode: events must include agent_type to pass runtime routing.
     func matchesRuntime(_ runtime: AgentRuntime?) -> Bool {
         guard let runtime = runtime else { return true }
-        // Legacy servers may omit agent_type. Treat missing agent_type as Claude-only
-        // to avoid leaking Claude events into Codex runtime flows.
-        guard let eventAgentType = agentType, !eventAgentType.isEmpty else {
-            return runtime == .claude
-        }
+        guard let eventAgentType = agentType, !eventAgentType.isEmpty else { return false }
         return eventAgentType == runtime.rawValue
     }
 }

@@ -2055,28 +2055,15 @@ struct InterruptedElementView: View {
     let content: InterruptedContent
 
     var body: some View {
-        HStack(spacing: Spacing.xxs) {
-            Text("⎿")
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.textQuaternary)
-
-            Text("Interrupted")
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.warning)
-                .fontWeight(.medium)
-
-            Text("·")
-                .foregroundStyle(ColorSystem.textQuaternary)
-
-            Text(content.message)
-                .font(Typography.terminal)
-                .foregroundStyle(ColorSystem.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, Spacing.xxs)
-        .frame(minHeight: 20)
+        let message = "■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue."
+        return Text(message)
+            .font(Typography.terminal)
+            .foregroundStyle(ColorSystem.error)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, Spacing.xxs)
     }
 }
 

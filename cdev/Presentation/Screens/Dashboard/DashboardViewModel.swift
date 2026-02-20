@@ -243,6 +243,7 @@ final class DashboardViewModel: ObservableObject {
     // Prevent duplicate initial loads
     private var isInitialLoadInProgress = false
     private var hasCompletedInitialLoad = false
+    private var sessionHistoryLoadToken = UUID()
 
     // Prevent duplicate reconnection loads
     private var isReconnectionInProgress = false
@@ -973,6 +974,11 @@ final class DashboardViewModel: ObservableObject {
 
     /// Load more session messages (infinite scroll)
     func loadMoreMessages() async {
+        if (chatElements.isEmpty && logs.isEmpty) || userSelectedSessionId == nil || userSelectedSessionId?.isEmpty == true {
+            AppLogger.log("[Dashboard] loadMoreMessages fallback - refreshing session history")
+            await loadRecentSessionHistory(isReconnection: false)
+            return
+        }
         guard messagesHasMore, !isLoadingMoreMessages else { return }
         guard let sessionId = userSelectedSessionId, !sessionId.isEmpty else { return }
         guard !isPendingTempSession else {
@@ -1740,6 +1746,9 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func resetStateForRuntimeSwitch() async {
+        sessionHistoryLoadToken = UUID()
+        isInitialLoadInProgress = false
+        isReconnectionInProgress = false
         await clearLogs()
         isSessionPinnedByUser = false
         hasActiveConversation = false
@@ -1786,14 +1795,18 @@ final class DashboardViewModel: ObservableObject {
             isReconnectionInProgress = true
         }
 
+        let loadToken = UUID()
+        sessionHistoryLoadToken = loadToken
         isInitialLoadInProgress = true
         AppLogger.log("[Dashboard] Starting loadRecentSessionHistory (reconnection: \(isReconnection))")
 
         defer {
-            isInitialLoadInProgress = false
-            hasCompletedInitialLoad = true
-            if isReconnection {
-                isReconnectionInProgress = false
+            if sessionHistoryLoadToken == loadToken {
+                isInitialLoadInProgress = false
+                hasCompletedInitialLoad = true
+                if isReconnection {
+                    isReconnectionInProgress = false
+                }
             }
         }
 
@@ -1804,6 +1817,10 @@ final class DashboardViewModel: ObservableObject {
             var sessionId: String?
 
             let latestSessionId = await getMostRecentSessionId()
+            guard sessionHistoryLoadToken == loadToken else {
+                AppLogger.log("[Dashboard] loadRecentSessionHistory aborted - superseded")
+                return
+            }
             if let existingSessionId = userSelectedSessionId, !existingSessionId.isEmpty {
                 if let latest = latestSessionId, !latest.isEmpty, latest != existingSessionId {
                     if isSessionPinnedByUser {
@@ -1882,6 +1899,11 @@ final class DashboardViewModel: ObservableObject {
             } catch {
                 AppLogger.error(error, context: "Fetch session messages")
                 throw error
+            }
+
+            guard sessionHistoryLoadToken == loadToken else {
+                AppLogger.log("[Dashboard] loadRecentSessionHistory aborted - superseded")
+                return
             }
 
             // Update pagination state after optional catch-up pages.
@@ -3154,26 +3176,9 @@ final class DashboardViewModel: ObservableObject {
     /// Legacy cdev builds may omit agent_type in event envelopes.
     /// Accept untyped stream events only when they target the active/watched session.
     private func shouldAcceptLegacyUntypedEvent(_ event: AgentEvent) -> Bool {
-        let hasTypedRuntime = (event.agentType?.isEmpty == false)
-        guard !hasTypedRuntime else { return false }
-
-        // Keep old behavior for Claude when runtime tag is missing.
-        if selectedSessionRuntime == .claude {
-            return true
-        }
-
-        // For non-Claude runtimes, only accept stream events that are clearly
-        // scoped to the currently selected/watched session.
-        guard isStreamEvent(event.type) else { return false }
-        guard let eventSessionId = event.sessionId, !eventSessionId.isEmpty else { return false }
-
-        if let selectedSessionId = userSelectedSessionId, !selectedSessionId.isEmpty, eventSessionId == selectedSessionId {
-            return true
-        }
-        if let watchedSessionId = watchingSessionId, !watchedSessionId.isEmpty, eventSessionId == watchedSessionId {
-            return true
-        }
-
+        // TEMP (test mode): backward compatibility fallback for untyped events is disabled.
+        // Re-enable old logic here if you need to support legacy servers without agent_type.
+        _ = event
         return false
     }
 
@@ -3438,7 +3443,10 @@ final class DashboardViewModel: ObservableObject {
     private func normalizeThinkingMessage(_ text: String) -> String {
         var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if normalized.hasPrefix("**"), normalized.hasSuffix("**"), normalized.count > 4 {
+        let boldHeadings = extractBoldHeadings(from: normalized)
+        if !boldHeadings.isEmpty {
+            normalized = boldHeadings.joined(separator: " • ")
+        } else if normalized.hasPrefix("**"), normalized.hasSuffix("**"), normalized.count > 4 {
             normalized = String(normalized.dropFirst(2).dropLast(2))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -3446,6 +3454,23 @@ final class DashboardViewModel: ObservableObject {
         normalized = normalized.replacingOccurrences(of: "\n", with: " ")
         normalized = normalized.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         return normalized
+    }
+
+    /// Extract headings wrapped in **bold** markers (Codex reasoning summaries).
+    private func extractBoldHeadings(from text: String) -> [String] {
+        let pattern = #"\*\*([^\n*]+)\*\*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        var results: [String] = []
+        regex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match, let matchRange = Range(match.range(at: 1), in: text) else { return }
+            let heading = text[matchRange].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !heading.isEmpty else { return }
+            if results.last != heading {
+                results.append(heading)
+            }
+        }
+        return results
     }
 
     /// Ensure spinner message always includes mobile interrupt guidance.

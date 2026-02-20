@@ -735,10 +735,15 @@ private struct ElementsScrollView: View {
 
             lastScrolledCount = elements.count
 
-            // Always scroll to "bottom" anchor (after the bottom padding)
-            // to ensure new messages and streaming indicator don't overlap content.
-            let targetId = "bottom"
-            AppLogger.log("[ElementsScrollView] scheduleScroll executing - targetId=\(targetId), animated=\(animated), elementsCount=\(elements.count)")
+            // Prefer the last element ID to avoid LazyVStack anchor overshoot on first load.
+            // Use the bottom anchor only when streaming so the extra padding is respected.
+            let targetId: String = {
+                if isStreaming {
+                    return "bottom"
+                }
+                return elements.last?.id ?? "bottom"
+            }()
+            AppLogger.log("[ElementsScrollView] scheduleScroll executing - targetId=\(targetId), animated=\(animated), elementsCount=\(elements.count), isStreaming=\(isStreaming)")
             if animated {
                 withAnimation(Animations.logAppear) {
                     proxy.scrollTo(targetId, anchor: .bottom)
