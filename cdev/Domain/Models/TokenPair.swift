@@ -142,6 +142,43 @@ struct TokenExchangeRequest: Encodable {
     }
 }
 
+/// Pending approval response from /api/auth/exchange (HTTP 202)
+struct PairingPendingResponse: Decodable {
+    let status: String
+    let requestID: String?
+    let expiresAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case requestID = "request_id"
+        case expiresAt = "expires_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(String.self, forKey: .status)
+        requestID = try container.decodeIfPresent(String.self, forKey: .requestID)
+
+        if let expiresAtString = try container.decodeIfPresent(String.self, forKey: .expiresAt) {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: expiresAtString) {
+                expiresAt = date
+            } else {
+                formatter.formatOptions = [.withInternetDateTime]
+                expiresAt = formatter.date(from: expiresAtString)
+            }
+        } else {
+            expiresAt = nil
+        }
+    }
+}
+
+/// Generic error payload from cdev API.
+struct APIErrorResponse: Decodable {
+    let error: String
+}
+
 /// Request body for /api/auth/refresh
 struct TokenRefreshRequest: Encodable {
     let refreshToken: String

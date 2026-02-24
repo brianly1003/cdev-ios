@@ -1483,13 +1483,16 @@ struct WorkspaceSessionWatchParams: Codable, Sendable {
 /// Workspace session unwatch request parameters
 struct WorkspaceSessionUnwatchParams: Codable, Sendable {
     let agentType: String?
+    let sessionId: String?
 
     enum CodingKeys: String, CodingKey {
         case agentType = "agent_type"
+        case sessionId = "session_id"
     }
 
-    init(agentType: String? = nil) {
+    init(agentType: String? = nil, sessionId: String? = nil) {
         self.agentType = agentType
+        self.sessionId = sessionId
     }
 }
 
@@ -1506,13 +1509,16 @@ struct SessionWatchParams: Codable, Sendable {
 
 struct SessionUnwatchParams: Codable, Sendable {
     let agentType: String?
+    let sessionId: String?
 
     enum CodingKeys: String, CodingKey {
         case agentType = "agent_type"
+        case sessionId = "session_id"
     }
 
-    init(agentType: String? = nil) {
+    init(agentType: String? = nil, sessionId: String? = nil) {
         self.agentType = agentType
+        self.sessionId = sessionId
     }
 }
 

@@ -46,6 +46,7 @@ final class DashboardRuntimeCoordinator {
         to newRuntime: AgentRuntime,
         selectedRuntime: RuntimeProvider,
         isCancelled: CancellationProvider,
+        watchOwnerIdProvider: () -> String,
         stopWatching: AsyncStep,
         clearRuntimeState: AsyncStep,
         loadSessions: AsyncStep,
@@ -61,7 +62,10 @@ final class DashboardRuntimeCoordinator {
 
         // Best effort unwatch in case local watch flags drifted from server state.
         do {
-            try await webSocketService.unwatchSession()
+            try await webSocketService.unwatchSession(
+                sessionId: nil,
+                ownerId: watchOwnerIdProvider()
+            )
         } catch {
             AppLogger.log("[Dashboard] Runtime switch unwatch fallback: \(error.localizedDescription)")
         }

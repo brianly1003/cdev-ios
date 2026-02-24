@@ -226,6 +226,11 @@ enum AgentEventPayload: Codable {
         // StreamReadCompletePayload - check BEFORE ClaudeSessionInfoPayload since both have session_id
         } else if let payload = try? container.decode(StreamReadCompletePayload.self), payload.messagesEmitted != nil {
             self = .streamReadComplete(payload)
+        // Session lifecycle payloads - check BEFORE ClaudeSessionInfoPayload because both may include session_id
+        } else if let payload = try? container.decode(SessionIDResolvedPayload.self), payload.temporaryId != nil, payload.realId != nil {
+            self = .sessionIdResolved(payload)
+        } else if let payload = try? container.decode(SessionIDFailedPayload.self), payload.temporaryId != nil {
+            self = .sessionIdFailed(payload)
         } else if let payload = try? container.decode(ClaudeSessionInfoPayload.self), payload.sessionId != nil {
             self = .claudeSessionInfo(payload)
         } else if let payload = try? container.decode(FileChangedPayload.self), payload.path != nil {
@@ -250,11 +255,6 @@ enum AgentEventPayload: Codable {
             self = .fileContent(payload)
         } else if let payload = try? container.decode(HeartbeatPayload.self), payload.serverTime != nil {
             self = .heartbeat(payload)
-        // Session lifecycle payloads - check BEFORE ErrorPayload/DeprecationWarningPayload since they have more specific fields
-        } else if let payload = try? container.decode(SessionIDResolvedPayload.self), payload.temporaryId != nil, payload.realId != nil {
-            self = .sessionIdResolved(payload)
-        } else if let payload = try? container.decode(SessionIDFailedPayload.self), payload.temporaryId != nil {
-            self = .sessionIdFailed(payload)
         // SessionStoppedPayload - check by unique field combination (session_id + workspace_id, no temporary_id)
         } else if let payload = try? container.decode(SessionStoppedPayload.self),
                   payload.sessionId != nil, payload.workspaceId != nil {

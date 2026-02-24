@@ -37,6 +37,10 @@ struct SessionHistoryView: View {
             // Messages content
             if viewModel.isLoading {
                 LoadingStateView()
+            } else if let _ = viewModel.error {
+                ErrorStateView {
+                    Task { await viewModel.loadMessages() }
+                }
             } else if viewModel.messages.isEmpty {
                 EmptyMessagesView()
             } else {
@@ -515,6 +519,36 @@ private struct LoadingStateView: View {
     }
 }
 
+// MARK: - Error State
+
+private struct ErrorStateView: View {
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: Spacing.md) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 28))
+                .foregroundStyle(ColorSystem.warning)
+
+            Text("Failed to load history")
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.textTertiary)
+
+            Button(action: onRetry) {
+                Text("Retry")
+                    .font(Typography.buttonLabel)
+                    .foregroundStyle(ColorSystem.primary)
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, Spacing.xs)
+                    .background(ColorSystem.primary.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ColorSystem.terminalBg)
+    }
+}
+
 // MARK: - Empty Messages
 
 private struct EmptyMessagesView: View {
@@ -564,40 +598,52 @@ final class SessionHistoryViewModel: ObservableObject {
 
     func loadMessages() async {
         isLoading = true
+        error = nil
         defer { isLoading = false }
 
         do {
-            // Load messages for session history view
-            let response: SessionMessagesResponse
-            switch runtime.sessionMessagesSource {
-            case .runtimeScoped:
-                response = try await agentRepository.getAgentSessionMessages(
-                    runtime: runtime,
-                    sessionId: sessionId,
-                    limit: 20,
-                    offset: 0,
-                    order: "desc"
-                )
-            case .workspaceScoped:
-                guard let workspaceId = workspaceId, !workspaceId.isEmpty else {
-                    throw AppError.workspaceIdRequired
+            let response: SessionMessagesResponse = try await withThrowingTaskGroup(of: SessionMessagesResponse.self) { group in
+                group.addTask {
+                    switch self.runtime.sessionMessagesSource {
+                    case .runtimeScoped:
+                        return try await self.agentRepository.getAgentSessionMessages(
+                            runtime: self.runtime,
+                            sessionId: self.sessionId,
+                            limit: 20,
+                            offset: 0,
+                            order: "desc"
+                        )
+                    case .workspaceScoped:
+                        guard let workspaceId = self.workspaceId, !workspaceId.isEmpty else {
+                            throw AppError.workspaceIdRequired
+                        }
+                        return try await self.agentRepository.getSessionMessages(
+                            runtime: self.runtime,
+                            sessionId: self.sessionId,
+                            workspaceId: workspaceId,
+                            limit: 20,
+                            offset: 0,
+                            order: "desc"
+                        )
+                    }
                 }
-                // Uses workspace/session/messages when workspaceId is available
-                response = try await agentRepository.getSessionMessages(
-                    runtime: runtime,
-                    sessionId: sessionId,
-                    workspaceId: workspaceId,
-                    limit: 20,
-                    offset: 0,
-                    order: "desc"
-                )
+                // 30-second timeout: server can be slow when codex session index is being rebuilt
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 30_000_000_000)
+                    throw AppError.httpTimeout
+                }
+                defer { group.cancelAll() }
+                return try await group.next()!
             }
+
             // Reverse to show oldest at top, newest at bottom (chronological order)
             let filtered = response.messages.filter { message in
                 !ChatContentFilter.shouldHideInternalMessage(message.textContent)
             }
             messages = filtered.reversed()
             AppLogger.log("[SessionHistory] Loaded \(response.count) of \(response.total) messages for session \(sessionId)\(workspaceId != nil ? " (workspace: \(workspaceId!))" : "")")
+        } catch is CancellationError {
+            // View dismissed - no error to show
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
             AppLogger.error(error, context: "Load session messages")

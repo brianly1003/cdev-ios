@@ -246,16 +246,39 @@ final class HTTPService: HTTPServiceProtocol {
             throw AppError.invalidResponse
         }
 
-        if (200...299).contains(httpResponse.statusCode) {
-            AppLogger.network("[HTTP] ← \(httpResponse.statusCode) /api/auth/exchange (\(Int(duration * 1000))ms)")
-            return try decoder.decode(TokenPair.self, from: data)
-        } else {
-            let errorBody = String(data: data, encoding: .utf8)
-            AppLogger.network("[HTTP] ✗ \(httpResponse.statusCode) /api/auth/exchange - \(errorBody ?? "no body")", type: .error)
-
-            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-                throw AppError.tokenInvalid
+        switch httpResponse.statusCode {
+        case 200:
+            AppLogger.network("[HTTP] ← 200 /api/auth/exchange (\(Int(duration * 1000))ms)")
+            do {
+                return try decoder.decode(TokenPair.self, from: data)
+            } catch {
+                throw AppError.decodingFailed(underlying: error)
             }
+
+        case 202:
+            let pending = try? decoder.decode(PairingPendingResponse.self, from: data)
+            AppLogger.network("[HTTP] ← 202 /api/auth/exchange (\(Int(duration * 1000))ms) pending approval", type: .warning)
+            throw AppError.pairingApprovalPending(
+                requestID: pending?.requestID,
+                expiresAt: pending?.expiresAt
+            )
+
+        case 401:
+            let errorBody = decodeAPIErrorMessage(from: data) ?? "no body"
+            AppLogger.network("[HTTP] ✗ 401 /api/auth/exchange - \(errorBody)", type: .error)
+            throw AppError.tokenInvalid
+
+        case 403:
+            let errorBody = decodeAPIErrorMessage(from: data) ?? "no body"
+            AppLogger.network("[HTTP] ✗ 403 /api/auth/exchange - \(errorBody)", type: .error)
+            if errorBody.localizedCaseInsensitiveContains("rejected") {
+                throw AppError.pairingFailed(reason: "Pairing request rejected on cdev host.")
+            }
+            throw AppError.tokenInvalid
+
+        default:
+            let errorBody = decodeAPIErrorMessage(from: data)
+            AppLogger.network("[HTTP] ✗ \(httpResponse.statusCode) /api/auth/exchange - \(errorBody ?? "no body")", type: .error)
             throw AppError.httpRequestFailed(statusCode: httpResponse.statusCode, message: errorBody)
         }
     }
@@ -479,6 +502,14 @@ final class HTTPService: HTTPServiceProtocol {
         case 504: return "Gateway Timeout (server/tunnel slow or down)"
         default: return "HTTP Error"
         }
+    }
+
+    /// Decode common JSON API error payload (`{"error":"..."}`), fallback to raw body string.
+    private func decodeAPIErrorMessage(from data: Data) -> String? {
+        if let decoded = try? decoder.decode(APIErrorResponse.self, from: data) {
+            return decoded.error
+        }
+        return String(data: data, encoding: .utf8)
     }
 
     /// Log outgoing request with params/body

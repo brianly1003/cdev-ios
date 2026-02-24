@@ -556,7 +556,7 @@ final class WorkspaceManagerService: ObservableObject {
         // Unwatch any active session first (runtime-aware, includes agent_type)
         if let ws = webSocketService {
             do {
-                try await ws.unwatchSession()
+                try await ws.unwatchSession(ownerId: nil)
                 AppLogger.log("[WorkspaceManager] Unwatched session for workspace: \(workspaceId)")
             } catch {
                 // Non-fatal - might not be watching anything

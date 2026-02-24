@@ -26,6 +26,12 @@ final class TokenManager {
     /// Warn user when less than this time remains
     private let warningThreshold: TimeInterval = 300  // 5 minutes
 
+    /// Poll interval while waiting for host approve/reject decision.
+    private let pairingApprovalPollInterval: TimeInterval = 1.5
+
+    /// Maximum time to wait for host approval before failing exchange.
+    private let pairingApprovalMaxWait: TimeInterval = 90
+
     // MARK: - Properties
 
     private let keychain: KeychainService
@@ -41,6 +47,9 @@ final class TokenManager {
 
     /// Called when access token will expire soon (for UI warning)
     var onTokenExpiringSoon: ((TimeInterval) -> Void)?
+
+    /// Called when pairing exchange is pending host approval.
+    var onPairingApprovalPending: ((String?, Date?) -> Void)?
 
     // MARK: - Init
 
@@ -209,13 +218,50 @@ final class TokenManager {
         }
 
         AppLogger.log("[TokenManager] Exchanging pairing token for host: \(host)")
+        let startedAt = Date()
+        var lastRequestID: String?
 
-        let tokenPair = try await httpService.exchangePairingToken(pairingToken)
+        while true {
+            try Task.checkCancellation()
 
-        // Store the new token pair
-        storeTokenPair(tokenPair, forHost: host)
+            do {
+                let tokenPair = try await httpService.exchangePairingToken(pairingToken)
 
-        return tokenPair
+                // Store the new token pair
+                storeTokenPair(tokenPair, forHost: host)
+
+                return tokenPair
+            } catch let appError as AppError {
+                switch appError {
+                case .pairingApprovalPending(let requestID, let expiresAt):
+                    if let requestID, !requestID.isEmpty {
+                        lastRequestID = requestID
+                    }
+                    onPairingApprovalPending?(requestID ?? lastRequestID, expiresAt)
+
+                    if let expiresAt, Date() >= expiresAt {
+                        throw AppError.pairingFailed(
+                            reason: "Pairing request timed out before approval. Please refresh the QR code and try again."
+                        )
+                    }
+
+                    if Date().timeIntervalSince(startedAt) >= pairingApprovalMaxWait {
+                        throw AppError.pairingFailed(
+                            reason: "Pairing approval timed out. Please refresh the QR code and try again."
+                        )
+                    }
+
+                    let requestLabel = requestID ?? lastRequestID ?? "unknown"
+                    AppLogger.log(
+                        "[TokenManager] Pairing approval pending (request: \(requestLabel)). Retrying exchange in \(String(format: "%.1f", pairingApprovalPollInterval))s"
+                    )
+                    try await Task.sleep(nanoseconds: UInt64(pairingApprovalPollInterval * 1_000_000_000))
+
+                default:
+                    throw appError
+                }
+            }
+        }
     }
 
     /// Refresh token pair using refresh token

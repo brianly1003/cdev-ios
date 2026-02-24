@@ -1,6 +1,34 @@
 import Foundation
 import Combine
 
+struct TerminalWindow: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let workspaceId: String
+    var sessionId: String?
+    var runtime: AgentRuntime
+    var title: String
+    var isFocused: Bool
+    var isOpen: Bool
+
+    init(
+        id: UUID = UUID(),
+        workspaceId: String,
+        sessionId: String? = nil,
+        runtime: AgentRuntime = .defaultRuntime,
+        title: String? = nil,
+        isFocused: Bool = false,
+        isOpen: Bool = true
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.sessionId = sessionId
+        self.runtime = runtime
+        self.title = title ?? "\(runtime.displayName) Window"
+        self.isFocused = isFocused
+        self.isOpen = isOpen
+    }
+}
+
 /// Global app state - manages connection and creates view models
 @MainActor
 final class AppState: ObservableObject {
@@ -8,6 +36,8 @@ final class AppState: ObservableObject {
 
     @Published var connectionState: ConnectionState = .disconnected
     @Published private(set) var hasWorkspaces: Bool = false
+    @Published private(set) var terminalWindows: [TerminalWindow] = []
+    @Published private(set) var activeTerminalWindowId: UUID?
 
     // MARK: - App Lifecycle State
 
@@ -162,6 +192,80 @@ final class AppState: ObservableObject {
     func clearHTTPState() {
         httpService.baseURL = nil
         AppLogger.log("[AppState] Cleared HTTP base URL")
+    }
+
+    // MARK: - Terminal Window State (Multi-Window Foundation)
+
+    @discardableResult
+    func openTerminalWindow(
+        workspaceId: String,
+        sessionId: String? = nil,
+        runtime: AgentRuntime = .defaultRuntime,
+        title: String? = nil
+    ) -> TerminalWindow {
+        let window = TerminalWindow(
+            workspaceId: workspaceId,
+            sessionId: sessionId,
+            runtime: runtime,
+            title: title
+        )
+
+        terminalWindows.append(window)
+        activateTerminalWindow(window.id)
+        return window
+    }
+
+    func activateTerminalWindow(_ windowId: UUID) {
+        activeTerminalWindowId = windowId
+        terminalWindows = terminalWindows.map { window in
+            var next = window
+            next.isFocused = (window.id == windowId) && window.isOpen
+            return next
+        }
+    }
+
+    func closeTerminalWindow(_ windowId: UUID) {
+        guard let closingWindow = terminalWindows.first(where: { $0.id == windowId }) else {
+            return
+        }
+
+        terminalWindows.removeAll { $0.id == windowId }
+
+        if activeTerminalWindowId == windowId {
+            let nextActiveId = terminalWindows.first(where: { $0.workspaceId == closingWindow.workspaceId })?.id
+                ?? terminalWindows.first?.id
+            if let nextActiveId {
+                activateTerminalWindow(nextActiveId)
+            } else {
+                activeTerminalWindowId = nil
+            }
+        }
+    }
+
+    func setTerminalWindowSession(_ windowId: UUID, sessionId: String?) {
+        terminalWindows = terminalWindows.map { window in
+            guard window.id == windowId else { return window }
+            var next = window
+            next.sessionId = sessionId
+            return next
+        }
+    }
+
+    func setTerminalWindowRuntime(_ windowId: UUID, runtime: AgentRuntime) {
+        terminalWindows = terminalWindows.map { window in
+            guard window.id == windowId else { return window }
+            var next = window
+            next.runtime = runtime
+            return next
+        }
+    }
+
+    func terminalWindow(id windowId: UUID) -> TerminalWindow? {
+        terminalWindows.first { $0.id == windowId }
+    }
+
+    func terminalWindows(for workspaceId: String) -> [TerminalWindow] {
+        terminalWindows.filter { $0.workspaceId == workspaceId && $0.isOpen }
     }
 
     // MARK: - App Lifecycle

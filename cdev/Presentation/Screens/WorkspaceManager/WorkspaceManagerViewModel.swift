@@ -269,6 +269,22 @@ final class WorkspaceManagerViewModel: ObservableObject {
                 self?.handleTokenExpiryWarning(timeRemaining: timeRemaining)
             }
         }
+
+        TokenManager.shared.onPairingApprovalPending = { [weak self] requestID, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.isConnecting else { return }
+
+                let currentAttempt = max(self.currentRetryAttempt, 1)
+                self.serverStatus = .connecting(attempt: currentAttempt, maxAttempts: self.maxRetryAttempts)
+
+                if let requestID, !requestID.isEmpty {
+                    AppLogger.log("[WorkspaceManager] Pairing approval pending (request_id: \(requestID))")
+                } else {
+                    AppLogger.log("[WorkspaceManager] Pairing approval pending")
+                }
+            }
+        }
     }
 
     private func handleRefreshTokenExpired() {
@@ -502,6 +518,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
         isConnecting = true
         hasCheckedConnection = true  // Mark as checked immediately so UI doesn't show initial loading
+        serverStatus = .connecting(attempt: 1, maxAttempts: maxRetryAttempts)
 
         // Tell WebSocket we're managing our own retry loop (prevents .failed state flickering)
         webSocketService.isExternalRetryInProgress = true
@@ -614,6 +631,25 @@ final class WorkspaceManagerViewModel: ObservableObject {
             return
         }
 
+        if isConnecting {
+            AppLogger.log("[WorkspaceManager] Cancelling active retry loop for new connection request")
+            connectionCancelled = true
+            currentRetryAttempt = 0
+            await webSocketService.disconnect()
+
+            let waitDeadline = Date().addingTimeInterval(3)
+            while isConnecting && Date() < waitDeadline {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            if isConnecting {
+                AppLogger.log("[WorkspaceManager] Retry loop did not stop before new connection request", type: .warning)
+                self.error = .rpcError(code: -1, message: "Previous connection is still shutting down. Please try again.")
+                self.showError = true
+                return
+            }
+        }
+
         var resolvedToken = token
         let trimmedCode = pairingCode?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -712,6 +748,13 @@ final class WorkspaceManagerViewModel: ObservableObject {
     private static func rpcErrorInfo(from error: Error) -> (Int, String) {
         if let appError = error as? AppError {
             switch appError {
+            case .pairingApprovalPending(let requestID, _):
+                if let requestID, !requestID.isEmpty {
+                    return (202, "Waiting for host approval (\(requestID))")
+                }
+                return (202, "Waiting for host approval")
+            case .pairingFailed(let reason):
+                return (403, reason)
             case .httpRequestFailed(let statusCode, let message):
                 return (statusCode, message ?? appError.localizedDescription)
             case .tokenInvalid, .tokenExpired, .refreshTokenExpired:

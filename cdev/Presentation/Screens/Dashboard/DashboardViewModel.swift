@@ -81,6 +81,8 @@ final class DashboardViewModel: ObservableObject {
     // Session Watching State
     @Published var isWatchingSession: Bool = false
     @Published var watchingSessionId: String?
+    @Published private(set) var terminalWindows: [TerminalWindow] = []
+    @Published private(set) var activeTerminalWindowId: UUID?
 
     // Interactive PTY Mode (always true since we use permission_mode: "interactive")
     // When in interactive mode, skip claude_log processing and use pty_* events instead
@@ -134,6 +136,7 @@ final class DashboardViewModel: ObservableObject {
                     to: nextRuntime,
                     selectedRuntime: { self.selectedSessionRuntime },
                     isCancelled: { Task.isCancelled },
+                    watchOwnerIdProvider: { self.currentSessionWatchOwnerId() },
                     stopWatching: { await self.stopWatchingSession() },
                     clearRuntimeState: { await self.resetStateForRuntimeSwitch() },
                     loadSessions: { await self.loadSessions() },
@@ -204,6 +207,7 @@ final class DashboardViewModel: ObservableObject {
     private let respondToClaudeUseCase: RespondToClaudeUseCase
     private let sessionRepository: SessionRepository
     private let runtimeCoordinator: DashboardRuntimeCoordinator
+    private let fallbackSessionWatchOwnerId: String
 
     /// Public accessor for agentRepository (needed for SessionHistoryView)
     var agentRepository: AgentRepositoryProtocol { _agentRepository }
@@ -211,6 +215,13 @@ final class DashboardViewModel: ObservableObject {
     private let logCache: LogCache
     private let diffCache: DiffCache
     private weak var appState: AppState?
+    private var appStateWindowCancellables: Set<AnyCancellable> = []
+    private var bufferedEventsBySessionId: [String: [AgentEvent]] = [:]
+    private let maxBufferedEventsPerSession = 200
+    private var pendingTempSessionWindowIds: Set<UUID> = []
+    private var pendingTempSessionIdByWindowId: [UUID: String] = [:]
+    private var windowOperationTokenByWindowId: [UUID: UUID] = [:]
+    private var windowStateByWindowId: [UUID: TerminalWindowSessionState] = [:]
 
     // Mobile-friendly text replacements (no esc/ctrl+c on mobile)
     private static let mobileStopText = "press ⏹ to interrupt"
@@ -222,6 +233,520 @@ final class DashboardViewModel: ObservableObject {
     /// Get the current workspace ID if available
     var currentWorkspaceId: String? {
         workspaceStore.activeWorkspace?.remoteWorkspaceId
+    }
+
+    var windowsForCurrentWorkspace: [TerminalWindow] {
+        guard let workspaceId = currentWorkspaceId else {
+            return terminalWindows.filter { $0.isOpen }
+        }
+        return terminalWindows.filter { $0.isOpen && $0.workspaceId == workspaceId }
+    }
+
+    var activeWindow: TerminalWindow? {
+        guard let activeTerminalWindowId else { return nil }
+        return terminalWindows.first { $0.id == activeTerminalWindowId && $0.isOpen }
+    }
+
+    func ensureWindowForCurrentWorkspace() {
+        guard let appState else { return }
+        guard let workspaceId = currentWorkspaceId else { return }
+
+        if appState.terminalWindows(for: workspaceId).isEmpty {
+            _ = appState.openTerminalWindow(
+                workspaceId: workspaceId,
+                sessionId: userSelectedSessionId,
+                runtime: selectedSessionRuntime
+            )
+        } else if appState.activeTerminalWindowId == nil,
+                  let first = appState.terminalWindows(for: workspaceId).first {
+            appState.activateTerminalWindow(first.id)
+        }
+    }
+
+    func createTerminalWindow() async {
+        guard let appState else { return }
+        guard let workspaceId = currentWorkspaceId else { return }
+
+        let nextIndex = appState.terminalWindows(for: workspaceId).count + 1
+        let window = appState.openTerminalWindow(
+            workspaceId: workspaceId,
+            sessionId: nil,
+            runtime: selectedSessionRuntime,
+            title: "Window \(nextIndex)"
+        )
+        windowStateByWindowId[window.id] = TerminalWindowSessionState()
+        await activateTerminalWindow(window.id)
+    }
+
+    func activateTerminalWindow(_ windowId: UUID) async {
+        guard let appState else { return }
+        guard let window = appState.terminalWindow(id: windowId) else { return }
+        let activationToken = beginWindowOperation(windowId: windowId)
+        let previousWindowId = activeTerminalWindowId
+        if previousWindowId != windowId {
+            persistWindowSnapshot(for: previousWindowId)
+        }
+
+        appState.activateTerminalWindow(windowId)
+        activeTerminalWindowId = windowId
+        syncPendingTempSessionForActiveWindow()
+
+        guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+
+        let windowSessionId = normalizedSessionId(window.sessionId)
+        if let windowSessionId {
+            if restoreWindowSnapshot(for: windowId) {
+                AppLogger.log("[Dashboard] Restored in-memory state for window \(window.id)")
+                // IMPORTANT:
+                // Select session only AFTER restoring the target window snapshot.
+                // If we select first, setSelectedSession() persists the currently visible
+                // (previous tab) state into the newly active window, causing cross-tab bleed.
+                setSelectedSession(windowSessionId)
+                guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+                await startWatchingCurrentSession(force: true)
+                guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+                await replayBufferedEvents(for: windowSessionId)
+                guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+                if agentState == .running || isStreaming {
+                    await syncCurrentSessionRuntimeState(context: "tab-activate-restored")
+                    guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+                }
+                persistWindowSnapshot(for: windowId)
+
+                // If the restored snapshot is empty, force a server fetch for this session.
+                // This handles race conditions where an empty snapshot was persisted during
+                // a rapid tab switch while session data was still loading/streaming.
+                if chatElements.isEmpty && logs.isEmpty {
+                    AppLogger.log("[Dashboard] Restored snapshot is empty for session \(windowSessionId) - forcing resumeSession fetch")
+                    await resumeSession(windowSessionId, windowId: windowId, operationToken: activationToken)
+                }
+                return
+            }
+
+            await resumeSession(windowSessionId, windowId: windowId, operationToken: activationToken)
+            guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+            await replayBufferedEvents(for: windowSessionId)
+            guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+            if agentState == .running || isStreaming {
+                await syncCurrentSessionRuntimeState(context: "tab-activate-resume")
+                guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+            }
+            persistWindowSnapshot(for: windowId)
+        } else {
+            guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
+            await clearWindowDisplayState()
+            forceNewSession = true
+            isWatchingSession = false
+            watchingSessionId = nil
+            SessionAwarenessManager.shared.clearFocus()
+            setSelectedSession(nil)
+            syncActiveTerminalWindowContext(sessionId: nil)
+            windowStateByWindowId[window.id] = makeWindowStateSnapshot(
+                sessionId: nil,
+                runtime: window.runtime
+            )
+        }
+    }
+
+    func closeTerminalWindow(_ windowId: UUID) async {
+        guard let appState else { return }
+        guard let window = appState.terminalWindow(id: windowId) else { return }
+
+        let wasActive = appState.activeTerminalWindowId == windowId
+        let windowSessionId = normalizedSessionId(window.sessionId)
+        let ownerId = watchOwnerId(for: window.id)
+
+        if let windowSessionId {
+            do {
+                try await webSocketService.unwatchSession(
+                    sessionId: windowSessionId,
+                    ownerId: ownerId
+                )
+                AppLogger.log("[Dashboard] Closed window unwatch succeeded: window=\(window.id), session=\(windowSessionId)")
+            } catch {
+                AppLogger.log("[Dashboard] Closed window unwatch failed: \(error.localizedDescription)", type: .warning)
+            }
+            bufferedEventsBySessionId.removeValue(forKey: windowSessionId)
+        }
+        windowStateByWindowId.removeValue(forKey: windowId)
+        pendingTempSessionWindowIds.remove(windowId)
+        pendingTempSessionIdByWindowId.removeValue(forKey: windowId)
+        windowOperationTokenByWindowId.removeValue(forKey: windowId)
+
+        appState.closeTerminalWindow(windowId)
+
+        if wasActive {
+            if let nextActiveId = appState.activeTerminalWindowId {
+                await activateTerminalWindow(nextActiveId)
+            } else {
+                await clearWindowDisplayState()
+                setSelectedSession(nil)
+                isWatchingSession = false
+                watchingSessionId = nil
+                syncActiveTerminalWindowContext(sessionId: nil)
+            }
+        }
+        syncPendingTempSessionForActiveWindow()
+    }
+
+    private func ensureActiveTerminalWindow() -> TerminalWindow? {
+        guard let appState else { return nil }
+        let workspaceId = currentWorkspaceId
+
+        if let activeWindowId = appState.activeTerminalWindowId,
+           let activeWindow = appState.terminalWindow(id: activeWindowId),
+           activeWindow.isOpen {
+            if let workspaceId {
+                if activeWindow.workspaceId == workspaceId {
+                    return activeWindow
+                }
+            } else {
+                return activeWindow
+            }
+        }
+
+        guard let workspaceId else { return nil }
+
+        if let existing = appState.terminalWindows(for: workspaceId).first {
+            appState.activateTerminalWindow(existing.id)
+            return appState.terminalWindow(id: existing.id)
+        }
+
+        return appState.openTerminalWindow(
+            workspaceId: workspaceId,
+            sessionId: userSelectedSessionId,
+            runtime: selectedSessionRuntime
+        )
+    }
+
+    private func watchOwnerId(for windowId: UUID) -> String {
+        "dashboard-window-\(windowId.uuidString)"
+    }
+
+    private func currentSessionWatchOwnerId() -> String {
+        if let window = ensureActiveTerminalWindow() {
+            return watchOwnerId(for: window.id)
+        }
+        return fallbackSessionWatchOwnerId
+    }
+
+    private func syncActiveTerminalWindowContext(sessionId: String?) {
+        guard let appState else { return }
+        guard let window = ensureActiveTerminalWindow() else { return }
+        appState.setTerminalWindowRuntime(window.id, runtime: selectedSessionRuntime)
+        appState.setTerminalWindowSession(window.id, sessionId: sessionId)
+    }
+
+    private func beginWindowOperation(windowId: UUID?) -> UUID? {
+        guard let windowId else { return nil }
+        let token = UUID()
+        windowOperationTokenByWindowId[windowId] = token
+        return token
+    }
+
+    private func isWindowOperationCurrent(windowId: UUID?, token: UUID?) -> Bool {
+        guard let windowId, let token else { return true }
+        return activeTerminalWindowId == windowId && windowOperationTokenByWindowId[windowId] == token
+    }
+
+    private func syncPendingTempSessionForActiveWindow() {
+        guard let activeWindowId = activeTerminalWindowId else {
+            isPendingTempSession = false
+            return
+        }
+        isPendingTempSession = pendingTempSessionWindowIds.contains(activeWindowId)
+    }
+
+    private func pendingWindowIdForIncomingTempSession(_ tempSessionId: String?) -> UUID? {
+        if let normalizedTemp = normalizedSessionId(tempSessionId),
+           let exactWindow = pendingTempSessionIdByWindowId.first(where: { $0.value == normalizedTemp })?.key {
+            return exactWindow
+        }
+
+        let unresolvedWindowIds = pendingTempSessionWindowIds.filter { pendingTempSessionIdByWindowId[$0] == nil }
+        if unresolvedWindowIds.count == 1 {
+            return unresolvedWindowIds.first
+        }
+        return nil
+    }
+
+    private func isPendingTempSessionForActiveWindow() -> Bool {
+        guard let activeWindowId = activeTerminalWindowId else { return false }
+        return pendingTempSessionWindowIds.contains(activeWindowId)
+    }
+
+    private func setPendingTempSessionForActiveWindow(tempSessionId: String? = nil) {
+        guard let activeWindowId = activeTerminalWindowId else {
+            isPendingTempSession = true
+            AppLogger.log("[Dashboard] New session pending - waiting for session_id_resolved (window=nil)")
+            return
+        }
+
+        pendingTempSessionWindowIds.insert(activeWindowId)
+        if let normalizedTemp = normalizedSessionId(tempSessionId) {
+            pendingTempSessionIdByWindowId[activeWindowId] = normalizedTemp
+        } else {
+            pendingTempSessionIdByWindowId.removeValue(forKey: activeWindowId)
+        }
+        syncPendingTempSessionForActiveWindow()
+        AppLogger.log("[Dashboard] New session pending - waiting for session_id_resolved (window=\(activeWindowId.uuidString), temp=\(pendingTempSessionIdByWindowId[activeWindowId] ?? "nil"), pendingWindows=\(pendingTempSessionWindowIds.count))")
+    }
+
+    private func clearPendingTempSession(reason: String, windowId: UUID? = nil, clearAll: Bool = false) {
+        if clearAll {
+            if !pendingTempSessionWindowIds.isEmpty {
+                AppLogger.log("[Dashboard] Clearing all pending session resolutions (\(reason)) - windows=\(pendingTempSessionWindowIds.count)")
+            }
+            pendingTempSessionWindowIds.removeAll()
+            pendingTempSessionIdByWindowId.removeAll()
+            syncPendingTempSessionForActiveWindow()
+            return
+        }
+
+        guard let targetWindowId = windowId ?? activeTerminalWindowId else {
+            if !pendingTempSessionWindowIds.isEmpty {
+                AppLogger.log("[Dashboard] Clearing pending session resolutions (\(reason)) with no target window - clearing all")
+            }
+            pendingTempSessionWindowIds.removeAll()
+            pendingTempSessionIdByWindowId.removeAll()
+            syncPendingTempSessionForActiveWindow()
+            return
+        }
+
+        if pendingTempSessionWindowIds.contains(targetWindowId) || pendingTempSessionIdByWindowId[targetWindowId] != nil {
+            AppLogger.log("[Dashboard] Clearing pending session resolution (\(reason)) - window=\(targetWindowId.uuidString), temp=\(pendingTempSessionIdByWindowId[targetWindowId] ?? "nil")")
+        }
+        pendingTempSessionWindowIds.remove(targetWindowId)
+        pendingTempSessionIdByWindowId.removeValue(forKey: targetWindowId)
+        syncPendingTempSessionForActiveWindow()
+    }
+
+    private func bindPendingWindow(_ windowId: UUID, toSessionId sessionId: String) {
+        if pendingTempSessionIdByWindowId[windowId] == nil {
+            pendingTempSessionIdByWindowId[windowId] = sessionId
+        }
+
+        if let appState,
+           normalizedSessionId(appState.terminalWindow(id: windowId)?.sessionId) == nil {
+            appState.setTerminalWindowSession(windowId, sessionId: sessionId)
+        }
+
+        syncPendingTempSessionForActiveWindow()
+        AppLogger.log("[Dashboard] Bound pending window \(windowId) to temp session \(sessionId)")
+    }
+
+    private func routingDebugContext() -> String {
+        let activeWindowValue = activeTerminalWindowId?.uuidString ?? "nil"
+        let activeSessionValue = activeWindowSessionIdForRouting() ?? "nil"
+        let selectedSessionValue = userSelectedSessionId ?? "nil"
+        let watchingSessionValue = watchingSessionId ?? "nil"
+        let pendingWindowsValue = pendingTempSessionWindowIds
+            .map { $0.uuidString }
+            .sorted()
+            .joined(separator: ",")
+        return "activeWindow=\(activeWindowValue), activeSession=\(activeSessionValue), selectedSession=\(selectedSessionValue), watchingSession=\(watchingSessionValue), pendingWindows=[\(pendingWindowsValue)]"
+    }
+
+    private func normalizedSessionId(_ sessionId: String?) -> String? {
+        guard let raw = sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        return raw
+    }
+
+    private func clearWindowDisplayState() async {
+        await logCache.clear()
+        logs = []
+        chatElements = []
+        seenElementIds.removeAll()
+        seenContentHashes.removeAll()
+        messagesHasMore = false
+        isLoadingMoreMessages = false
+        messagesTotalCount = 0
+        messagesNextOffset = 0
+        isStreaming = false
+        spinnerMessage = nil
+        streamingStartTime = nil
+        pendingInteraction = nil
+        isLoading = false
+        agentState = .idle
+        hasActiveConversation = false
+    }
+
+    private func activeWindowSessionIdForRouting() -> String? {
+        if let activeWindow = activeWindow {
+            return normalizedSessionId(activeWindow.sessionId)
+        }
+        return normalizedSessionId(userSelectedSessionId)
+    }
+
+    private func isSessionTrackedByAnyOpenWindow(_ sessionId: String) -> Bool {
+        terminalWindows.contains { window in
+            window.isOpen && normalizedSessionId(window.sessionId) == sessionId
+        }
+    }
+
+    private func shouldRouteEventBySession(_ event: AgentEvent) -> Bool {
+        switch event.type {
+        case .claudeMessage, .claudeLog, .claudeSessionInfo, .claudeWaiting, .claudePermission,
+             .ptyOutput, .ptyState, .ptySpinner, .ptyPermission, .ptyPermissionResolved:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldBufferEventForInactiveWindow(_ event: AgentEvent) -> String? {
+        guard shouldRouteEventBySession(event) else { return nil }
+        guard let eventSessionId = normalizedSessionId(event.sessionId) else { return nil }
+
+        if let activeSessionId = activeWindowSessionIdForRouting(),
+           !activeSessionId.isEmpty {
+            guard eventSessionId != activeSessionId else { return nil }
+            if isSessionTrackedByAnyOpenWindow(eventSessionId) {
+                return eventSessionId
+            }
+            if let pendingWindowId = pendingWindowIdForIncomingTempSession(eventSessionId) {
+                if let activeWindowId = activeTerminalWindowId, pendingWindowId == activeWindowId {
+                    return nil
+                }
+                bindPendingWindow(pendingWindowId, toSessionId: eventSessionId)
+                return eventSessionId
+            }
+            // Unknown/mismatched session: quarantine to prevent foreground tab contamination.
+            AppLogger.log("[Dashboard] Quarantining event due to unknown session mismatch - eventType=\(event.type.rawValue), eventSession=\(eventSessionId), \(routingDebugContext())")
+            return eventSessionId
+        }
+
+        if isSessionTrackedByAnyOpenWindow(eventSessionId) {
+            return eventSessionId
+        }
+
+        if let pendingWindowId = pendingWindowIdForIncomingTempSession(eventSessionId) {
+            if let activeWindowId = activeTerminalWindowId, pendingWindowId == activeWindowId {
+                return nil
+            }
+            bindPendingWindow(pendingWindowId, toSessionId: eventSessionId)
+            return eventSessionId
+        }
+
+        // No active session context and no pending match: quarantine unknown session events.
+        AppLogger.log("[Dashboard] Quarantining event due to missing active context - eventType=\(event.type.rawValue), eventSession=\(eventSessionId), \(routingDebugContext())")
+        return eventSessionId
+    }
+
+    private func bufferEvent(_ event: AgentEvent, for sessionId: String) {
+        var events = bufferedEventsBySessionId[sessionId] ?? []
+        events.append(event)
+        if events.count > maxBufferedEventsPerSession {
+            events.removeFirst(events.count - maxBufferedEventsPerSession)
+        }
+        bufferedEventsBySessionId[sessionId] = events
+    }
+
+    private func replayBufferedEvents(for sessionId: String) async {
+        guard let events = bufferedEventsBySessionId.removeValue(forKey: sessionId),
+              !events.isEmpty else { return }
+        AppLogger.log("[Dashboard] Replaying \(events.count) buffered event(s) for session \(sessionId)")
+        for event in events {
+            await handleEvent(event)
+        }
+    }
+
+    private struct TerminalWindowSessionState {
+        var logs: [LogEntry] = []
+        var chatElements: [ChatElement] = []
+        var seenElementIds: Set<String> = []
+        var seenContentHashes: Set<String> = []
+        var messagesHasMore: Bool = false
+        var isLoadingMoreMessages: Bool = false
+        var messagesTotalCount: Int = 0
+        var messagesNextOffset: Int = 0
+        var isWatchingSession: Bool = false
+        var watchingSessionId: String? = nil
+        var hasActiveConversation: Bool = false
+        var hasReceivedClaudeMessageForSession: Bool = false
+        var lastPtyOutputLine: String? = nil
+        var agentState: ClaudeState = .idle
+        var isStreaming: Bool = false
+        var streamingStartTime: Date? = nil
+        var spinnerMessage: String? = nil
+        var pendingInteraction: PendingInteraction? = nil
+        var isLoading: Bool = false
+        var snapshotSessionId: String? = nil
+        var snapshotRuntime: AgentRuntime = .defaultRuntime
+    }
+
+    private func makeWindowStateSnapshot(
+        sessionId: String? = nil,
+        runtime: AgentRuntime? = nil
+    ) -> TerminalWindowSessionState {
+        TerminalWindowSessionState(
+            logs: logs,
+            chatElements: chatElements,
+            seenElementIds: seenElementIds,
+            seenContentHashes: seenContentHashes,
+            messagesHasMore: messagesHasMore,
+            isLoadingMoreMessages: isLoadingMoreMessages,
+            messagesTotalCount: messagesTotalCount,
+            messagesNextOffset: messagesNextOffset,
+            isWatchingSession: isWatchingSession,
+            watchingSessionId: watchingSessionId,
+            hasActiveConversation: hasActiveConversation,
+            hasReceivedClaudeMessageForSession: hasReceivedClaudeMessageForSession,
+            lastPtyOutputLine: lastPtyOutputLine,
+            agentState: agentState,
+            isStreaming: isStreaming,
+            streamingStartTime: streamingStartTime,
+            spinnerMessage: spinnerMessage,
+            pendingInteraction: pendingInteraction,
+            isLoading: isLoading,
+            snapshotSessionId: normalizedSessionId(sessionId ?? userSelectedSessionId),
+            snapshotRuntime: runtime ?? selectedSessionRuntime
+        )
+    }
+
+    private func persistWindowSnapshot(for windowId: UUID?) {
+        guard let windowId else { return }
+        guard let window = terminalWindows.first(where: { $0.id == windowId && $0.isOpen }) else { return }
+        windowStateByWindowId[windowId] = makeWindowStateSnapshot(
+            sessionId: normalizedSessionId(window.sessionId),
+            runtime: window.runtime
+        )
+    }
+
+    @discardableResult
+    private func restoreWindowSnapshot(for windowId: UUID) -> Bool {
+        guard let snapshot = windowStateByWindowId[windowId] else { return false }
+        guard let window = terminalWindows.first(where: { $0.id == windowId && $0.isOpen }) else { return false }
+        let expectedSessionId = normalizedSessionId(window.sessionId)
+        if snapshot.snapshotSessionId != expectedSessionId || snapshot.snapshotRuntime != window.runtime {
+            AppLogger.log(
+                "[Dashboard] Skipping snapshot restore due to identity mismatch: window=\(windowId), snapshotSession=\(snapshot.snapshotSessionId ?? "nil"), expectedSession=\(expectedSessionId ?? "nil"), snapshotRuntime=\(snapshot.snapshotRuntime.rawValue), expectedRuntime=\(window.runtime.rawValue)"
+            )
+            return false
+        }
+        logs = snapshot.logs
+        chatElements = snapshot.chatElements
+        seenElementIds = snapshot.seenElementIds
+        seenContentHashes = snapshot.seenContentHashes
+        messagesHasMore = snapshot.messagesHasMore
+        isLoadingMoreMessages = snapshot.isLoadingMoreMessages
+        messagesTotalCount = snapshot.messagesTotalCount
+        messagesNextOffset = snapshot.messagesNextOffset
+        isWatchingSession = snapshot.isWatchingSession
+        watchingSessionId = snapshot.watchingSessionId
+        hasActiveConversation = snapshot.hasActiveConversation
+        hasReceivedClaudeMessageForSession = snapshot.hasReceivedClaudeMessageForSession
+        lastPtyOutputLine = snapshot.lastPtyOutputLine
+        agentState = snapshot.agentState
+        isStreaming = snapshot.isStreaming
+        streamingStartTime = snapshot.streamingStartTime
+        spinnerMessage = snapshot.spinnerMessage
+        pendingInteraction = snapshot.pendingInteraction
+        isLoading = snapshot.isLoading
+        return true
     }
 
     private var eventTask: Task<Void, Never>?
@@ -310,6 +835,7 @@ final class DashboardViewModel: ObservableObject {
         self.sendPromptUseCase = sendPromptUseCase
         self.respondToClaudeUseCase = respondToClaudeUseCase
         self.sessionRepository = sessionRepository
+        self.fallbackSessionWatchOwnerId = UUID().uuidString
         self.runtimeCoordinator = DashboardRuntimeCoordinator(
             webSocketService: webSocketService,
             agentRepository: agentRepository,
@@ -318,6 +844,24 @@ final class DashboardViewModel: ObservableObject {
         self.logCache = logCache
         self.diffCache = diffCache
         self.appState = appState
+        if let appState {
+            terminalWindows = appState.terminalWindows
+            activeTerminalWindowId = appState.activeTerminalWindowId
+
+            appState.$terminalWindows
+                .receive(on: RunLoop.main)
+                .sink { [weak self] windows in
+                    self?.terminalWindows = windows
+                }
+                .store(in: &appStateWindowCancellables)
+
+            appState.$activeTerminalWindowId
+                .receive(on: RunLoop.main)
+                .sink { [weak self] activeId in
+                    self?.activeTerminalWindowId = activeId
+                }
+                .store(in: &appStateWindowCancellables)
+        }
 
         // Initialize Source Control ViewModel
         self.sourceControlViewModel = SourceControlViewModel(agentRepository: agentRepository)
@@ -802,8 +1346,21 @@ final class DashboardViewModel: ObservableObject {
                         isSessionPinnedByUser = false
                     }
                 } else {
-                    // No session selected - try to get the most recent from server
-                    if let recentId = await getMostRecentSessionId() {
+                    // No session selected in current tab.
+                    // IMPORTANT: if this tab has no bound session yet, start a NEW session
+                    // instead of auto-attaching to "most recent" (which may belong to another tab).
+                    if let activeWindowSessionId = normalizedSessionId(activeWindow?.sessionId) {
+                        mode = .continue
+                        sessionIdToSend = activeWindowSessionId
+                        setSelectedSession(activeWindowSessionId)
+                        isSessionPinnedByUser = false
+                        AppLogger.log("[Dashboard] Using active tab session: mode=continue, sessionId=\(activeWindowSessionId)")
+                    } else if normalizedSessionId(activeWindow?.sessionId) == nil {
+                        mode = .new
+                        sessionIdToSend = nil
+                        isSessionPinnedByUser = false
+                        AppLogger.log("[Dashboard] Active tab has no session, starting new")
+                    } else if let recentId = await getMostRecentSessionId() {
                         // Found a recent session - continue it
                         mode = .continue
                         sessionIdToSend = recentId
@@ -832,14 +1389,13 @@ final class DashboardViewModel: ObservableObject {
                 if mode == .new {
                     setSelectedSession(nil)
                     if selectedSessionRuntime.requiresSessionResolutionOnNewSession {
-                        isPendingTempSession = true
-                        AppLogger.log("[Dashboard] New session pending - waiting for session_id_resolved")
+                        setPendingTempSessionForActiveWindow()
                     } else {
-                        isPendingTempSession = false
+                        clearPendingTempSession(reason: "new session without id resolution")
                         AppLogger.log("[Dashboard] New \(selectedSessionRuntime.rawValue) session requested")
                     }
                 } else if isPendingTempSession {
-                    isPendingTempSession = false
+                    clearPendingTempSession(reason: "continue mode prompt")
                 }
 
                 try await sendPromptUseCase.execute(
@@ -992,7 +1548,7 @@ final class DashboardViewModel: ObservableObject {
             return
         }
         guard !isLoadingMoreMessages else { return }
-        guard !isPendingTempSession else {
+        guard !isPendingTempSessionForActiveWindow() else {
             AppLogger.log("[Dashboard] loadMoreMessages skipped - pending session_id_resolved")
             return
         }
@@ -1088,18 +1644,39 @@ final class DashboardViewModel: ObservableObject {
     }
 
     /// Resume a specific session (user explicitly selected)
-    func resumeSession(_ sessionId: String) async {
+    func resumeSession(_ sessionId: String, windowId: UUID? = nil, operationToken: UUID? = nil) async {
+        let targetWindowId = windowId ?? activeTerminalWindowId
+        let effectiveOperationToken = operationToken ?? beginWindowOperation(windowId: targetWindowId)
+        func isCurrentWindowOperation(_ stage: String) -> Bool {
+            let isCurrent = isWindowOperationCurrent(windowId: targetWindowId, token: effectiveOperationToken)
+            if !isCurrent {
+                AppLogger.log("[Dashboard] resumeSession aborted at \(stage) - stale window operation")
+            }
+            return isCurrent
+        }
+        guard isCurrentWindowOperation("start") else { return }
+
         showSessionPicker = false
         isLoading = true
-        isPendingTempSession = false
+        if isPendingTempSessionForActiveWindow() || targetWindowId == nil {
+            clearPendingTempSession(reason: "resumeSession", windowId: targetWindowId)
+        }
         isSessionPinnedByUser = true
         Haptics.medium()
 
         // Stop watching previous session
         await stopWatchingSession()
+        guard isCurrentWindowOperation("after stopWatchingSession") else {
+            isLoading = false
+            return
+        }
 
         // Clear current logs and elements
         await logCache.clear()
+        guard isCurrentWindowOperation("after clear logs") else {
+            isLoading = false
+            return
+        }
         logs = []
         chatElements = []
         seenElementIds.removeAll()  // Clear deduplication sets
@@ -1127,6 +1704,10 @@ final class DashboardViewModel: ObservableObject {
 
         // Start watching the new session before fetching messages.
         await startWatchingCurrentSession()
+        guard isCurrentWindowOperation("after startWatchingCurrentSession") else {
+            isLoading = false
+            return
+        }
 
         // Load first page of session messages
         do {
@@ -1137,6 +1718,10 @@ final class DashboardViewModel: ObservableObject {
                 offset: 0,
                 order: "desc"
             )
+            guard isCurrentWindowOperation("after fetchSessionMessagesPage") else {
+                isLoading = false
+                return
+            }
 
             // Update pagination state
             messagesHasMore = messagesResponse.hasMore
@@ -1188,6 +1773,10 @@ final class DashboardViewModel: ObservableObject {
             // Note: Watch was already started before fetching messages
             Haptics.success()
         } catch {
+            if !isCurrentWindowOperation("catch") {
+                isLoading = false
+                return
+            }
             if isSessionNotFoundError(error) {
                 AppLogger.log("[Dashboard] Session not found during resume - refreshing history")
                 await handleSessionNotFound(context: "resumeSession messages", refreshHistory: true)
@@ -1257,16 +1846,21 @@ final class DashboardViewModel: ObservableObject {
     ///   - sessionId: Session ID to delete
     ///   - workspaceId: Workspace ID containing the session (uses currentWorkspaceId if nil)
     func deleteSession(_ sessionId: String, workspaceId: String? = nil) async {
+        // Optimistic removal: update the List data source before the async network call
+        // to prevent UICollectionView race condition (concurrent loadSessions refresh
+        // during await can leave the collection view in an inconsistent state).
+        let snapshot = sessions
+        sessions.removeAll { $0.sessionId == sessionId }
         do {
             try await deleteSessionForRuntime(
                 runtime: selectedSessionRuntime,
                 sessionId: sessionId,
                 workspaceId: workspaceId ?? currentWorkspaceId
             )
-            sessions.removeAll { $0.sessionId == sessionId }
             AppLogger.log("[Dashboard] Deleted \(selectedSessionRuntime.rawValue) session: \(sessionId)")
             Haptics.success()
         } catch {
+            sessions = snapshot
             AppLogger.error(error, context: "Delete session")
             self.error = error as? AppError ?? .unknown(underlying: error)
             Haptics.error()
@@ -1770,7 +2364,7 @@ final class DashboardViewModel: ObservableObject {
         isSessionPinnedByUser = false
         hasActiveConversation = false
         isPendingTrustFolder = false
-        isPendingTempSession = false
+        clearPendingTempSession(reason: "runtime switch reset", clearAll: true)
         pendingInteraction = nil
         setSelectedSession(nil)
 
@@ -1792,7 +2386,7 @@ final class DashboardViewModel: ObservableObject {
         }
 
         // Skip if waiting for session_id_resolved
-        guard !isPendingTempSession else {
+        guard !isPendingTempSessionForActiveWindow() else {
             AppLogger.log("[Dashboard] loadRecentSessionHistory skipped - pending session_id_resolved")
             return
         }
@@ -1811,6 +2405,17 @@ final class DashboardViewModel: ObservableObject {
             }
             isReconnectionInProgress = true
         }
+
+        let targetWindowId = activeTerminalWindowId
+        let windowOperationToken = beginWindowOperation(windowId: targetWindowId)
+        func isCurrentWindowOperation(_ stage: String) -> Bool {
+            let isCurrent = isWindowOperationCurrent(windowId: targetWindowId, token: windowOperationToken)
+            if !isCurrent {
+                AppLogger.log("[Dashboard] loadRecentSessionHistory aborted at \(stage) - stale window operation")
+            }
+            return isCurrent
+        }
+        guard isCurrentWindowOperation("start") else { return }
 
         let loadToken = UUID()
         sessionHistoryLoadToken = loadToken
@@ -1838,20 +2443,12 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] loadRecentSessionHistory aborted - superseded")
                 return
             }
+            guard isCurrentWindowOperation("after getMostRecentSessionId") else { return }
             if let existingSessionId = userSelectedSessionId, !existingSessionId.isEmpty {
-                if let latest = latestSessionId, !latest.isEmpty, latest != existingSessionId {
-                    if isSessionPinnedByUser {
-                        sessionId = existingSessionId
-                        AppLogger.log("[Dashboard] Keeping pinned session: \(existingSessionId) (latest: \(latest))")
-                    } else {
-                        sessionId = latest
-                        isSessionPinnedByUser = false
-                        AppLogger.log("[Dashboard] Auto-switching to latest session: \(latest) (was: \(existingSessionId))")
-                    }
-                } else {
-                    sessionId = existingSessionId
-                    AppLogger.log("[Dashboard] Using existing userSelectedSessionId: \(existingSessionId)")
-                }
+                // In multi-tab mode, preserve the currently selected tab session.
+                // Auto-switching to "latest" causes cross-tab session convergence.
+                sessionId = existingSessionId
+                AppLogger.log("[Dashboard] Preserving active tab session: \(existingSessionId)")
             } else {
                 sessionId = latestSessionId
                 AppLogger.log("[Dashboard] Using latest session: \(sessionId ?? "none")")
@@ -1863,6 +2460,7 @@ final class DashboardViewModel: ObservableObject {
             }
 
             AppLogger.log("[Dashboard] Loading history for session: \(sessionId)")
+            guard isCurrentWindowOperation("before applying session history") else { return }
 
             // Only clear if loading a different session (prevents flashing on reconnect)
             let isNewSession = userSelectedSessionId != sessionId
@@ -1870,6 +2468,7 @@ final class DashboardViewModel: ObservableObject {
 
             if isNewSession {
                 await logCache.clear()
+                guard isCurrentWindowOperation("after clear for new session") else { return }
                 chatElements = []
                 seenElementIds.removeAll()  // Clear deduplication sets
                 seenContentHashes.removeAll()
@@ -1900,9 +2499,11 @@ final class DashboardViewModel: ObservableObject {
             // IMPORTANT: Start watching the session BEFORE fetching messages
             // The workspace/session/messages API requires the session to be watched first
             await startWatchingCurrentSession()
+            guard isCurrentWindowOperation("after startWatchingCurrentSession") else { return }
 
             // Yield to let UI thread breathe before network call
             await Task.yield()
+            guard isCurrentWindowOperation("after yield before fetch") else { return }
 
             // Get first page of messages for the session
             AppLogger.log("[Dashboard] Fetching messages for session: \(sessionId)")
@@ -1922,6 +2523,7 @@ final class DashboardViewModel: ObservableObject {
                 AppLogger.log("[Dashboard] loadRecentSessionHistory aborted - superseded")
                 return
             }
+            guard isCurrentWindowOperation("after fetchSessionHistory") else { return }
 
             // Update pagination state after optional catch-up pages.
             messagesHasMore = fetchedBatch.hasMore
@@ -2184,6 +2786,22 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
+        // Guard against cross-tab bleed when active tab has no bound session:
+        // session-scoped events without session_id cannot be safely routed.
+        if shouldRouteEventBySession(event),
+           !isPendingTempSessionForActiveWindow(),
+           (activeWindowSessionIdForRouting() == nil || activeWindowSessionIdForRouting()?.isEmpty == true),
+           normalizedSessionId(event.sessionId) == nil {
+            AppLogger.log("[Dashboard] Dropping unscoped session event - eventType=\(event.type.rawValue), eventSession=nil, \(routingDebugContext())")
+            return
+        }
+
+        if let bufferedSessionId = shouldBufferEventForInactiveWindow(event) {
+            bufferEvent(event, for: bufferedSessionId)
+            AppLogger.log("[Dashboard] Buffered event for inactive window - eventType=\(event.type.rawValue), bufferedSession=\(bufferedSessionId), eventSession=\(normalizedSessionId(event.sessionId) ?? "nil"), \(routingDebugContext())")
+            return
+        }
+
         switch event.type {
         case .claudeMessage:
             // NEW: Structured message with content blocks
@@ -2193,7 +2811,7 @@ final class DashboardViewModel: ObservableObject {
                 // Skip this event if it belongs to a different session than the one we're viewing
                 if let eventSessionId = payload.sessionId,
                    !eventSessionId.isEmpty,
-                   let selectedSessionId = userSelectedSessionId,
+                   let selectedSessionId = activeWindowSessionIdForRouting(),
                    !selectedSessionId.isEmpty,
                    eventSessionId != selectedSessionId {
                     AppLogger.log("[Dashboard] claude_message skipped - session mismatch (event: \(eventSessionId), selected: \(selectedSessionId))")
@@ -2403,6 +3021,22 @@ final class DashboardViewModel: ObservableObject {
             // We should update userSelectedSessionId so subsequent messages continue this session
             if case .claudeSessionInfo(let payload) = event.payload,
                let sessionId = payload.sessionId, !sessionId.isEmpty {
+                let activeSessionId = activeWindowSessionIdForRouting()
+                if let activeSessionId,
+                   !activeSessionId.isEmpty,
+                   activeSessionId != sessionId {
+                    AppLogger.log("[Dashboard] Ignoring claude_session_info for inactive session (event=\(sessionId), active=\(activeSessionId))")
+                    return
+                }
+
+                // Safety: when the active tab has no session yet and isn't pending a new session
+                // resolution, do not let background session_info hijack this tab.
+                if (activeSessionId == nil || activeSessionId?.isEmpty == true),
+                   !isPendingTempSessionForActiveWindow() {
+                    AppLogger.log("[Dashboard] Ignoring claude_session_info while active tab has no pending session (event=\(sessionId))")
+                    return
+                }
+
                 AppLogger.log("[Dashboard] Received claude_session_info: \(sessionId)")
                 // Update both display and user's selected session (persisted)
                 // This ensures subsequent messages use mode=continue with this session_id
@@ -2433,7 +3067,7 @@ final class DashboardViewModel: ObservableObject {
                 // Also mark as pending temp session since session_id_resolved will provide real ID
                 if payload.type == .trustFolder {
                     isPendingTrustFolder = true
-                    isPendingTempSession = true
+                    setPendingTempSessionForActiveWindow()
                     AppLogger.log("[Dashboard] PTY trust_folder permission - session APIs delayed, waiting for real session ID")
                 }
 
@@ -2510,7 +3144,7 @@ final class DashboardViewModel: ObservableObject {
             guard !cleanText.isEmpty else { return }
 
             if let eventSessionId = payload.sessionId,
-               let selectedSessionId = userSelectedSessionId,
+               let selectedSessionId = activeWindowSessionIdForRouting(),
                !selectedSessionId.isEmpty,
                eventSessionId != selectedSessionId {
                 AppLogger.log("[Dashboard] PTY output skipped - session mismatch (event: \(eventSessionId), selected: \(selectedSessionId))")
@@ -2562,6 +3196,8 @@ final class DashboardViewModel: ObservableObject {
                     case .idle:
                         agentState = .idle
                         isLoading = false  // Also reset loading when idle
+                        isStreaming = false
+                        streamingStartTime = nil
                         spinnerMessage = nil  // Clear spinner message when idle
                     case .thinking:
                         agentState = .running
@@ -2571,8 +3207,14 @@ final class DashboardViewModel: ObservableObject {
                         // }
                     case .permission, .question:
                         agentState = .waiting
+                        isStreaming = false
+                        streamingStartTime = nil
+                        spinnerMessage = nil
                     case .error:
                         agentState = .error
+                        isStreaming = false
+                        streamingStartTime = nil
+                        spinnerMessage = nil
                     }
                     AppLogger.log("[Dashboard] PTY state: \(state) → agentState: \(previousClaudeState) → \(agentState)")
 
@@ -2779,26 +3421,46 @@ final class DashboardViewModel: ObservableObject {
                 let workspaceId = payload.workspaceId
                 AppLogger.log("[Dashboard] Session ID resolved: temp=\(tempId) → real=\(realId), workspace=\(workspaceId ?? "nil")")
                 AppLogger.log("[Dashboard] Current state: userSelectedSessionId=\(userSelectedSessionId ?? "nil"), agentState=\(agentState), watchingSessionId=\(watchingSessionId ?? "nil")")
+                let pendingTempBefore = isPendingTempSession
 
-                // Determine if we should accept this session ID:
-                // 1. If our current session matches the temp ID
-                // 2. If Claude is running - this means we just started a session
-                //    Accept the real_id even if userSelectedSessionId has an old value
-                //    (happens when starting new session while already having a previous session)
-                // 3. If we have no session selected AND Claude is running
-                let shouldAccept = userSelectedSessionId == tempId ||
-                                   agentState == .running ||
-                                   (userSelectedSessionId == nil) ||
-                                   (userSelectedSessionId?.isEmpty == true)
+                let targetWindowId = pendingWindowIdForIncomingTempSession(tempId)
+                let shouldAccept = targetWindowId != nil || userSelectedSessionId == tempId
+                let shouldSwitchActiveContext = targetWindowId == nil || targetWindowId == activeTerminalWindowId
+                AppLogger.log("[Dashboard] session_id_resolved decision: shouldAccept=\(shouldAccept), pendingTempBefore=\(pendingTempBefore), temp=\(tempId), real=\(realId), selected=\(userSelectedSessionId ?? "nil"), targetWindow=\(targetWindowId?.uuidString ?? "nil"), activeWindow=\(activeTerminalWindowId?.uuidString ?? "nil"), switchActive=\(shouldSwitchActiveContext)")
 
                 if shouldAccept {
                     AppLogger.log("[Dashboard] Updating session tracking to real ID: \(realId)")
 
-                    // Clear pending temp session flag - we now have real ID
-                    isPendingTempSession = false
+                    // Persist the resolved session ID onto the window that initiated the pending session.
+                    if let appState, let targetWindowId {
+                        appState.setTerminalWindowSession(targetWindowId, sessionId: realId)
+                        AppLogger.log("[Dashboard] session_id_resolved window update: window=\(targetWindowId), session=\(realId)")
+                    }
+                    if let targetWindowId {
+                        pendingTempSessionIdByWindowId[targetWindowId] = realId
+                    }
+                    if tempId != realId,
+                       let bufferedTempEvents = bufferedEventsBySessionId.removeValue(forKey: tempId),
+                       !bufferedTempEvents.isEmpty {
+                        var existingRealEvents = bufferedEventsBySessionId[realId] ?? []
+                        existingRealEvents.append(contentsOf: bufferedTempEvents)
+                        if existingRealEvents.count > maxBufferedEventsPerSession {
+                            existingRealEvents.removeFirst(existingRealEvents.count - maxBufferedEventsPerSession)
+                        }
+                        bufferedEventsBySessionId[realId] = existingRealEvents
+                        AppLogger.log("[Dashboard] Moved \(bufferedTempEvents.count) buffered event(s) temp->real (\(tempId) -> \(realId))")
+                    }
 
-                    // Update session tracking to use real ID
-                    setSelectedSession(realId)
+                    // Clear pending temp session flag - we now have real ID
+                    clearPendingTempSession(reason: "session_id_resolved", windowId: targetWindowId)
+                    AppLogger.log("[Dashboard] session_id_resolved pending flag: \(pendingTempBefore) -> \(isPendingTempSession)")
+
+                    // Update visible session context only when the pending window is active.
+                    if shouldSwitchActiveContext {
+                        setSelectedSession(realId)
+                    } else {
+                        AppLogger.log("[Dashboard] session_id_resolved applied to background window only; preserving active session \(userSelectedSessionId ?? "nil")")
+                    }
 
                     // Update WorkspaceManagerService to keep session state consistent
                     // This ensures stopClaude and other operations use the correct session ID
@@ -2825,25 +3487,52 @@ final class DashboardViewModel: ObservableObject {
                         AppLogger.log("[Dashboard] Updated WorkspaceManagerService with new session: \(realId)")
                     }
 
-                    // Watch the session with the real ID to receive claude_message events
-                    // Use workspace_id from event for proper routing
-                    Task {
-                        AppLogger.log("[Dashboard] Watching session with real ID: \(realId), workspace: \(effectiveWorkspaceId ?? "nil")")
-                        // Stop any existing watch first
-                        await stopWatchingSession()
+                    // Watch the resolved session only if it belongs to active window context.
+                    if shouldSwitchActiveContext {
+                        Task {
+                            AppLogger.log("[Dashboard] Watching session with real ID: \(realId), workspace: \(effectiveWorkspaceId ?? "nil")")
+                            let watchOwnerId = self.currentSessionWatchOwnerId()
+                            let targetRuntime = targetWindowId
+                                .flatMap { id in self.terminalWindows.first(where: { $0.id == id && $0.isOpen })?.runtime }
+                                ?? self.selectedSessionRuntime
+                            // Stop any existing watch first
+                            await stopWatchingSession()
 
-                        // Watch the new session with workspace_id from event (or fallback to currentWorkspaceId)
-                        do {
-                            try await webSocketService.watchSession(realId, workspaceId: effectiveWorkspaceId, runtime: selectedSessionRuntime)
-                            isWatchingSession = true
-                            watchingSessionId = realId
-                            AppLogger.log("[Dashboard] Now watching session: \(realId)")
-                        } catch {
-                            AppLogger.log("[Dashboard] Failed to watch session \(realId): \(error)", type: .error)
+                            // Watch the new session with workspace_id from event (or fallback to currentWorkspaceId)
+                            do {
+                                try await webSocketService.watchSession(
+                                    realId,
+                                    workspaceId: effectiveWorkspaceId,
+                                    runtime: targetRuntime,
+                                    ownerId: watchOwnerId
+                                )
+                                isWatchingSession = true
+                                watchingSessionId = realId
+                                syncActiveTerminalWindowContext(sessionId: realId)
+                                AppLogger.log("[Dashboard] Now watching session: \(realId)")
+                            } catch {
+                                AppLogger.log("[Dashboard] Failed to watch session \(realId): \(error)", type: .error)
+                            }
+                        }
+                    } else if let targetWindowId {
+                        Task {
+                            let targetRuntime = self.terminalWindows.first(where: { $0.id == targetWindowId && $0.isOpen })?.runtime ?? self.selectedSessionRuntime
+                            do {
+                                try await self.webSocketService.watchSession(
+                                    realId,
+                                    workspaceId: effectiveWorkspaceId,
+                                    runtime: targetRuntime,
+                                    ownerId: self.watchOwnerId(for: targetWindowId)
+                                )
+                                AppLogger.log("[Dashboard] Ensured background watch for resolved session: window=\(targetWindowId), session=\(realId), runtime=\(targetRuntime.rawValue)")
+                            } catch {
+                                AppLogger.log("[Dashboard] Failed background watch for resolved session \(realId): \(error)", type: .warning)
+                            }
                         }
                     }
                 } else {
                     AppLogger.log("[Dashboard] Session ID resolution for different session (current=\(userSelectedSessionId ?? "nil"), temp=\(tempId), agentState=\(agentState))")
+                    AppLogger.log("[Dashboard] session_id_resolved ignored: pendingTemp=\(isPendingTempSession), temp=\(tempId), real=\(realId)")
                 }
             }
 
@@ -2873,7 +3562,13 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Session ID failed: temp=\(tempId), session=\(failedSessionId ?? "nil"), workspace=\(workspaceId ?? "nil"), reason=\(reason), message=\(message)")
 
             // Clear pending states since session failed
-            isPendingTempSession = false
+            let pendingLookupSessionId = tempId != "unknown" ? tempId : failedSessionId
+            let failedPendingWindowId = pendingWindowIdForIncomingTempSession(pendingLookupSessionId)
+            clearPendingTempSession(
+                reason: "session_id_failed",
+                windowId: failedPendingWindowId,
+                clearAll: failedPendingWindowId == nil
+            )
             isPendingTrustFolder = false  // Reset so user can start a new session
 
             // Clear the permission dialog
@@ -3225,7 +3920,7 @@ final class DashboardViewModel: ObservableObject {
     /// session_id_failed may be emitted without agent_type but still needs immediate UI recovery.
     private func shouldBypassRuntimeRouting(for event: AgentEvent) -> Bool {
         switch event.type {
-        case .sessionIdFailed:
+        case .sessionIdFailed, .sessionIdResolved, .ptyPermissionResolved:
             return true
         default:
             return false
@@ -3279,6 +3974,9 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Cleared selectedSessionId")
             updateSessionId("")
         }
+
+        syncActiveTerminalWindowContext(sessionId: sessionId)
+        persistWindowSnapshot(for: activeTerminalWindowId)
     }
 
     // MARK: - Session Error Helpers
@@ -3312,7 +4010,7 @@ final class DashboardViewModel: ObservableObject {
         AppLogger.log("[Dashboard] Session not found during \(context) - clearing session state")
         isWatchingSession = false
         watchingSessionId = nil
-        isPendingTempSession = false
+        clearPendingTempSession(reason: "session not found")
         isSessionPinnedByUser = false
         setSelectedSession(nil)
         hasActiveConversation = false
@@ -3715,7 +4413,7 @@ final class DashboardViewModel: ObservableObject {
         }
 
         // Skip if waiting for session_id_resolved
-        guard !isPendingTempSession else {
+        guard !isPendingTempSessionForActiveWindow() else {
             AppLogger.log("[Dashboard] startWatchingCurrentSession skipped - pending session_id_resolved")
             return
         }
@@ -3725,10 +4423,12 @@ final class DashboardViewModel: ObservableObject {
             return
         }
 
-        // Already watching this session? (skip if force=true, e.g., after reconnection)
+        let watchOwnerId = currentSessionWatchOwnerId()
+        syncActiveTerminalWindowContext(sessionId: sessionId)
+
+        // Keep existing optimization log, but still call watchSession so owner registration stays current.
         if !force && isWatchingSession && watchingSessionId == sessionId {
-            AppLogger.log("[Dashboard] Already watching session: \(sessionId)")
-            return
+            AppLogger.log("[Dashboard] Already watching session: \(sessionId) - ensuring owner registration (\(watchOwnerId))")
         }
 
         // Must be connected
@@ -3740,10 +4440,17 @@ final class DashboardViewModel: ObservableObject {
         do {
             AppLogger.log("[Dashboard] Calling watchSession API for: \(sessionId)")
             // Use workspace-aware API if available
-            try await webSocketService.watchSession(sessionId, workspaceId: currentWorkspaceId, runtime: selectedSessionRuntime)
+            try await webSocketService.watchSession(
+                sessionId,
+                workspaceId: currentWorkspaceId,
+                runtime: selectedSessionRuntime,
+                ownerId: watchOwnerId
+            )
             // JSON-RPC response confirms watching - set state immediately
             isWatchingSession = true
             watchingSessionId = sessionId
+            syncActiveTerminalWindowContext(sessionId: sessionId)
+            persistWindowSnapshot(for: activeTerminalWindowId)
             AppLogger.log("[Dashboard] Now watching session: \(sessionId)\(currentWorkspaceId != nil ? " (workspace: \(currentWorkspaceId!))" : "")")
 
             // Notify server about session focus for multi-device awareness
@@ -3765,12 +4472,18 @@ final class DashboardViewModel: ObservableObject {
 
     /// Stop watching the current session
     func stopWatchingSession() async {
-        guard isWatchingSession else { return }
+        let targetSessionId = watchingSessionId ?? userSelectedSessionId
+        guard let targetSessionId, !targetSessionId.isEmpty else { return }
+        let watchOwnerId = currentSessionWatchOwnerId()
 
         do {
-            try await webSocketService.unwatchSession()
+            try await webSocketService.unwatchSession(
+                sessionId: targetSessionId,
+                ownerId: watchOwnerId
+            )
             isWatchingSession = false
             watchingSessionId = nil
+            persistWindowSnapshot(for: activeTerminalWindowId)
             AppLogger.log("[Dashboard] Stopped watching session")
 
             // Clear session focus for multi-device awareness
@@ -3779,6 +4492,7 @@ final class DashboardViewModel: ObservableObject {
             // Still clear local state even if command fails
             isWatchingSession = false
             watchingSessionId = nil
+            persistWindowSnapshot(for: activeTerminalWindowId)
             SessionAwarenessManager.shared.clearFocus()
             AppLogger.error(error, context: "Unwatch session")
         }
@@ -3862,6 +4576,29 @@ final class DashboardViewModel: ObservableObject {
     /// Switch to a different workspace
     func switchWorkspace(_ workspace: Workspace) async {
         AppLogger.log("[Dashboard] Switching to workspace: \(workspace.name)")
+
+        if WorkspaceStore.shared.activeWorkspace?.id == workspace.id {
+            AppLogger.log("[Dashboard] switchWorkspace: workspace already active - preserving existing tabs")
+            ensureWindowForCurrentWorkspace()
+
+            if let workspaceId = currentWorkspaceId {
+                do {
+                    try await workspaceManager.subscribe(workspaceId: workspaceId)
+                    AppLogger.log("[Dashboard] switchWorkspace: refreshed workspace subscription for \(workspaceId)")
+                } catch {
+                    AppLogger.log("[Dashboard] switchWorkspace: workspace re-subscribe failed: \(error.localizedDescription)", type: .warning)
+                }
+            }
+
+            if let activeWindowSessionId = normalizedSessionId(activeWindow?.sessionId) {
+                AppLogger.log("[Dashboard] switchWorkspace: forcing session reload for active tab session \(activeWindowSessionId)")
+                await resumeSession(activeWindowSessionId)
+            } else {
+                await loadRecentSessionHistory(isReconnection: true)
+            }
+            await refreshStatus()
+            return
+        }
 
         // Stop watching session first (while workspace subscription is still valid)
         await stopWatchingSession()
@@ -3984,7 +4721,7 @@ final class DashboardViewModel: ObservableObject {
         isStreaming = false
         streamingStartTime = nil
         isPendingTrustFolder = false
-        isPendingTempSession = false
+        clearPendingTempSession(reason: "disconnect and reset", clearAll: true)
 
         // Also clear from session repository
         sessionRepository.selectedSessionId = nil
@@ -4005,7 +4742,7 @@ final class DashboardViewModel: ObservableObject {
         seenContentHashes.removeAll()
         pendingInteraction = nil
         isPendingTrustFolder = false  // Reset trust state for new workspace
-        isPendingTempSession = false  // Reset temp session state for new workspace
+        clearPendingTempSession(reason: "setWorkspaceContext", clearAll: true)  // Reset temp session state for new workspace
         isSessionPinnedByUser = false
 
         // IMPORTANT: When connecting to a workspace, only trust the passed sessionId.
@@ -4034,6 +4771,7 @@ final class DashboardViewModel: ObservableObject {
         if let sid = effectiveSessionId {
             sessionRepository.selectedSessionId = sid
         }
+        syncActiveTerminalWindowContext(sessionId: effectiveSessionId)
 
         // Reset conversation state
         hasActiveConversation = false
@@ -4050,7 +4788,7 @@ final class DashboardViewModel: ObservableObject {
             AppLogger.log("[Dashboard] Found pending trust_folder permission - applying")
             // CRITICAL: Set flags synchronously BEFORE async task to prevent session APIs from running
             isPendingTrustFolder = true
-            isPendingTempSession = true  // Also pending temp session since we don't have real ID yet
+            setPendingTempSessionForActiveWindow()  // Also pending temp session since we don't have real ID yet
             Task {
                 await handleEvent(pendingEvent)
             }
@@ -4068,6 +4806,30 @@ final class DashboardViewModel: ObservableObject {
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: workspace=\(workspace.name), id=\(workspace.id)")
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: host=\(host), hasActiveSession=\(workspace.hasActiveSession)")
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: sessions=\(workspace.sessions.map { $0.id })")
+
+        if currentWorkspaceId == workspace.id, webSocketService.isConnected {
+            AppLogger.log("[DashboardVM] connectToRemoteWorkspace: workspace already active - preserving existing tabs")
+            ensureWindowForCurrentWorkspace()
+
+            if let workspaceId = currentWorkspaceId {
+                do {
+                    try await workspaceManager.subscribe(workspaceId: workspaceId)
+                    AppLogger.log("[DashboardVM] connectToRemoteWorkspace: refreshed workspace subscription for \(workspaceId)")
+                } catch {
+                    AppLogger.log("[DashboardVM] connectToRemoteWorkspace: workspace re-subscribe failed: \(error.localizedDescription)", type: .warning)
+                }
+            }
+
+            if let activeWindowSessionId = normalizedSessionId(activeWindow?.sessionId) {
+                AppLogger.log("[DashboardVM] connectToRemoteWorkspace: forcing session reload for active tab session \(activeWindowSessionId)")
+                await resumeSession(activeWindowSessionId)
+            } else {
+                await loadRecentSessionHistory(isReconnection: true)
+            }
+            await refreshStatus()
+            AppLogger.log("[DashboardVM] ========== CONNECT TO REMOTE WORKSPACE END (NO-OP) ==========")
+            return true
+        }
 
         // Stop watching current session first (while workspace subscription is still valid)
         AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Stopping current session watch...")
@@ -4108,11 +4870,23 @@ final class DashboardViewModel: ObservableObject {
             seenElementIds.removeAll()
             seenContentHashes.removeAll()
 
+            // Ensure workspace window context is ready before history load.
+            // Without this, loadRecentSessionHistory can capture a stale window token and abort.
+            ensureWindowForCurrentWorkspace()
+
             // Load session history and messages
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Loading session history...")
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: userSelectedSessionId=\(userSelectedSessionId ?? "nil"), workspaceId=\(currentWorkspaceId ?? "nil")")
             await loadRecentSessionHistory(isReconnection: true)
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: After loadRecentSessionHistory, hasCompletedInitialLoad=\(hasCompletedInitialLoad)")
+
+            // Recovery path: if history load was aborted by stale window operation,
+            // force a direct session resume for the active tab to fetch messages.
+            if chatElements.isEmpty && logs.isEmpty,
+               let activeWindowSessionId = normalizedSessionId(activeWindow?.sessionId) {
+                AppLogger.log("[DashboardVM] connectToRemoteWorkspace: History still empty after reconnect, forcing resumeSession for active tab session \(activeWindowSessionId)")
+                await resumeSession(activeWindowSessionId)
+            }
 
             // Refresh status (includes git status)
             AppLogger.log("[DashboardVM] connectToRemoteWorkspace: Refreshing status...")

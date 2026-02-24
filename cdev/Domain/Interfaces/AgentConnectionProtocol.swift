@@ -66,12 +66,23 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     ///   - sessionId: The session ID to watch
     ///   - workspaceId: The workspace ID (required for workspaceScoped watch)
     ///   - runtime: Agent runtime to watch
+    ///   - ownerId: Optional owner identifier for watcher lifecycle coordination.
+    ///             Owners can safely unwatch without affecting other active owners.
     /// - Throws: AppError.workspaceIdRequired if workspaceId is nil
-    func watchSession(_ sessionId: String, workspaceId: String?, runtime: AgentRuntime) async throws
+    func watchSession(
+        _ sessionId: String,
+        workspaceId: String?,
+        runtime: AgentRuntime,
+        ownerId: String?
+    ) async throws
 
-    /// Stop watching the current session
-    /// Sends unwatch_session command
-    func unwatchSession() async throws
+    /// Stop watching a session.
+    /// Sends an unwatch command for the target runtime when needed.
+    /// - Parameter sessionId: Optional explicit session ID to unwatch.
+    ///                      If nil, implementation may unwatch all sessions for the owner.
+    /// - Parameter ownerId: Optional owner identifier for watcher lifecycle coordination.
+    ///                     Unwatch is sent only when no other owners remain.
+    func unwatchSession(sessionId: String?, ownerId: String?) async throws
 
     // MARK: - Pending Trust Folder Permission
 
@@ -85,6 +96,27 @@ protocol WebSocketServiceProtocol: AgentConnectionProtocol {
     /// Callback for token expiry warning (called ~5 minutes before token expires)
     /// Parameter: time remaining in seconds until token expires
     var onTokenExpiryWarning: ((TimeInterval) -> Void)? { get set }
+}
+
+extension WebSocketServiceProtocol {
+    /// Convenience overload for call sites that do not coordinate watcher ownership.
+    func watchSession(
+        _ sessionId: String,
+        workspaceId: String?,
+        runtime: AgentRuntime
+    ) async throws {
+        try await watchSession(sessionId, workspaceId: workspaceId, runtime: runtime, ownerId: nil)
+    }
+
+    /// Backward-compatible overload for existing single-watch call sites.
+    func unwatchSession(ownerId: String?) async throws {
+        try await unwatchSession(sessionId: nil, ownerId: ownerId)
+    }
+
+    /// Convenience overload for unwatching all sessions.
+    func unwatchSession() async throws {
+        try await unwatchSession(sessionId: nil, ownerId: nil)
+    }
 }
 
 /// Protocol for HTTP API operations

@@ -7,6 +7,7 @@ struct DashboardView: View {
     @StateObject private var workspaceStore = WorkspaceStore.shared
     @StateObject private var workspaceStateManager = WorkspaceStateManager.shared
     @StateObject private var quickSwitcherViewModel: QuickSwitcherViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     // Voice input (beta feature)
     @StateObject private var voiceInputViewModel = VoiceInputViewModel()
@@ -45,7 +46,15 @@ struct DashboardView: View {
     private var toolkitItems: [ToolkitItem] {
         var builder = ToolkitBuilder()
             .add(.settings { showSettings = true })
-            .add(.refresh { Task { await viewModel.refreshStatus() } })
+            .add(.refresh {
+                Task {
+                    if let activeWorkspace = workspaceStore.activeWorkspace {
+                        await viewModel.switchWorkspace(activeWorkspace)
+                    } else {
+                        await viewModel.refreshStatus()
+                    }
+                }
+            })
             .add(.clearLogs { Task { await viewModel.clearLogs() } })
             .add(.debugLogs { showDebugLogs = true })
 
@@ -73,6 +82,20 @@ struct DashboardView: View {
                         isWatchingSession: viewModel.isWatchingSession,
                         onWorkspaceTap: { showWorkspaceSwitcher = true },
                         externalSessionManager: viewModel.externalSessionManager
+                    )
+
+                    TerminalWindowsBar(
+                        windows: viewModel.windowsForCurrentWorkspace,
+                        activeWindowId: viewModel.activeTerminalWindowId,
+                        onCreate: {
+                            Task { await viewModel.createTerminalWindow() }
+                        },
+                        onSelect: { windowId in
+                            Task { await viewModel.activateTerminalWindow(windowId) }
+                        },
+                        onClose: { windowId in
+                            Task { await viewModel.closeTerminalWindow(windowId) }
+                        }
                     )
 
                     // Connection status banner (non-blocking)
@@ -497,7 +520,9 @@ struct DashboardView: View {
         .errorAlert($viewModel.error)
         .onAppear {
             AppLogger.log("[DashboardView] onAppear - UI should be interactive now")
+            UIApplication.shared.isIdleTimerDisabled = (scenePhase == .active)
             previousConnectionState = viewModel.connectionState
+            viewModel.ensureWindowForCurrentWorkspace()
 
             // Connect voice input completion to prompt text
             voiceInputViewModel.onTranscriptionComplete = { transcription in
@@ -507,6 +532,12 @@ struct DashboardView: View {
                     viewModel.promptText += " " + transcription
                 }
             }
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            UIApplication.shared.isIdleTimerDisabled = (newPhase == .active)
         }
         // Track connection state changes for reconnection toast
         .onChange(of: viewModel.connectionState) { oldState, newState in
@@ -604,6 +635,9 @@ struct DashboardView: View {
                     isConnected: newState.isConnected
                 )
             }
+        }
+        .onChange(of: workspaceStore.activeWorkspaceId) { _, _ in
+            viewModel.ensureWindowForCurrentWorkspace()
         }
         .onChange(of: viewModel.agentState) { _, newState in
             if let activeId = workspaceStore.activeWorkspaceId {
@@ -1552,6 +1586,87 @@ struct ActionBarView: View {
             let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
                 ?? Animations.Duration.standard
             setKeyboardHeight(0, animated: true, duration: duration)
+        }
+    }
+}
+
+// MARK: - Terminal Windows Bar
+
+private struct TerminalWindowsBar: View {
+    let windows: [TerminalWindow]
+    let activeWindowId: UUID?
+    let onCreate: () -> Void
+    let onSelect: (UUID) -> Void
+    let onClose: (UUID) -> Void
+
+    private func title(for window: TerminalWindow, index: Int) -> String {
+        if let sessionId = window.sessionId, !sessionId.isEmpty {
+            let short = String(sessionId.suffix(6))
+            return "\(index). \(short)"
+        }
+        return "\(index). new"
+    }
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Spacing.xs) {
+                    ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
+                        let isActive = window.id == activeWindowId
+                        HStack(spacing: 4) {
+                            Button {
+                                onSelect(window.id)
+                            } label: {
+                                Text(title(for: window, index: index + 1))
+                                    .font(Typography.terminalSmall)
+                                    .foregroundStyle(isActive ? ColorSystem.textPrimary : ColorSystem.textSecondary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, Spacing.xs)
+                                    .padding(.vertical, 5)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                onClose(window.id)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, Spacing.xs)
+                        }
+                        .background(
+                            Capsule()
+                                .fill(isActive ? ColorSystem.terminalBgHighlight : ColorSystem.terminalBg)
+                                .overlay(
+                                    Capsule()
+                                        .stroke(isActive ? ColorSystem.primary.opacity(0.35) : ColorSystem.textQuaternary.opacity(0.4), lineWidth: 1)
+                                )
+                        )
+                    }
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, 6)
+            }
+
+            Button(action: onCreate) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(ColorSystem.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle()
+                            .fill(ColorSystem.terminalBgHighlight)
+                            .overlay(Circle().stroke(ColorSystem.textQuaternary.opacity(0.5), lineWidth: 1))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, Spacing.md)
+        }
+        .background(ColorSystem.terminalBgElevated)
+        .overlay(alignment: .bottom) {
+            Divider().background(ColorSystem.textQuaternary.opacity(0.35))
         }
     }
 }

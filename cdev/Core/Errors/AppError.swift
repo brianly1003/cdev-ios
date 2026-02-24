@@ -29,6 +29,7 @@ enum AppError: LocalizedError {
     case invalidQRCode
     case invalidQRCodeDetail(reason: String)
     case pairingFailed(reason: String)
+    case pairingApprovalPending(requestID: String?, expiresAt: Date?)
     case sessionExpired
 
     // Authentication errors
@@ -98,6 +99,11 @@ enum AppError: LocalizedError {
             return "Invalid QR code: \(reason)"
         case .pairingFailed(let reason):
             return "Pairing failed: \(reason)"
+        case .pairingApprovalPending(let requestID, _):
+            if let requestID, !requestID.isEmpty {
+                return "Waiting for host approval (\(requestID))"
+            }
+            return "Waiting for host approval"
         case .sessionExpired:
             return "Session has expired"
         case .tokenExpired:
@@ -141,6 +147,8 @@ enum AppError: LocalizedError {
             return "Try reconnecting to the agent"
         case .invalidQRCode, .invalidQRCodeDetail:
             return "Scan the QR code displayed by the agent"
+        case .pairingApprovalPending:
+            return "Approve this device on the cdev host pairing page"
         case .sessionExpired, .tokenExpired, .refreshTokenExpired:
             return "Please scan a new QR code to reconnect"
         case .tokenInvalid, .authorizationFailed:

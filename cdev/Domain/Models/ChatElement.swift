@@ -24,6 +24,11 @@ enum ChatContentFilter {
             return true
         }
 
+        // Codex skill injections ($skill-name) are system context, not user-visible chat.
+        if lower.hasPrefix("<skill>") && lower.contains("</skill>") {
+            return true
+        }
+
         return false
     }
 

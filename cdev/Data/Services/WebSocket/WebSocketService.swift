@@ -99,6 +99,113 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Runtime of the currently watched session (claude/codex)
     @Atomic private var _watchedRuntime: AgentRuntime?
 
+    /// Track active session watch owners (for coordinated watch/unwatch lifecycle).
+    /// Each owner (typically one terminal window) can watch exactly one target.
+    /// Multiple owners may watch the same target concurrently.
+    /// Legacy/global callers pass `nil` owner IDs and force global replacement semantics.
+    private struct SessionWatchTarget: Hashable {
+        let sessionId: String
+        let workspaceId: String?
+        let runtime: AgentRuntime
+    }
+
+    private static let globalWatchOwnerId = "__cdev-global-watch-owner__"
+    private var watchTargetsByOwnerId: [String: SessionWatchTarget] = [:]
+    private let watchTargetsByOwnerIdLock = NSLock()
+
+    private func watchOwnerId(_ ownerId: String?) -> String {
+        return ownerId ?? Self.globalWatchOwnerId
+    }
+
+    private func currentWatchTarget(for ownerId: String?) -> SessionWatchTarget? {
+        let effectiveOwnerId = watchOwnerId(ownerId)
+        return watchTargetsByOwnerIdLock.withLock { watchTargetsByOwnerId[effectiveOwnerId] }
+    }
+
+    private func isTargetWatchedByAnyOwner(_ target: SessionWatchTarget) -> Bool {
+        watchTargetsByOwnerIdLock.withLock {
+            watchTargetsByOwnerId.values.contains(target)
+        }
+    }
+
+    private func assignWatchTarget(_ target: SessionWatchTarget, ownerId: String?) {
+        let effectiveOwnerId = watchOwnerId(ownerId)
+        watchTargetsByOwnerIdLock.withLock {
+            if effectiveOwnerId == Self.globalWatchOwnerId {
+                watchTargetsByOwnerId = [Self.globalWatchOwnerId: target]
+                return
+            }
+
+            watchTargetsByOwnerId[effectiveOwnerId] = target
+        }
+    }
+
+    private func removeWatchTargets(ownerId: String?, sessionId: String?) -> [SessionWatchTarget] {
+        let effectiveOwnerId = watchOwnerId(ownerId)
+        let normalizedSessionId = sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return watchTargetsByOwnerIdLock.withLock {
+            // Global caller clears all tracked targets.
+            if effectiveOwnerId == Self.globalWatchOwnerId {
+                let targets = Array(Set(watchTargetsByOwnerId.values))
+                watchTargetsByOwnerId.removeAll()
+                return targets
+            }
+
+            guard let existingTarget = watchTargetsByOwnerId[effectiveOwnerId] else {
+                return []
+            }
+
+            if let normalizedSessionId, !normalizedSessionId.isEmpty, existingTarget.sessionId != normalizedSessionId {
+                return []
+            }
+
+            watchTargetsByOwnerId.removeValue(forKey: effectiveOwnerId)
+
+            // If another owner still watches this target, no unwatch RPC should be sent.
+            if watchTargetsByOwnerId.values.contains(existingTarget) {
+                return []
+            }
+
+            return [existingTarget]
+        }
+    }
+
+    private func anyTrackedWatchTarget() -> SessionWatchTarget? {
+        watchTargetsByOwnerIdLock.withLock {
+            watchTargetsByOwnerId
+                .values
+                .sorted { lhs, rhs in
+                    if lhs.sessionId == rhs.sessionId {
+                        return lhs.runtime.rawValue < rhs.runtime.rawValue
+                    }
+                    return lhs.sessionId < rhs.sessionId
+                }
+                .first
+        }
+    }
+
+    private func syncWatchedStateFromTrackedTargets() {
+        guard let target = anyTrackedWatchTarget() else {
+            _watchedSessionId = nil
+            _watchedWorkspaceId = nil
+            _watchedRuntime = nil
+            return
+        }
+
+        _watchedSessionId = target.sessionId
+        _watchedWorkspaceId = target.workspaceId
+        _watchedRuntime = target.runtime
+    }
+
+    private func clearWatchOwners() {
+        watchTargetsByOwnerIdLock.withLock { watchTargetsByOwnerId.removeAll() }
+    }
+
+    private func hasWatchOwners() -> Bool {
+        return watchTargetsByOwnerIdLock.withLock { !watchTargetsByOwnerId.isEmpty }
+    }
+
     // MARK: - Pending Trust Folder Permission
 
     /// Stores pending trust_folder permission that arrives before Dashboard is ready
@@ -742,6 +849,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // Clear watched session state (both session and workspace IDs)
         _watchedSessionId = nil
         _watchedWorkspaceId = nil
+        _watchedRuntime = nil
+        clearWatchOwners()
 
         // Clear pending request tracking to prevent memory buildup
         AppLogger.webSocket("Disconnecting - clearing pending requests")
@@ -828,6 +937,8 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             // This ensures watch can be re-established after server restart
             _watchedSessionId = nil
             _watchedWorkspaceId = nil
+            _watchedRuntime = nil
+            clearWatchOwners()
             AppLogger.webSocket("Cleared watch state during reconnection cleanup")
 
             // Exponential backoff with max cap
@@ -1748,7 +1859,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         // When preserveWatch is true, we want to resume watching on reconnect
         if !preserveWatch && _watchedSessionId != nil {
             Task {
-                try? await unwatchSession()
+                try? await unwatchSession(sessionId: nil, ownerId: nil)
             }
         }
     }
@@ -1764,97 +1875,115 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     ///   - workspaceId: The workspace ID (required for workspaceScoped watch APIs)
     ///   - runtime: Runtime selector for watch routing
     /// - Throws: Connection or encoding errors
-    func watchSession(_ sessionId: String, workspaceId: String?, runtime: AgentRuntime) async throws {
-        // Already watching this session/runtime? Skip
-        if _watchedSessionId == sessionId && _watchedRuntime == runtime {
-            AppLogger.webSocket("Already watching session: \(sessionId) (runtime: \(runtime.rawValue))")
+    func watchSession(_ sessionId: String, workspaceId: String?, runtime: AgentRuntime, ownerId: String? = nil) async throws {
+        let target = SessionWatchTarget(sessionId: sessionId, workspaceId: workspaceId, runtime: runtime)
+
+        if let existingTarget = currentWatchTarget(for: ownerId), existingTarget == target {
+            AppLogger.webSocket("Already watching session: \(sessionId) (runtime: \(runtime.rawValue)) for owner=\(watchOwnerId(ownerId))")
             return
         }
 
-        // If watching a different session, unwatch first
-        if _watchedSessionId != nil {
-            try await unwatchSession()
+        // Global owner replaces all existing watch ownership to preserve legacy behavior.
+        if ownerId == nil, hasWatchOwners() {
+            try await unwatchSession(sessionId: nil, ownerId: nil)
         }
 
-        // Must be connected
-        guard isConnected else {
-            AppLogger.webSocket("Cannot watch session - not connected", type: .warning)
-            throw AppError.webSocketDisconnected
+        // If this owner currently watches another target, release that ownership first.
+        if let existingTarget = currentWatchTarget(for: ownerId), existingTarget != target {
+            try await unwatchSession(sessionId: existingTarget.sessionId, ownerId: ownerId)
         }
 
-        let client = getJSONRPCClient()
-
-        let watchMethod = runtime.watchMethodName
-        if runtime.usesWorkspaceScopedWatchMethod {
-            // Workspace ID is required for workspace-scoped watch methods.
-            guard let workspaceId = workspaceId else {
-                AppLogger.webSocket("Cannot watch \(runtime.rawValue) session - workspaceId is required", type: .error)
-                throw AppError.workspaceIdRequired
+        let alreadyWatched = isTargetWatchedByAnyOwner(target)
+        if !alreadyWatched {
+            // Must be connected when issuing new watch RPC.
+            guard isConnected else {
+                AppLogger.webSocket("Cannot watch session - not connected", type: .warning)
+                throw AppError.webSocketDisconnected
             }
-            AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId) (runtime: \(runtime.rawValue), method: \(watchMethod))")
-            let params = WorkspaceSessionWatchParams(
-                workspaceId: workspaceId,
-                sessionId: sessionId,
-                agentType: runtime.rawValue
-            )
-            let _: WorkspaceSessionWatchResult = try await client.request(
-                method: watchMethod,
-                params: params
-            )
-            _watchedWorkspaceId = workspaceId
+
+            let client = getJSONRPCClient()
+            let watchMethod = runtime.watchMethodName
+
+            if runtime.usesWorkspaceScopedWatchMethod {
+                guard let workspaceId = workspaceId else {
+                    AppLogger.webSocket("Cannot watch \(runtime.rawValue) session - workspaceId is required", type: .error)
+                    throw AppError.workspaceIdRequired
+                }
+                AppLogger.webSocket("Starting workspace watch for session: \(sessionId) in workspace: \(workspaceId) (runtime: \(runtime.rawValue), method: \(watchMethod))")
+                let params = WorkspaceSessionWatchParams(
+                    workspaceId: workspaceId,
+                    sessionId: sessionId,
+                    agentType: runtime.rawValue
+                )
+                let _: WorkspaceSessionWatchResult = try await client.request(
+                    method: watchMethod,
+                    params: params
+                )
+            } else {
+                AppLogger.webSocket("Starting runtime watch for session: \(sessionId) (runtime: \(runtime.rawValue), method: \(watchMethod))")
+                let params = SessionWatchParams(sessionId: sessionId, agentType: runtime.rawValue)
+                let _: SessionWatchResult = try await client.request(
+                    method: watchMethod,
+                    params: params
+                )
+            }
         } else {
-            AppLogger.webSocket("Starting runtime watch for session: \(sessionId) (runtime: \(runtime.rawValue), method: \(watchMethod))")
-            let params = SessionWatchParams(sessionId: sessionId, agentType: runtime.rawValue)
-            let _: SessionWatchResult = try await client.request(
-                method: watchMethod,
-                params: params
-            )
-            _watchedWorkspaceId = nil
+            AppLogger.webSocket("Skipping watch RPC - target already watched by another owner (session=\(sessionId), runtime=\(runtime.rawValue))")
         }
 
-        _watchedSessionId = sessionId
-        _watchedRuntime = runtime
+        assignWatchTarget(target, ownerId: ownerId)
+        _watchedSessionId = target.sessionId
+        _watchedWorkspaceId = target.workspaceId
+        _watchedRuntime = target.runtime
     }
 
     /// Stop watching the current session
     /// - Throws: Connection or encoding errors
-    func unwatchSession() async throws {
-        guard _watchedSessionId != nil else {
-            AppLogger.webSocket("Not watching any session")
+    func unwatchSession(sessionId: String?, ownerId: String?) async throws {
+        let targetsToUnwatch = removeWatchTargets(ownerId: ownerId, sessionId: sessionId)
+
+        guard !targetsToUnwatch.isEmpty else {
+            syncWatchedStateFromTrackedTargets()
+            AppLogger.webSocket("No matching watch target to unwatch (owner=\(watchOwnerId(ownerId)), session=\(sessionId ?? "nil"))")
             return
         }
 
-        // Clear watched session ID immediately to prevent race conditions
-        let previousSessionId = _watchedSessionId
-        let previousRuntime = _watchedRuntime
-        _watchedSessionId = nil
-        _watchedWorkspaceId = nil
-        _watchedRuntime = nil
-
-        // Only send unwatch if connected
+        // Only send unwatch requests if connected.
         guard isConnected else {
-            AppLogger.webSocket("Cleared local watch state (disconnected)")
+            syncWatchedStateFromTrackedTargets()
+            AppLogger.webSocket("Cleared local watch ownership while disconnected")
             return
         }
 
         let client = getJSONRPCClient()
-        let runtime = previousRuntime ?? AgentRuntime.defaultRuntime
-        let unwatchMethod = runtime.unwatchMethodName
 
-        if runtime.usesWorkspaceScopedUnwatchMethod {
-            AppLogger.webSocket("Stopping workspace watch for session: \(previousSessionId ?? "unknown") (runtime: \(runtime.rawValue), method: \(unwatchMethod))")
-            let params = WorkspaceSessionUnwatchParams(agentType: runtime.rawValue)
-            let _: WorkspaceSessionUnwatchResult = try await client.request(
-                method: unwatchMethod,
-                params: params
-            )
-        } else {
-            AppLogger.webSocket("Stopping runtime watch for session: \(previousSessionId ?? "unknown") (runtime: \(runtime.rawValue), method: \(unwatchMethod))")
-            let _: SessionUnwatchResult = try await client.request(
-                method: unwatchMethod,
-                params: SessionUnwatchParams(agentType: runtime.rawValue)
-            )
+        for target in targetsToUnwatch {
+            let runtime = target.runtime
+            let unwatchMethod = runtime.unwatchMethodName
+
+            if runtime.usesWorkspaceScopedUnwatchMethod {
+                AppLogger.webSocket("Stopping workspace watch for session: \(target.sessionId) (runtime: \(runtime.rawValue), method: \(unwatchMethod))")
+                let params = WorkspaceSessionUnwatchParams(
+                    agentType: runtime.rawValue,
+                    sessionId: target.sessionId
+                )
+                let _: WorkspaceSessionUnwatchResult = try await client.request(
+                    method: unwatchMethod,
+                    params: params
+                )
+            } else {
+                AppLogger.webSocket("Stopping runtime watch for session: \(target.sessionId) (runtime: \(runtime.rawValue), method: \(unwatchMethod))")
+                let _: SessionUnwatchResult = try await client.request(
+                    method: unwatchMethod,
+                    params: SessionUnwatchParams(
+                        agentType: runtime.rawValue,
+                        sessionId: target.sessionId
+                    )
+                )
+            }
         }
+
+        syncWatchedStateFromTrackedTargets()
     }
 }
 

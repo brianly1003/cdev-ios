@@ -182,9 +182,15 @@ final class PairingViewModel: ObservableObject {
             Haptics.success()
         } catch {
             let appError = error as? AppError ?? .connectionFailed(underlying: error)
+            let isPairingFailure: Bool
+            if case .pairingFailed = appError {
+                isPairingFailure = true
+            } else {
+                isPairingFailure = false
+            }
 
             // Handle authentication errors specially
-            if appError.isAuthenticationError {
+            if appError.isAuthenticationError || isPairingFailure {
                 handleAuthenticationError(appError)
             } else {
                 self.error = appError
@@ -212,6 +218,9 @@ final class PairingViewModel: ObservableObject {
             showTokenExpiredAlert = true
         case .httpRequestFailed(let statusCode, _) where statusCode == 401 || statusCode == 403:
             tokenExpiredMessage = "Authentication failed (HTTP \(statusCode)).\n\nPlease refresh the QR code on your computer and scan again."
+            showTokenExpiredAlert = true
+        case .pairingFailed(let reason):
+            tokenExpiredMessage = "\(reason)\n\nPlease refresh the QR code and try again."
             showTokenExpiredAlert = true
         default:
             self.error = error
