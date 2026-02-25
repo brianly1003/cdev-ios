@@ -68,6 +68,7 @@ struct cdevApp: App {
 
         switch phase {
         case .active:
+            Haptics.prepare()
             // App is in foreground - check and reconnect if needed
             webSocketService.handleAppDidBecomeActive()
         case .inactive:

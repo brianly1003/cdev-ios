@@ -770,8 +770,14 @@ extension ChatElement {
     static func from(payload: ClaudeMessagePayload) -> [ChatElement] {
         var elements: [ChatElement] = []
 
+        // Meta/injected messages are transport artifacts and should never render in chat.
+        if payload.messageKind == .meta {
+            return elements
+        }
+
         // Use unified accessors for role and content
         let effectiveRole = payload.effectiveRole
+        let role = effectiveRole ?? payload.type ?? ""
         guard let effectiveContent = payload.effectiveContent else { return elements }
 
         // Get model from payload or message level
@@ -804,13 +810,13 @@ extension ChatElement {
         }
 
         // Skip internal Claude Code caveat messages (not user-facing)
-        let textContent = effectiveContent.textContent
+        let textContent = effectiveContent.textContent(forRole: role)
         if ChatContentFilter.shouldHideInternalMessage(textContent) {
             return elements
         }
 
         // User message - may be simple text or contain tool_result blocks
-        if effectiveRole == "user" {
+        if role == "user" {
             // Use timestamp-based ID for deduplication when uuid is nil
             // Same content + same timestamp = deduplicated (streaming duplicates)
             // Same content + different timestamp = both shown (repeated commands)
@@ -844,14 +850,26 @@ extension ChatElement {
 
             case .blocks(let blocks):
                 for (index, block) in blocks.enumerated() {
-                    let blockId = block.effectiveId.isEmpty ? "\(baseId)-\(index)" : block.effectiveId
-
                     switch block.type {
                     case "tool_result":
-                        // Tool result in user message (e.g., Bash output)
-                        if let element = createToolResultElement(from: block, blockId: blockId, timestamp: timestamp) {
-                            elements.append(element)
-                        }
+                        // User role tool_result: show as collapsible tool result (not chat bubble)
+                        let rawText = block.content ?? block.text ?? ""
+                        let displayText = ChatContentFilter.normalizedUserText(rawText)
+                        guard !displayText.isEmpty else { continue }
+                        let lines = displayText.components(separatedBy: "\n")
+                        let summary = lines.prefix(3).joined(separator: "\n")
+                        elements.append(ChatElement(
+                            id: "\(baseId)-tool-result-\(index)",
+                            type: .toolResult,
+                            timestamp: timestamp,
+                            content: .toolResult(ToolResultContent(
+                                toolCallId: block.toolUseId ?? "",
+                                toolName: block.effectiveName ?? "",
+                                isError: block.isError ?? false,
+                                summary: summary,
+                                fullContent: displayText
+                            ))
+                        ))
 
                     case "text":
                         // Text block in user message
@@ -986,6 +1004,8 @@ extension ChatElement {
                         // For tools with large text payloads, capture full content for expandable UI.
                         let fullContent: String?
                         switch toolName {
+                        case "Bash":
+                            fullContent = params["command"]
                         case "Write":
                             fullContent = params["content"]
                         case "apply_patch":
@@ -1122,11 +1142,30 @@ private func formatToolDisplay(tool: String, params: [String: String]) -> String
         return "Applied patch"
 
     case "Bash":
+        let desc = params["description"]
         if let cmd = params["command"] {
-            let truncated = cmd.count > 60 ? String(cmd.prefix(60)) + "..." : cmd
+            // Show description + command preview like Claude Code CLI
+            let lines = cmd.components(separatedBy: "\n").filter { !$0.isEmpty }
+            let previewLines = lines.prefix(3)
+            let preview = previewLines.joined(separator: "\n    ")
+            let truncated = lines.count > 3 ? "\(preview)…" : preview
+            if let desc = desc, !desc.isEmpty {
+                return "\(tool)(\(desc)\n    \(truncated))"
+            }
             return "\(tool)(\(truncated))"
         }
-    case "Read", "Write":
+        if let desc = desc, !desc.isEmpty {
+            return "\(tool)(\(desc))"
+        }
+    case "Read":
+        if let path = params["file_path"] {
+            let count = params["limit"].flatMap { "\($0) lines" }
+            if let count = count {
+                return "Reading \(path) (\(count))"
+            }
+            return "Reading \(path)"
+        }
+    case "Write":
         if let path = params["file_path"] {
             return "\(tool)(\(path))"
         }
@@ -1134,8 +1173,20 @@ private func formatToolDisplay(tool: String, params: [String: String]) -> String
         if let path = params["file_path"] {
             return "\(tool)(\(path))"
         }
-    case "Glob", "Grep":
+    case "Glob":
         if let pattern = params["pattern"] {
+            let path = params["path"]
+            if let path = path, !path.isEmpty {
+                return "\(tool)(pattern: \"\(pattern)\", path: \(path))"
+            }
+            return "\(tool)(pattern: \"\(pattern)\")"
+        }
+    case "Grep":
+        if let pattern = params["pattern"] {
+            let path = params["path"]
+            if let path = path, !path.isEmpty {
+                return "\(tool)(pattern: \"\(pattern)\", path: \(path))"
+            }
             return "\(tool)(pattern: \"\(pattern)\")"
         }
     default:
@@ -1199,6 +1250,11 @@ extension ChatElement {
     static func from(sessionMessage: SessionMessagesResponse.SessionMessage) -> (elements: [ChatElement], editToolIds: Set<String>) {
         var elements: [ChatElement] = []
         var editToolIds: Set<String> = []
+
+        // Meta/injected messages are not part of user-visible conversation history.
+        if sessionMessage.messageKind == .meta {
+            return (elements, editToolIds)
+        }
 
         // Parse timestamp
         let timestamp: Date
@@ -1316,6 +1372,8 @@ extension ChatElement {
                         // For tools with large text payloads, capture full content for expandable UI.
                         let fullContent: String?
                         switch toolName {
+                        case "Bash":
+                            fullContent = params["command"]
                         case "Write":
                             fullContent = params["content"]
                         case "apply_patch":
@@ -1340,25 +1398,44 @@ extension ChatElement {
                     }
 
                 case "tool_result":
-                    // Will be filtered at the call site if it's an Edit tool_result
                     let resultContent = block.content ?? block.text ?? ""
-                    let isError = block.isError ?? false
-                    let lines = resultContent.components(separatedBy: "\n")
-                    let summary = lines.prefix(3).joined(separator: "\n")
-                    let toolResultId = (block.toolUseId ?? blockId) + "-result"
-
-                    elements.append(ChatElement(
-                        id: toolResultId,
-                        type: .toolResult,
-                        timestamp: timestamp,
-                        content: .toolResult(ToolResultContent(
-                            toolCallId: block.toolUseId ?? "",
-                            toolName: block.name ?? "",
-                            isError: isError,
-                            summary: summary,
-                            fullContent: resultContent
+                    if sessionMessage.type == "user" {
+                        let displayText = ChatContentFilter.normalizedUserText(resultContent)
+                        guard !displayText.isEmpty else { continue }
+                        let lines = displayText.components(separatedBy: "\n")
+                        let summary = lines.prefix(3).joined(separator: "\n")
+                        elements.append(ChatElement(
+                            id: "\(baseId)-tool-result-\(index)",
+                            type: .toolResult,
+                            timestamp: timestamp,
+                            content: .toolResult(ToolResultContent(
+                                toolCallId: block.toolUseId ?? "",
+                                toolName: block.name ?? "",
+                                isError: block.isError ?? false,
+                                summary: summary,
+                                fullContent: displayText
+                            ))
                         ))
-                    ))
+                    } else {
+                        // Will be filtered at the call site if it's an Edit tool_result
+                        let isError = block.isError ?? false
+                        let lines = resultContent.components(separatedBy: "\n")
+                        let summary = lines.prefix(3).joined(separator: "\n")
+                        let toolResultId = (block.toolUseId ?? blockId) + "-result"
+
+                        elements.append(ChatElement(
+                            id: toolResultId,
+                            type: .toolResult,
+                            timestamp: timestamp,
+                            content: .toolResult(ToolResultContent(
+                                toolCallId: block.toolUseId ?? "",
+                                toolName: block.name ?? "",
+                                isError: isError,
+                                summary: summary,
+                                fullContent: resultContent
+                            ))
+                        ))
+                    }
 
                 default:
                     break

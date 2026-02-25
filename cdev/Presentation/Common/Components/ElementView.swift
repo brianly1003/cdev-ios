@@ -218,6 +218,10 @@ struct ElementView: View {
                 )
                 TaskElementView(content: taskContent, searchText: searchText)
             }
+            // Bash tool with expandable command preview
+            else if content.tool == "Bash", content.fullContent != nil {
+                BashToolElementView(content: content, searchText: searchText)
+            }
             // Enhanced Write tool display with content preview
             else if content.tool == "Write", content.fullContent != nil {
                 WriteToolElementView(content: content, searchText: searchText)
@@ -341,7 +345,10 @@ struct UserInputElementView: View {
                 .foregroundStyle(promptColor)
                 .fontWeight(.bold)
 
-            if searchText.isEmpty {
+            if !isBashCommand && shouldRenderMarkdown(displayText) {
+                MarkdownTextView(text: displayText, searchText: searchText)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if searchText.isEmpty {
                 Text(displayText)
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.Log.user)
@@ -359,6 +366,22 @@ struct UserInputElementView: View {
         }
     }
 
+    private func shouldRenderMarkdown(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let inlineMarkers = ["`", "**", "__", "[", "]("]
+        if inlineMarkers.contains(where: { trimmed.contains($0) }) {
+            return true
+        }
+
+        let lineMarkers = ["#", "- ", "* ", "> ", "1. ", "2. ", "3. ", "```"]
+        return trimmed.components(separatedBy: .newlines).contains { line in
+            let normalized = line.trimmingCharacters(in: .whitespaces)
+            return lineMarkers.contains(where: { normalized.hasPrefix($0) })
+        }
+    }
+
     /// Parse text for bash-related tags
     static func parseBashTags(from text: String) -> [BashSegment] {
         var segments: [BashSegment] = []
@@ -366,9 +389,12 @@ struct UserInputElementView: View {
         var hasBashInput = false
         var hasBashOutputTags = false  // Track if we have any bash output tags (even if empty)
         var hasBashOutputContent = false  // Track if we have any non-empty bash output
+        var commandName: String?
+        var commandMessage: String?
+        var commandArgs: String?
 
         // Combined pattern for all tags
-        let combinedPattern = #"<(bash-input|bash-stdout|bash-stderr|local-command-stdout|command-name)>([\s\S]*?)</\1>"#
+        let combinedPattern = #"<(bash-input|bash-stdout|bash-stderr|local-command-stdout|command-message|command-name|command-args)>([\s\S]*?)</\1>"#
         guard let regex = try? NSRegularExpression(pattern: combinedPattern, options: []) else {
             return [.text(text)]
         }
@@ -394,14 +420,14 @@ struct UserInputElementView: View {
                     segments.append(.bashInput(content))
                 case "bash-stdout":
                     hasBashOutputTags = true
-                    // Skip empty stdout to avoid empty ⎿ lines
+                    // Skip empty stdout to avoid empty tree-prefix lines
                     if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         hasBashOutputContent = true
                         segments.append(.bashStdout(content))
                     }
                 case "bash-stderr":
                     hasBashOutputTags = true
-                    // Skip empty stderr to avoid empty ⎿ lines
+                    // Skip empty stderr to avoid empty tree-prefix lines
                     if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         hasBashOutputContent = true
                         segments.append(.bashStderr(content))
@@ -410,16 +436,12 @@ struct UserInputElementView: View {
                     // Strip ANSI codes from local command output
                     let cleanContent = content.replacingOccurrences(of: #"\u001b\[[0-9;]*m"#, with: "", options: .regularExpression)
                     segments.append(.localCommandStdout(cleanContent))
+                case "command-message":
+                    commandMessage = normalizedInlineText(content)
                 case "command-name":
-                    // Look for command-message that follows
-                    let afterMatch = String(remaining[Range(match.range, in: remaining)!.upperBound...])
-                    let msgPattern = #"<command-message>([\s\S]*?)</command-message>"#
-                    if let msgRegex = try? NSRegularExpression(pattern: msgPattern),
-                       let msgResult = msgRegex.firstMatch(in: afterMatch, range: NSRange(afterMatch.startIndex..., in: afterMatch)),
-                       let msgContentRange = Range(msgResult.range(at: 1), in: afterMatch) {
-                        let msgContent = String(afterMatch[msgContentRange])
-                        segments.append(.commandMessage(name: content, message: msgContent))
-                    }
+                    commandName = normalizedInlineText(content)
+                case "command-args":
+                    commandArgs = normalizedInlineText(content)
                 default:
                     break
                 }
@@ -437,12 +459,23 @@ struct UserInputElementView: View {
         if !remaining.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Skip if it's just leftover command tags
             let cleanRemaining = remaining
+                .replacingOccurrences(of: #"<command-name>[\s\S]*?</command-name>"#, with: "", options: .regularExpression)
                 .replacingOccurrences(of: #"<command-message>[\s\S]*?</command-message>"#, with: "", options: .regularExpression)
                 .replacingOccurrences(of: #"<command-args>[\s\S]*?</command-args>"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !cleanRemaining.isEmpty {
                 segments.append(.text(cleanRemaining))
             }
+        }
+
+        // Render slash command events in a single user-readable line:
+        // "/command-name command args..."
+        if let inlineCommand = inlineCommandText(
+            commandName: commandName,
+            commandMessage: commandMessage,
+            commandArgs: commandArgs
+        ) {
+            segments.append(.commandMessage(name: inlineCommand.name, message: inlineCommand.message))
         }
 
         // If we have bash input but no output content, show "(No content)"
@@ -459,6 +492,31 @@ struct UserInputElementView: View {
         }
 
         return segments.isEmpty ? [.text(text)] : segments
+    }
+
+    private static func normalizedInlineText(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func inlineCommandText(
+        commandName: String?,
+        commandMessage: String?,
+        commandArgs: String?
+    ) -> (name: String, message: String)? {
+        let fallbackName = (commandName?.isEmpty == false) ? commandName : commandMessage
+        guard var rawName = fallbackName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else {
+            return nil
+        }
+
+        if rawName.hasPrefix("/") {
+            rawName.removeFirst()
+        }
+
+        let args = commandArgs?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let inline = args.isEmpty ? rawName : "\(rawName) \(args)"
+        return (name: rawName, message: inline)
     }
 }
 
@@ -517,7 +575,7 @@ struct BashNoContentView: View {
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xxs) {
             // Tree line prefix (same as bash output)
-            Text("⎿")
+            Text("└")
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.textQuaternary)
 
@@ -566,7 +624,7 @@ struct BashOutputSegmentView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: Spacing.xxs) {
                         // Output indicator
-                        Text("⎿")
+                        Text("└")
                             .font(Typography.terminal)
                             .foregroundStyle(ColorSystem.textQuaternary)
 
@@ -630,7 +688,7 @@ struct LocalCommandOutputView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xxs) {
-            Text("⎿")
+            Text("└")
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.textQuaternary)
 
@@ -1305,7 +1363,7 @@ struct ToolCallElementView: View {
             statusIndicator
                 .padding(.top, 5)
 
-            // Tool name and params combined (no spaces around parentheses)
+            // Tool name and params (multi-line for Bash commands)
             Group {
                 if searchText.isEmpty {
                     Text(toolDisplay)
@@ -1315,7 +1373,7 @@ struct ToolCallElementView: View {
             }
             .font(Typography.terminal)
             .foregroundStyle(ColorSystem.Tool.name)
-            .lineLimit(2)
+            .lineLimit(5)
             .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
@@ -1383,6 +1441,107 @@ struct ToolCallElementView: View {
     }
 }
 
+// MARK: - Bash Tool View
+
+/// Bash tool display matching Claude Code CLI style:
+/// Single-line header: `Bash(command here...)` with tap-to-expand for full command.
+struct BashToolElementView: View {
+    let content: ToolCallContent
+    var searchText: String = ""
+    @State private var isExpanded = false
+
+    private var command: String {
+        content.fullContent ?? content.params["command"] ?? ""
+    }
+
+    private var commandLines: [String] {
+        command.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// Flatten multi-line command into a single line for the header
+    private var inlineCommand: String {
+        commandLines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Allow expanding when command is multi-line or long
+    private var isExpandable: Bool {
+        commandLines.count > 1 || command.count > 80
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header: ● Bash(command...) - single line, CLI style
+            Button {
+                if isExpandable {
+                    withAnimation(Animations.stateChange) {
+                        isExpanded.toggle()
+                    }
+                    Haptics.selection()
+                }
+            } label: {
+                HStack(alignment: .top, spacing: Spacing.xxs) {
+                    Circle()
+                        .fill(content.status == .running ? ColorSystem.info : ColorSystem.primary)
+                        .frame(width: 6, height: 6)
+                        .padding(.top, 5)
+
+                    (Text("Bash").fontWeight(.semibold)
+                     + Text("(\(inlineCommand))"))
+                        .font(Typography.terminal)
+                        .foregroundStyle(ColorSystem.Tool.name)
+                        .lineLimit(1)
+
+                    if content.status == .running {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                            .tint(ColorSystem.primary)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Expanded: show full multi-line command
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(commandLines.enumerated()), id: \.offset) { _, line in
+                        Group {
+                            if searchText.isEmpty {
+                                Text(line)
+                            } else {
+                                HighlightedText(line, highlighting: searchText)
+                            }
+                        }
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                    }
+
+                    Button {
+                        withAnimation(Animations.stateChange) {
+                            isExpanded = false
+                        }
+                        Haptics.selection()
+                    } label: {
+                        Text("collapse")
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textQuaternary)
+                    }
+                    .padding(.top, Spacing.xxs)
+                }
+                .padding(.leading, Spacing.md)
+                .padding(.vertical, Spacing.xxs)
+                .background(ColorSystem.terminalBgHighlight)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+        .frame(minHeight: 20)
+    }
+}
+
 // MARK: - Tool Result View
 
 /// Collapsible tool result with error state
@@ -1447,7 +1606,7 @@ struct ToolResultElementView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Preview lines with indicator
                     HStack(alignment: .top, spacing: Spacing.xxs) {
-                        Text("⎿")
+                        Text("└")
                             .font(Typography.terminal)
                             .foregroundStyle(ColorSystem.textQuaternary)
 
@@ -1799,9 +1958,9 @@ struct EditDiffElementView: View {
                 Spacer()
             }
 
-            // Second line: ⎿  Added X lines, removed Y lines
+            // Second line: └  Added X lines, removed Y lines
             HStack(spacing: Spacing.xxs) {
-                Text("⎿")
+                Text("└")
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.textQuaternary)
 
@@ -2429,34 +2588,25 @@ struct TaskElementView: View {
     let content: TaskContent
     var searchText: String = ""
 
+    /// Capitalized agent type for inline display (e.g. "Plan", "Explore")
+    private var agentName: String {
+        content.agentType.capitalized
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
                 // Status indicator
                 statusIndicator
 
-                // Task type badge
-                Text(content.agentType.uppercased())
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(ColorSystem.primary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(ColorSystem.primary.opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                // Agent(description) - single line, CLI style
+                (Text(agentName).fontWeight(.semibold)
+                 + Text("(\(content.description))"))
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.Tool.name)
+                    .lineLimit(1)
 
-                // Description
-                if searchText.isEmpty {
-                    Text(content.description)
-                        .font(Typography.terminal)
-                        .foregroundStyle(ColorSystem.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    HighlightedText(content.description, highlighting: searchText)
-                        .font(Typography.terminal)
-                        .foregroundStyle(ColorSystem.textPrimary)
-                }
-
-                Spacer()
+                Spacer(minLength: 0)
 
                 // Metadata
                 metadataView
@@ -2707,7 +2857,7 @@ struct WriteToolElementView: View {
     private func summaryContent(lines: [String], previewText: String, hasMore: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: Spacing.xxs) {
-                Text("⎿")
+                Text("└")
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.textQuaternary)
 
@@ -2914,7 +3064,7 @@ struct ApplyPatchToolElementView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .top, spacing: Spacing.xxs) {
-                Text("⎿")
+                Text("└")
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.textQuaternary)
 

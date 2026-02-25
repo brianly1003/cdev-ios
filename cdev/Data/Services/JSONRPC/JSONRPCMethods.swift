@@ -1439,7 +1439,49 @@ struct WorkspaceSessionMessage: Codable, Sendable {
         case sessionId = "session_id"
         case gitBranch = "git_branch"
         case isContextCompaction = "is_context_compaction"
+        case isContextCompactionCamel = "isContextCompaction"
         case isMeta = "is_meta"
+        case isMetaCamel = "isMeta"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(Int.self, forKey: .id)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        uuid = try container.decodeIfPresent(String.self, forKey: .uuid)
+        timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
+        gitBranch = try container.decodeIfPresent(String.self, forKey: .gitBranch)
+        message = try container.decodeIfPresent(SessionMessagesResponse.SessionMessage.MessageContent.self, forKey: .message)
+
+        if let compaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompaction) {
+            isContextCompaction = compaction
+        } else if let compaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompactionCamel) {
+            isContextCompaction = compaction
+        } else {
+            isContextCompaction = nil
+        }
+
+        if let meta = try container.decodeIfPresent(Bool.self, forKey: .isMeta) {
+            isMeta = meta
+        } else if let meta = try container.decodeIfPresent(Bool.self, forKey: .isMetaCamel) {
+            isMeta = meta
+        } else {
+            isMeta = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(uuid, forKey: .uuid)
+        try container.encodeIfPresent(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(gitBranch, forKey: .gitBranch)
+        try container.encodeIfPresent(message, forKey: .message)
+        try container.encodeIfPresent(isContextCompaction, forKey: .isContextCompaction)
+        try container.encodeIfPresent(isMeta, forKey: .isMeta)
     }
 }
 

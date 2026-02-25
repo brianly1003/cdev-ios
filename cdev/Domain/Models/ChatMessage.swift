@@ -57,7 +57,15 @@ struct ChatMessage: Identifiable, Equatable {
 
     /// Primary text content (combined text blocks)
     var textContent: String {
-        contentBlocks
+        if type == .user {
+            return contentBlocks
+                .filter { $0.type == .text || $0.type == .toolResult }
+                .map { $0.content }
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .joined(separator: "\n")
+        }
+
+        return contentBlocks
             .filter { $0.type == .text }
             .map { $0.content }
             .joined(separator: "\n")
@@ -90,7 +98,8 @@ extension ChatMessage {
     /// Create from claude_message WebSocket event payload
     static func from(payload: ClaudeMessagePayload) -> ChatMessage? {
         guard let uuid = payload.uuid,
-              let message = payload.message else { return nil }
+              let message = payload.message,
+              payload.messageKind != .meta else { return nil }
 
         // Parse timestamp
         let timestamp: Date
@@ -135,9 +144,12 @@ extension ChatMessage {
                         toolInputStr = pairs.joined(separator: "\n")
                     }
 
+                    let normalizedBlockType: ContentBlock.BlockType =
+                        (messageType == .user && blockType == .toolResult) ? .text : blockType
+
                     blocks.append(ContentBlock(
                         id: block.blockId ?? UUID().uuidString,
-                        type: blockType,
+                        type: normalizedBlockType,
                         content: block.text ?? block.content ?? "",
                         toolName: block.name,
                         toolInput: toolInputStr,
@@ -206,9 +218,12 @@ extension ChatMessage {
                         toolInputStr = pairs.joined(separator: "\n")
                     }
 
+                    let normalizedBlockType: ContentBlock.BlockType =
+                        (messageType == .user && blockType == .toolResult) ? .text : blockType
+
                     blocks.append(ContentBlock(
                         id: blockId,
-                        type: blockType,
+                        type: normalizedBlockType,
                         content: block.text ?? block.content ?? "",
                         toolName: block.name,
                         toolInput: toolInputStr,

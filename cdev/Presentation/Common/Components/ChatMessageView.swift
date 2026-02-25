@@ -150,7 +150,7 @@ private struct UserContent: View {
             EmptyView()
         } else if segs.count == 1, case .text(let rawText) = segs[0], rawText == message.textContent {
             // Plain user text — no bash tags
-            Text(message.textContent)
+            markdownAwareText(message.textContent)
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.Log.user)
                 .textSelection(.enabled)
@@ -190,6 +190,21 @@ private struct UserContent: View {
             }
         case .noContent:
             BashNoContentView()
+        }
+    }
+
+    @ViewBuilder
+    private func markdownAwareText(_ text: String) -> some View {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: .init(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) {
+            Text(attributed)
+        } else {
+            Text(text)
         }
     }
 }

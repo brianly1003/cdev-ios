@@ -114,11 +114,13 @@ extension PTYPermissionType {
     /// Human-readable display name
     var displayName: String {
         switch self {
+        case .readFile: return "Read File"
         case .writeFile: return "Write File"
         case .editFile: return "Edit File"
         case .deleteFile: return "Delete File"
         case .bashCommand: return "Command"
         case .mcpTool: return "MCP Tool"
+        case .toolUse: return "Tool Use"
         case .trustFolder: return "Trust Folder"
         case .unknown: return "Permission"
         }
@@ -386,10 +388,11 @@ struct PTYPermissionPanel: View {
             return "lock.shield.fill"
         }
         switch type {
+        case .readFile: return "doc.text.fill"
         case .writeFile, .editFile: return "doc.fill"
         case .deleteFile: return "trash.fill"
         case .bashCommand: return "terminal.fill"
-        case .mcpTool: return "puzzlepiece.fill"
+        case .mcpTool, .toolUse: return "puzzlepiece.fill"
         case .trustFolder: return "folder.fill"
         case .unknown: return "lock.shield.fill"
         }

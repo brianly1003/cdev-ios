@@ -41,7 +41,7 @@ struct SessionHistoryView: View {
                 ErrorStateView {
                     Task { await viewModel.loadMessages() }
                 }
-            } else if viewModel.messages.isEmpty {
+            } else if viewModel.chatMessages.isEmpty {
                 EmptyMessagesView()
             } else {
                 ScrollViewReader { proxy in
@@ -332,11 +332,26 @@ private struct UserMessageContent: View {
         // Strip leading "!" from text if it's a bash command (shown in role indicator)
         let displayText = isBashCommand ? String(message.textContent.dropFirst()).trimmingCharacters(in: .whitespaces) : message.textContent
 
-        Text(displayText)
+        markdownAwareText(displayText)
             .font(Typography.terminal)
             .foregroundStyle(ColorSystem.Log.user)
             .textSelection(.enabled)
             .padding(.leading, Spacing.sm)
+    }
+
+    @ViewBuilder
+    private func markdownAwareText(_ text: String) -> some View {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: .init(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) {
+            Text(attributed)
+        } else {
+            Text(text)
+        }
     }
 }
 
@@ -610,7 +625,9 @@ final class SessionHistoryViewModel: ObservableObject {
 
     /// Converted ChatMessages for unified rendering
     var chatMessages: [ChatMessage] {
-        messages.map { ChatMessage.from(sessionMessage: $0) }
+        messages
+            .filter { $0.messageKind != .meta }
+            .map { ChatMessage.from(sessionMessage: $0) }
     }
 
     init(sessionId: String, runtime: AgentRuntime, workspaceId: String?, agentRepository: AgentRepositoryProtocol) {

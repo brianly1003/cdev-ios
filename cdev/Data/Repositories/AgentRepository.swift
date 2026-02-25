@@ -558,7 +558,8 @@ final class AgentRepository: AgentRepositoryProtocol {
                 timestamp: msg.timestamp,
                 gitBranch: msg.gitBranch,
                 message: message,
-                isContextCompaction: msg.isContextCompaction
+                isContextCompaction: msg.isContextCompaction,
+                isMeta: msg.isMeta
             )
         }
 

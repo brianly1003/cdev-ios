@@ -11,7 +11,6 @@ struct SettingsView: View {
 
     // Behavior settings
     @AppStorage(Constants.UserDefaults.hapticFeedback) private var hapticFeedback = true
-    @AppStorage(Constants.UserDefaults.autoReconnect) private var autoReconnect = true
 
     @State private var showClearDataConfirm = false
     @State private var showThemePicker = false
@@ -55,12 +54,6 @@ struct SettingsView: View {
                                 icon: "iphone.radiowaves.left.and.right",
                                 title: "Haptic Feedback",
                                 isOn: $hapticFeedback
-                            )
-
-                            SettingsToggleRow(
-                                icon: "arrow.triangle.2.circlepath",
-                                title: "Auto-Reconnect",
-                                isOn: $autoReconnect
                             )
                         }
 

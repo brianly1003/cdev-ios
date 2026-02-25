@@ -24,9 +24,6 @@ protocol SessionStorageProtocol {
 
 /// Protocol for app settings storage
 protocol SettingsStorageProtocol {
-    /// Auto-reconnect enabled
-    var autoReconnect: Bool { get set }
-
     /// Show timestamps in logs
     var showTimestamps: Bool { get set }
 

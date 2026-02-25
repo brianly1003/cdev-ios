@@ -537,12 +537,16 @@ struct SessionMessagesResponse: Codable {
         let gitBranch: String?
         let message: MessageContent
         let isContextCompaction: Bool?
+        let isMeta: Bool?
 
         enum CodingKeys: String, CodingKey {
             case type, uuid, timestamp, message
             case sessionId = "session_id"
             case gitBranch = "git_branch"
             case isContextCompaction = "is_context_compaction"
+            case isContextCompactionCamel = "isContextCompaction"
+            case isMeta = "is_meta"
+            case isMetaCamel = "isMeta"
         }
 
         /// Memberwise initializer for programmatic creation (e.g., from RPC)
@@ -553,7 +557,8 @@ struct SessionMessagesResponse: Codable {
             timestamp: String? = nil,
             gitBranch: String? = nil,
             message: MessageContent,
-            isContextCompaction: Bool? = nil
+            isContextCompaction: Bool? = nil,
+            isMeta: Bool? = nil
         ) {
             self.type = type
             self.uuid = uuid
@@ -562,6 +567,68 @@ struct SessionMessagesResponse: Codable {
             self.gitBranch = gitBranch
             self.message = message
             self.isContextCompaction = isContextCompaction
+            self.isMeta = isMeta
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+
+            let decodedIsContextCompaction: Bool?
+            if let compaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompaction) {
+                decodedIsContextCompaction = compaction
+            } else if let compaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompactionCamel) {
+                decodedIsContextCompaction = compaction
+            } else {
+                decodedIsContextCompaction = nil
+            }
+
+            let decodedIsMeta: Bool?
+            if let meta = try container.decodeIfPresent(Bool.self, forKey: .isMeta) {
+                decodedIsMeta = meta
+            } else if let meta = try container.decodeIfPresent(Bool.self, forKey: .isMetaCamel) {
+                decodedIsMeta = meta
+            } else {
+                decodedIsMeta = nil
+            }
+
+            self.init(
+                type: try container.decode(String.self, forKey: .type),
+                uuid: try container.decodeIfPresent(String.self, forKey: .uuid),
+                sessionId: try container.decodeIfPresent(String.self, forKey: .sessionId),
+                timestamp: try container.decodeIfPresent(String.self, forKey: .timestamp),
+                gitBranch: try container.decodeIfPresent(String.self, forKey: .gitBranch),
+                message: try container.decode(MessageContent.self, forKey: .message),
+                isContextCompaction: decodedIsContextCompaction,
+                isMeta: decodedIsMeta
+            )
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(type, forKey: .type)
+            try container.encodeIfPresent(uuid, forKey: .uuid)
+            try container.encodeIfPresent(sessionId, forKey: .sessionId)
+            try container.encodeIfPresent(timestamp, forKey: .timestamp)
+            try container.encodeIfPresent(gitBranch, forKey: .gitBranch)
+            try container.encode(message, forKey: .message)
+            try container.encodeIfPresent(isContextCompaction, forKey: .isContextCompaction)
+            try container.encodeIfPresent(isMeta, forKey: .isMeta)
+        }
+
+        enum MessageKind {
+            case regular
+            case contextCompaction
+            case meta
+        }
+
+        var messageKind: MessageKind {
+            if isMeta == true {
+                return .meta
+            }
+            if isContextCompaction == true {
+                return .contextCompaction
+            }
+            return .regular
         }
 
         /// Nested message content
@@ -614,6 +681,122 @@ struct SessionMessagesResponse: Codable {
                     case type, text, name, content, id, input
                     case toolUseId = "tool_use_id"
                     case isError = "is_error"
+                }
+
+                init(from decoder: Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    self.type = try container.decode(String.self, forKey: .type)
+                    self.text = Self.decodeFlexibleText(from: container, forKey: .text)
+                    self.toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
+                    self.id = try container.decodeIfPresent(String.self, forKey: .id)
+                    self.name = try container.decodeIfPresent(String.self, forKey: .name)
+                    self.content = Self.decodeFlexibleText(from: container, forKey: .content)
+                    self.input = try container.decodeIfPresent([String: AnyCodableValue].self, forKey: .input)
+                    self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
+                }
+
+                private static func decodeFlexibleText(
+                    from container: KeyedDecodingContainer<CodingKeys>,
+                    forKey key: CodingKeys
+                ) -> String? {
+                    if let value = try? container.decode(String.self, forKey: key) {
+                        return meaningfulText(value)
+                    }
+                    if let value = try? container.decode(Int.self, forKey: key) {
+                        return String(value)
+                    }
+                    if let value = try? container.decode(Double.self, forKey: key) {
+                        return value.rounded() == value ? String(Int(value)) : String(value)
+                    }
+                    if let value = try? container.decode(Bool.self, forKey: key) {
+                        return String(value)
+                    }
+                    if let value = try? container.decode(JSONValue.self, forKey: key) {
+                        return meaningfulText(value.flattenedText)
+                    }
+                    return nil
+                }
+
+                private static func meaningfulText(_ value: String?) -> String? {
+                    guard let value else { return nil }
+                    return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+                }
+
+                private enum JSONValue: Decodable {
+                    case string(String)
+                    case int(Int)
+                    case double(Double)
+                    case bool(Bool)
+                    case object([String: JSONValue])
+                    case array([JSONValue])
+                    case null
+
+                    private static let preferredTextKeys = ["text", "content", "message", "output", "result", "stdout", "stderr"]
+                    private static let ignoredMetadataKeys: Set<String> = [
+                        "type", "id", "tool_use_id", "tool_id", "tool_name", "name", "is_error", "error"
+                    ]
+
+                    init(from decoder: Decoder) throws {
+                        let container = try decoder.singleValueContainer()
+                        if container.decodeNil() {
+                            self = .null
+                        } else if let value = try? container.decode(String.self) {
+                            self = .string(value)
+                        } else if let value = try? container.decode(Int.self) {
+                            self = .int(value)
+                        } else if let value = try? container.decode(Double.self) {
+                            self = .double(value)
+                        } else if let value = try? container.decode(Bool.self) {
+                            self = .bool(value)
+                        } else if let value = try? container.decode([String: JSONValue].self) {
+                            self = .object(value)
+                        } else if let value = try? container.decode([JSONValue].self) {
+                            self = .array(value)
+                        } else {
+                            self = .null
+                        }
+                    }
+
+                    var flattenedText: String? {
+                        switch self {
+                        case .string(let value):
+                            return value
+                        case .int(let value):
+                            return String(value)
+                        case .double(let value):
+                            return value.rounded() == value ? String(Int(value)) : String(value)
+                        case .bool(let value):
+                            return String(value)
+                        case .array(let values):
+                            let pieces = values.compactMap { Self.meaningfulText($0.flattenedText) }
+                            return pieces.isEmpty ? nil : pieces.joined(separator: "\n")
+                        case .object(let values):
+                            var pieces: [String] = []
+
+                            for key in Self.preferredTextKeys {
+                                if let value = values[key], let text = Self.meaningfulText(value.flattenedText) {
+                                    pieces.append(text)
+                                }
+                            }
+                            if !pieces.isEmpty {
+                                return pieces.joined(separator: "\n")
+                            }
+
+                            for key in values.keys.sorted() where !Self.ignoredMetadataKeys.contains(key) {
+                                if let text = Self.meaningfulText(values[key]?.flattenedText) {
+                                    pieces.append(text)
+                                }
+                            }
+                            return pieces.isEmpty ? nil : pieces.joined(separator: "\n")
+                        case .null:
+                            return nil
+                        }
+                    }
+
+                    private static func meaningfulText(_ value: String?) -> String? {
+                        guard let value else { return nil }
+                        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+                    }
                 }
             }
 
@@ -683,7 +866,7 @@ struct SessionMessagesResponse: Codable {
                 }
             }
 
-            /// Extract text content from either format
+            /// Extract text content from either format (assistant-focused default)
             var textContent: String {
                 switch self {
                 case .string(let str):
@@ -695,11 +878,38 @@ struct SessionMessagesResponse: Codable {
                         .joined(separator: "\n")
                 }
             }
+
+            /// Extract text content for a specific role.
+            /// User messages may carry markdown inside tool_result blocks.
+            func textContent(forRole role: String) -> String {
+                switch self {
+                case .string(let str):
+                    return str
+                case .blocks(let blocks):
+                    if role == "user" {
+                        return blocks
+                            .compactMap { block in
+                                if let text = block.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    return text
+                                }
+                                if let content = block.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    return content
+                                }
+                                return nil
+                            }
+                            .joined(separator: "\n")
+                    }
+                    return blocks
+                        .filter { $0.type == "text" }
+                        .compactMap { $0.text }
+                        .joined(separator: "\n")
+                }
+            }
         }
 
         /// Get the text content for display
         var textContent: String {
-            message.content?.textContent ?? ""
+            message.content?.textContent(forRole: role) ?? ""
         }
 
         /// Get the role

@@ -1584,6 +1584,11 @@ final class DashboardViewModel: ObservableObject {
             var editToolIds: Set<String> = []
 
             for message in response.messages.reversed() {
+                if message.messageKind == .meta {
+                    AppLogger.log("[Dashboard] loadMoreMessages skipping meta message: \(message.id)")
+                    continue
+                }
+
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
@@ -1736,6 +1741,11 @@ final class DashboardViewModel: ObservableObject {
             // Reverse messages since API returns desc (newest first) but UI shows oldest at top
             // Use instance seenElementIds (already cleared above)
             for message in messagesResponse.messages.reversed() {
+                if message.messageKind == .meta {
+                    AppLogger.log("[Dashboard] resumeSession skipping meta message: \(message.id)")
+                    continue
+                }
+
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                 }
@@ -2548,6 +2558,11 @@ final class DashboardViewModel: ObservableObject {
             var editToolIds: Set<String> = []
             // Use instance seenElementIds (already cleared above for new session)
             for (index, message) in chronologicalMessages.enumerated() {
+                if message.messageKind == .meta {
+                    AppLogger.log("[Dashboard] history load skipping meta message: \(message.id)")
+                    continue
+                }
+
                 if let entry = LogEntry.from(sessionMessage: message, sessionId: sessionId) {
                     await logCache.add(entry)
                     entriesAdded += 1
@@ -2818,6 +2833,11 @@ final class DashboardViewModel: ObservableObject {
                     return
                 }
 
+                if payload.messageKind == .meta {
+                    AppLogger.log("[Dashboard] Skipping meta claude_message (uuid: \(payload.uuid ?? "nil"))")
+                    return
+                }
+
                 // Structured messages are flowing for this session - disable PTY fallback
                 hasReceivedClaudeMessageForSession = true
 
@@ -2826,7 +2846,7 @@ final class DashboardViewModel: ObservableObject {
                 // Skip user message echoes from real-time events (already shown optimistically)
                 // BUT ONLY skip messages sent by THIS CLIENT, not from other clients (e.g., Claude Code CLI)
                 // ALWAYS show bash mode OUTPUT (stdout/stderr) which is server-generated
-                let textContent = payload.effectiveContent?.textContent ?? ""
+                let textContent = payload.effectiveContent?.textContent(forRole: payload.effectiveRole ?? payload.type ?? "") ?? ""
                 if ChatContentFilter.shouldHideInternalMessage(textContent) {
                     AppLogger.log("[Dashboard] Skipping internal caveat claude_message")
                     return
@@ -2961,6 +2981,24 @@ final class DashboardViewModel: ObservableObject {
             }
 
         case .claudeLog:
+            if case .claudeLog(let payload) = event.payload,
+               let progressPayload = parseClaudeMessageFromProgressLogLine(
+                payload.line,
+                fallbackSessionId: payload.sessionId ?? event.sessionId
+               ) {
+                let synthesizedEvent = AgentEvent(
+                    id: "\(event.id)-progress",
+                    type: .claudeMessage,
+                    payload: .claudeMessage(progressPayload),
+                    timestamp: event.timestamp,
+                    workspaceId: event.workspaceId,
+                    sessionId: progressPayload.sessionId ?? event.sessionId,
+                    agentType: event.agentType ?? AgentRuntime.claude.rawValue
+                )
+                await handleEvent(synthesizedEvent)
+                return
+            }
+
             // In interactive PTY mode, skip claude_log processing entirely
             // PTY mode uses pty_output/pty_permission events instead
             // claude_message events are still used for UI display
@@ -3045,11 +3083,11 @@ final class DashboardViewModel: ObservableObject {
 
         case .claudeWaiting:
             pendingInteraction = PendingInteraction.fromWaiting(event: event)
-            Haptics.warning()
+            Haptics.permissionAlert()
 
         case .claudePermission:
             pendingInteraction = PendingInteraction.fromPermission(event: event)
-            Haptics.warning()
+            Haptics.permissionAlert()
 
         case .ptyPermission:
             // PTY mode permission prompt with options
@@ -3061,7 +3099,7 @@ final class DashboardViewModel: ObservableObject {
                options.allSatisfy({ isValidPTYOptionKey($0.key) }) {
                 pendingInteraction = PendingInteraction.fromPTYPermission(event: event)
                 agentState = .waiting  // Update state to show waiting indicator
-                Haptics.warning()
+                Haptics.permissionAlert()
 
                 // Check if this is a trust_folder permission - session APIs won't work until approved
                 // Also mark as pending temp session since session_id_resolved will provide real ID
@@ -3918,10 +3956,15 @@ final class DashboardViewModel: ObservableObject {
 
     /// Events that should not be blocked by runtime routing.
     /// session_id_failed may be emitted without agent_type but still needs immediate UI recovery.
+    /// ptyPermission bypasses only when agent_type is missing (server omits it);
+    /// when agent_type IS present, matchesRuntime handles tab isolation correctly.
     private func shouldBypassRuntimeRouting(for event: AgentEvent) -> Bool {
         switch event.type {
         case .sessionIdFailed, .sessionIdResolved, .ptyPermissionResolved:
             return true
+        case .ptyPermission:
+            // Only bypass when server omits agent_type; respect routing when present
+            return event.agentType == nil || event.agentType?.isEmpty == true
         default:
             return false
         }
@@ -4067,24 +4110,15 @@ final class DashboardViewModel: ObservableObject {
                         ))
                     }
                 case .toolResult:
-                    // Tool result from user message (command output)
-                    // Skip empty tool results
-                    guard !block.content.isEmpty else { continue }
-                    let lines = block.content.components(separatedBy: "\n")
-                    let summary = lines.prefix(3).joined(separator: "\n")
-                    // Use block.id + "_result" suffix to avoid collision with tool_use
-                    let uniqueId = "\(block.id)-result"
+                    // User role tool_result may carry markdown text payload.
+                    let displayText = ChatContentFilter.normalizedUserText(block.content)
+                    guard !displayText.isEmpty else { continue }
+                    let uniqueId = "\(message.id)-tool-result-\(index)"
                     elements.append(ChatElement(
                         id: uniqueId,
-                        type: .toolResult,
+                        type: .userInput,
                         timestamp: message.timestamp,
-                        content: .toolResult(ToolResultContent(
-                            toolCallId: block.id,
-                            toolName: block.toolName ?? "",
-                            isError: block.isError,
-                            summary: summary,
-                            fullContent: block.content
-                        ))
+                        content: .userInput(UserInputContent(text: displayText))
                     ))
                 default:
                     break
@@ -4177,6 +4211,82 @@ final class DashboardViewModel: ObservableObject {
         }
 
         return ""
+    }
+
+    private func parseClaudeMessageFromProgressLogLine(
+        _ line: String?,
+        fallbackSessionId: String?
+    ) -> ClaudeMessagePayload? {
+        guard let line, !line.isEmpty,
+              let data = line.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              progressString(root["type"]) == "progress",
+              let progressData = root["data"] as? [String: Any],
+              progressString(progressData["type"]) == "agent_progress",
+              let progressMessage = progressData["message"] as? [String: Any] else {
+            return nil
+        }
+
+        var payloadDict: [String: Any] = [:]
+        let nestedMessage = progressMessage["message"] as? [String: Any]
+
+        if let messageType = progressString(progressMessage["type"]) ?? progressString(nestedMessage?["role"]) {
+            payloadDict["type"] = messageType
+        }
+
+        if let messageUUID = progressString(progressMessage["uuid"]) ?? progressString(root["uuid"]) {
+            payloadDict["uuid"] = messageUUID
+        }
+
+        if let messageTimestamp = progressString(progressMessage["timestamp"]) ?? progressString(root["timestamp"]) {
+            payloadDict["timestamp"] = messageTimestamp
+        }
+
+        if let sessionId = progressString(progressMessage["sessionId"])
+            ?? progressString(progressMessage["session_id"])
+            ?? progressString(root["sessionId"])
+            ?? progressString(root["session_id"])
+            ?? fallbackSessionId {
+            payloadDict["session_id"] = sessionId
+        }
+
+        if let nestedMessage {
+            payloadDict["message"] = nestedMessage
+        } else {
+            var fallbackMessage: [String: Any] = [:]
+
+            if let role = progressString(progressMessage["role"]) {
+                fallbackMessage["role"] = role
+            }
+            if let content = progressMessage["content"] {
+                fallbackMessage["content"] = content
+            }
+            if let model = progressString(progressMessage["model"]) {
+                fallbackMessage["model"] = model
+            }
+
+            if !fallbackMessage.isEmpty {
+                payloadDict["message"] = fallbackMessage
+            }
+        }
+
+        guard JSONSerialization.isValidJSONObject(payloadDict),
+              let payloadData = try? JSONSerialization.data(withJSONObject: payloadDict),
+              let payload = try? JSONDecoder().decode(ClaudeMessagePayload.self, from: payloadData),
+              payload.effectiveRole != nil,
+              payload.effectiveContent != nil else {
+            return nil
+        }
+
+        return payload
+    }
+
+    private func progressString(_ value: Any?) -> String? {
+        guard let value else { return nil }
+        guard !(value is NSNull) else { return nil }
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Extract normalized thinking text from structured claude_message payload.
@@ -4556,19 +4666,9 @@ final class DashboardViewModel: ObservableObject {
         return shouldHideToolElementFromChatList(element)
     }
 
-    /// Hide tool rows from chat list for non-Codex runtimes.
-    /// Codex should keep tool rows (Ran/Added/Updated) to match CLI behavior.
-    private func shouldHideToolElementFromChatList(_ element: ChatElement) -> Bool {
-        if selectedSessionRuntime == .codex {
-            return false
-        }
-
-        switch element.type {
-        case .toolCall, .task, .toolResult:
-            return true
-        default:
-            return false
-        }
+    /// Tool rows should stay visible across runtimes to match Claude Code CLI transcript style.
+    private func shouldHideToolElementFromChatList(_ _: ChatElement) -> Bool {
+        return false
     }
 
     // MARK: - Workspace Management

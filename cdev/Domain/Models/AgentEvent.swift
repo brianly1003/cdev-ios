@@ -410,6 +410,7 @@ struct ClaudeMessagePayload: Codable {
     let model: String?          // Model name (e.g., "claude-opus-4-5-20251101")
     let stopReason: String?     // cdev-agent sends stop_reason
     let isContextCompaction: Bool?  // Context compaction marker
+    let isMeta: Bool?           // Auto-generated/meta message marker (not user-visible chat)
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -423,6 +424,8 @@ struct ClaudeMessagePayload: Codable {
         case model
         case stopReason = "stop_reason"
         case isContextCompaction = "is_context_compaction"
+        case isMeta
+        case isMetaSnake = "is_meta"
     }
 
     init(from decoder: Decoder) throws {
@@ -437,6 +440,13 @@ struct ClaudeMessagePayload: Codable {
         model = try container.decodeIfPresent(String.self, forKey: .model)
         stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
         isContextCompaction = try container.decodeIfPresent(Bool.self, forKey: .isContextCompaction)
+        if let meta = try container.decodeIfPresent(Bool.self, forKey: .isMeta) {
+            isMeta = meta
+        } else if let meta = try container.decodeIfPresent(Bool.self, forKey: .isMetaSnake) {
+            isMeta = meta
+        } else {
+            isMeta = nil
+        }
 
         // Handle both sessionId and session_id
         if let sid = try container.decodeIfPresent(String.self, forKey: .sessionId) {
@@ -460,6 +470,23 @@ struct ClaudeMessagePayload: Codable {
         try container.encodeIfPresent(model, forKey: .model)
         try container.encodeIfPresent(stopReason, forKey: .stopReason)
         try container.encodeIfPresent(isContextCompaction, forKey: .isContextCompaction)
+        try container.encodeIfPresent(isMeta, forKey: .isMeta)
+    }
+
+    enum MessageKind {
+        case regular
+        case contextCompaction
+        case meta
+    }
+
+    var messageKind: MessageKind {
+        if isMeta == true {
+            return .meta
+        }
+        if isContextCompaction == true {
+            return .contextCompaction
+        }
+        return .regular
     }
 
     /// Unified access to role (from message or payload level)
@@ -522,6 +549,32 @@ struct ClaudeMessagePayload: Codable {
             }
         }
 
+        /// Extract text content for a specific role.
+        /// User messages may arrive with markdown inside tool_result content payloads.
+        func textContent(forRole role: String) -> String {
+            switch self {
+            case .text(let text):
+                return text
+            case .blocks(let blocks):
+                if role == "user" {
+                    return blocks
+                        .compactMap { block in
+                            if let text = block.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                return text
+                            }
+                            if let content = block.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                return content
+                            }
+                            return nil
+                        }
+                        .joined(separator: "\n")
+                }
+                return blocks
+                    .compactMap { $0.text }
+                    .joined(separator: "\n")
+            }
+        }
+
         /// Check if content contains thinking blocks
         var containsThinking: Bool {
             switch self {
@@ -568,6 +621,125 @@ struct ClaudeMessagePayload: Codable {
             case toolUseId = "tool_use_id"
             case content
             case isError = "is_error"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.type = try container.decode(String.self, forKey: .type)
+            self.text = Self.decodeFlexibleText(from: container, forKey: .text)
+            self.blockId = try container.decodeIfPresent(String.self, forKey: .blockId)
+            self.name = try container.decodeIfPresent(String.self, forKey: .name)
+            self.input = try container.decodeIfPresent([String: AnyCodableValue].self, forKey: .input)
+            self.toolId = try container.decodeIfPresent(String.self, forKey: .toolId)
+            self.toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+            self.toolInput = try container.decodeIfPresent([String: AnyCodableValue].self, forKey: .toolInput)
+            self.toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
+            self.content = Self.decodeFlexibleText(from: container, forKey: .content)
+            self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
+        }
+
+        private static func decodeFlexibleText(
+            from container: KeyedDecodingContainer<CodingKeys>,
+            forKey key: CodingKeys
+        ) -> String? {
+            if let value = try? container.decode(String.self, forKey: key) {
+                return meaningfulText(value)
+            }
+            if let value = try? container.decode(Int.self, forKey: key) {
+                return String(value)
+            }
+            if let value = try? container.decode(Double.self, forKey: key) {
+                return value.rounded() == value ? String(Int(value)) : String(value)
+            }
+            if let value = try? container.decode(Bool.self, forKey: key) {
+                return String(value)
+            }
+            if let value = try? container.decode(JSONValue.self, forKey: key) {
+                return meaningfulText(value.flattenedText)
+            }
+            return nil
+        }
+
+        private static func meaningfulText(_ value: String?) -> String? {
+            guard let value else { return nil }
+            return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+        }
+
+        private enum JSONValue: Decodable {
+            case string(String)
+            case int(Int)
+            case double(Double)
+            case bool(Bool)
+            case object([String: JSONValue])
+            case array([JSONValue])
+            case null
+
+            private static let preferredTextKeys = ["text", "content", "message", "output", "result", "stdout", "stderr"]
+            private static let ignoredMetadataKeys: Set<String> = [
+                "type", "id", "tool_use_id", "tool_id", "tool_name", "name", "is_error", "error"
+            ]
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.singleValueContainer()
+                if container.decodeNil() {
+                    self = .null
+                } else if let value = try? container.decode(String.self) {
+                    self = .string(value)
+                } else if let value = try? container.decode(Int.self) {
+                    self = .int(value)
+                } else if let value = try? container.decode(Double.self) {
+                    self = .double(value)
+                } else if let value = try? container.decode(Bool.self) {
+                    self = .bool(value)
+                } else if let value = try? container.decode([String: JSONValue].self) {
+                    self = .object(value)
+                } else if let value = try? container.decode([JSONValue].self) {
+                    self = .array(value)
+                } else {
+                    self = .null
+                }
+            }
+
+            var flattenedText: String? {
+                switch self {
+                case .string(let value):
+                    return value
+                case .int(let value):
+                    return String(value)
+                case .double(let value):
+                    return value.rounded() == value ? String(Int(value)) : String(value)
+                case .bool(let value):
+                    return String(value)
+                case .array(let values):
+                    let pieces = values.compactMap { Self.meaningfulText($0.flattenedText) }
+                    return pieces.isEmpty ? nil : pieces.joined(separator: "\n")
+                case .object(let values):
+                    var pieces: [String] = []
+
+                    for key in Self.preferredTextKeys {
+                        if let value = values[key], let text = Self.meaningfulText(value.flattenedText) {
+                            pieces.append(text)
+                        }
+                    }
+                    if !pieces.isEmpty {
+                        return pieces.joined(separator: "\n")
+                    }
+
+                    for key in values.keys.sorted() where !Self.ignoredMetadataKeys.contains(key) {
+                        if let text = Self.meaningfulText(values[key]?.flattenedText) {
+                            pieces.append(text)
+                        }
+                    }
+                    return pieces.isEmpty ? nil : pieces.joined(separator: "\n")
+                case .null:
+                    return nil
+                }
+            }
+
+            private static func meaningfulText(_ value: String?) -> String? {
+                guard let value else { return nil }
+                return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+            }
         }
 
         /// Unified access to tool ID (supports both formats)
@@ -987,11 +1159,13 @@ enum PTYState: String, Codable {
 
 /// Permission type for PTY mode permission prompts
 enum PTYPermissionType: String, Codable {
+    case readFile = "read_file"
     case writeFile = "write_file"
     case editFile = "edit_file"
     case deleteFile = "delete_file"
     case bashCommand = "bash_command"
     case mcpTool = "mcp_tool"
+    case toolUse = "tool_use"
     case trustFolder = "trust_folder"
     case unknown
 
@@ -1107,11 +1281,13 @@ struct PTYPermissionPayload: Codable {
     /// Get a compact title for the permission prompt
     var title: String {
         switch type {
+        case .readFile: return "Read File"
         case .writeFile: return "Write File"
         case .editFile: return "Edit File"
         case .deleteFile: return "Delete File"
         case .bashCommand: return "Run Command"
         case .mcpTool: return "MCP Tool"
+        case .toolUse: return "Tool Use"
         case .trustFolder: return "Trust Folder"
         case .unknown, .none: return "Permission Request"
         }

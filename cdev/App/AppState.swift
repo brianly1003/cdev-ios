@@ -372,11 +372,6 @@ final class AppState: ObservableObject {
     }
 
     private func attemptAutoReconnect() {
-        guard sessionRepository.autoReconnect else {
-            AppLogger.log("[AppState] Auto-reconnect disabled")
-            return
-        }
-
         Task {
             // New architecture: Use WorkspaceManagerService for auto-reconnect
             // Only auto-connect to the WebSocket server, don't select a specific workspace

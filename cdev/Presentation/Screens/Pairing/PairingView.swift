@@ -696,7 +696,7 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
         lastScanTime = now
 
         // Haptic feedback and stop scanning
-        AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+        Haptics.light()
         stopScanning()
 
         onCodeScanned?(code)

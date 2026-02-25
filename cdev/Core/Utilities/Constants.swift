@@ -66,7 +66,6 @@ enum Constants {
     /// UserDefaults keys
     enum UserDefaults {
         static let lastConnectedServer = "last_connected_server"
-        static let autoReconnect = "auto_reconnect"
         static let showTimestamps = "show_timestamps"
         static let hapticFeedback = "haptic_feedback"
         static let theme = "app_theme"

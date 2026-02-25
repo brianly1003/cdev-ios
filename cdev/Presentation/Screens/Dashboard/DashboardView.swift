@@ -72,19 +72,14 @@ struct DashboardView: View {
         ZStack {
             NavigationStack {
                 VStack(spacing: 0) {
-                    // Compact status bar with workspace switcher
-                    // Hide session ID when pending temp session (waiting for session_id_resolved)
-                    StatusBarView(
+                    MissionControlHeader(
                         connectionState: viewModel.connectionState,
                         agentState: viewModel.agentState,
                         repoName: viewModel.agentStatus.repoName,
                         sessionId: viewModel.isPendingTempSession ? nil : viewModel.agentStatus.sessionId,
                         isWatchingSession: viewModel.isWatchingSession,
                         onWorkspaceTap: { showWorkspaceSwitcher = true },
-                        externalSessionManager: viewModel.externalSessionManager
-                    )
-
-                    TerminalWindowsBar(
+                        externalSessionManager: viewModel.externalSessionManager,
                         windows: viewModel.windowsForCurrentWorkspace,
                         activeWindowId: viewModel.activeTerminalWindowId,
                         onCreate: {
@@ -708,6 +703,147 @@ struct DashboardView: View {
     }
 }
 
+// MARK: - Mission Control Header
+
+/// Unified top chrome that merges status + session + window controls
+/// into a single high-signal surface without changing control sizing.
+private struct MissionControlHeader: View {
+    let connectionState: ConnectionState
+    let agentState: ClaudeState
+    let repoName: String?
+    let sessionId: String?
+    let isWatchingSession: Bool
+    var onWorkspaceTap: (() -> Void)?
+    var externalSessionManager: ExternalSessionManager?
+    let windows: [TerminalWindow]
+    let activeWindowId: UUID?
+    let onCreate: () -> Void
+    let onSelect: (UUID) -> Void
+    let onClose: (UUID) -> Void
+
+    @State private var chromeFlash: Double = 0
+
+    private var chromeShadow: Color {
+        if connectionState.isConnected && (agentState == .running || isWatchingSession) {
+            return ColorSystem.primaryGlow.opacity(0.12)
+        }
+
+        if connectionState.isConnecting {
+            return ColorSystem.info.opacity(0.03)
+        }
+
+        return .clear
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            StatusBarView(
+                connectionState: connectionState,
+                agentState: agentState,
+                repoName: repoName,
+                sessionId: sessionId,
+                isWatchingSession: isWatchingSession,
+                onWorkspaceTap: onWorkspaceTap,
+                externalSessionManager: externalSessionManager,
+                isEmbeddedInMissionControl: true
+            )
+
+            Divider()
+                .background(ColorSystem.textQuaternary.opacity(0.25))
+
+            TerminalWindowsBar(
+                windows: windows,
+                activeWindowId: activeWindowId,
+                onCreate: onCreate,
+                onSelect: onSelect,
+                onClose: onClose,
+                isEmbeddedInMissionControl: true
+            )
+        }
+        .background(ColorSystem.terminalBgElevated)
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [
+                    ColorSystem.primary.opacity(0.05 + (chromeFlash * 0.07)),
+                    .clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 20)
+            .allowsHitTesting(false)
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(ColorSystem.primary.opacity(0.02 + (chromeFlash * 0.04)))
+                .frame(height: 1)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            Divider()
+                .background(ColorSystem.textQuaternary.opacity(0.35))
+        }
+        .shadow(color: chromeShadow, radius: 1, y: 0)
+        .onChange(of: connectionState) { oldState, newState in
+            handleConnectionTransition(from: oldState, to: newState)
+            triggerChromePulse()
+        }
+        .onChange(of: agentState) { oldState, newState in
+            handleAgentTransition(from: oldState, to: newState)
+            triggerChromePulse()
+        }
+        .animation(Animations.stateChange, value: connectionState)
+        .animation(Animations.stateChange, value: agentState)
+    }
+
+    private func triggerChromePulse() {
+        withAnimation(.easeOut(duration: Animations.Duration.fast)) {
+            chromeFlash = 1
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeInOut(duration: Animations.Duration.slow)) {
+                chromeFlash = 0
+            }
+        }
+    }
+
+    private func handleConnectionTransition(from oldState: ConnectionState, to newState: ConnectionState) {
+        guard oldState != newState else { return }
+
+        if !oldState.isConnected && newState.isConnected {
+            Haptics.success()
+            return
+        }
+
+        if oldState.isConnected && !newState.isConnected {
+            if case .failed = newState {
+                Haptics.warning()
+            } else {
+                Haptics.light()
+            }
+            return
+        }
+
+        if !oldState.isConnecting && newState.isConnecting {
+            Haptics.selection()
+        }
+    }
+
+    private func handleAgentTransition(from oldState: ClaudeState, to newState: ClaudeState) {
+        guard oldState != newState else { return }
+
+        if oldState != .running && newState == .running {
+            Haptics.selection()
+            return
+        }
+
+        if newState == .error {
+            Haptics.warning()
+        }
+    }
+}
+
 // MARK: - Pulse Terminal Status Bar
 
 struct StatusBarView: View {
@@ -718,6 +854,7 @@ struct StatusBarView: View {
     var isWatchingSession: Bool = false
     var onWorkspaceTap: (() -> Void)?
     var externalSessionManager: ExternalSessionManager?
+    var isEmbeddedInMissionControl: Bool = false
 
     @StateObject private var sessionAwareness = SessionAwarenessManager.shared
     @State private var isPulsing = false
@@ -835,7 +972,7 @@ struct StatusBarView: View {
                 .padding(.bottom, Spacing.xxs)
             }
         }
-        .background(ColorSystem.terminalBgElevated)
+        .background(isEmbeddedInMissionControl ? Color.clear : ColorSystem.terminalBgElevated)
         .onAppear {
             isPulsing = agentState == .running
         }
@@ -1599,8 +1736,10 @@ private struct TerminalWindowsBar: View {
     let onCreate: () -> Void
     let onSelect: (UUID) -> Void
     let onClose: (UUID) -> Void
+    var isEmbeddedInMissionControl: Bool = false
 
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var createButtonGlow = false
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
     private var createButtonSize: CGFloat { max(24, layout.indicatorSize - 4) }
     private var createButtonIconSize: CGFloat { max(12, layout.iconAction + 1) }
@@ -1621,6 +1760,7 @@ private struct TerminalWindowsBar: View {
                         let isActive = window.id == activeWindowId
                         HStack(spacing: 4) {
                             Button {
+                                Haptics.selection()
                                 onSelect(window.id)
                             } label: {
                                 Text(title(for: window, index: index + 1))
@@ -1633,6 +1773,7 @@ private struct TerminalWindowsBar: View {
                             .buttonStyle(.plain)
 
                             Button {
+                                Haptics.light()
                                 onClose(window.id)
                             } label: {
                                 Image(systemName: "xmark")
@@ -1650,27 +1791,55 @@ private struct TerminalWindowsBar: View {
                                         .stroke(isActive ? ColorSystem.primary.opacity(0.35) : ColorSystem.textQuaternary.opacity(0.4), lineWidth: 1)
                                 )
                         )
+                        .shadow(color: isActive ? ColorSystem.primaryGlow.opacity(0.45) : .clear, radius: 4)
+                        .animation(Animations.micro, value: isActive)
                     }
                 }
                 .padding(.horizontal, Spacing.md)
                 .padding(.vertical, 6)
             }
 
-            Button(action: onCreate) {
+            Button(action: {
+                Haptics.medium()
+                triggerCreateGlow()
+                onCreate()
+            }) {
                 Image(systemName: "plus")
                     .font(.system(size: createButtonIconSize, weight: .semibold))
                     .foregroundStyle(ColorSystem.textTertiary)
                     .frame(width: createButtonSize, height: createButtonSize)
                     .background(ColorSystem.terminalBgHighlight)
                     .clipShape(Circle())
+                    .shadow(color: createButtonGlow ? ColorSystem.primaryGlow : .clear, radius: 6)
             }
             .buttonStyle(.plain)
             .padding(.bottom, 2)
             .padding(.trailing, Spacing.md)
         }
-        .background(ColorSystem.terminalBgElevated)
+        .animation(Animations.stateChange, value: activeWindowId)
+        .animation(Animations.stateChange, value: windows.count)
+        .background(isEmbeddedInMissionControl ? Color.clear : ColorSystem.terminalBgElevated)
         .overlay(alignment: .bottom) {
-            Divider().background(ColorSystem.textQuaternary.opacity(0.35))
+            if !isEmbeddedInMissionControl {
+                Divider().background(ColorSystem.textQuaternary.opacity(0.35))
+            }
+        }
+        .onChange(of: windows.count) { oldValue, newValue in
+            if newValue > oldValue {
+                triggerCreateGlow()
+            }
+        }
+    }
+
+    private func triggerCreateGlow() {
+        withAnimation(.easeOut(duration: Animations.Duration.fast)) {
+            createButtonGlow = true
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.easeInOut(duration: Animations.Duration.slow)) {
+                createButtonGlow = false
+            }
         }
     }
 }

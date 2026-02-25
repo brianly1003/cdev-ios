@@ -47,6 +47,11 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     /// Track if we should attempt reconnection
     private var shouldAutoReconnect = true
 
+    /// Effective reconnection policy based on lifecycle/runtime state.
+    private var canAutoReconnect: Bool {
+        shouldAutoReconnect
+    }
+
     /// Flag to indicate external retry loop is in progress (e.g., WorkspaceManagerViewModel)
     /// When true, connect() won't update to .failed state on failure
     @Atomic var isExternalRetryInProgress = false
@@ -412,7 +417,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             switch self.connectionState {
             case .failed, .disconnected:
                 // Attempt to reconnect if we have connection info
-                if self.connectionInfo != nil && self.shouldAutoReconnect {
+                if self.connectionInfo != nil && self.canAutoReconnect {
                     AppLogger.webSocket("Attempting reconnection after network restore")
                     try? await self.reconnect()
                 }
@@ -501,7 +506,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
     private func scheduleFailedRetry() {
         stopFailedRetryTimer()
 
-        guard connectionInfo != nil, shouldAutoReconnect else { return }
+        guard connectionInfo != nil, canAutoReconnect else { return }
 
         // Wait 60 seconds before trying again (gives server time to restart)
         let cooldownInterval: TimeInterval = 60
@@ -525,7 +530,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
 
         guard case .failed = connectionState,
               connectionInfo != nil,
-              shouldAutoReconnect,
+              canAutoReconnect,
               isNetworkAvailable else {
             return
         }
@@ -911,7 +916,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         let savedConnectionInfo: ConnectionInfo? = reconnectLock.withLock {
             guard let info = connectionInfo,
                   !isReconnecting,
-                  shouldAutoReconnect else { return nil }
+                  canAutoReconnect else { return nil }
             isReconnecting = true
             return info
         }
@@ -922,7 +927,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         }
 
         // Loop through all attempts (fixes bug where only 1 attempt was made per call)
-        while reconnectAttempts < Constants.Network.maxReconnectAttempts && shouldAutoReconnect {
+        while reconnectAttempts < Constants.Network.maxReconnectAttempts && canAutoReconnect {
             reconnectAttempts += 1
             updateState(.reconnecting(attempt: reconnectAttempts))
 
@@ -951,7 +956,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
             // Check if we should stop (app went to background, user disconnected)
-            guard shouldAutoReconnect else {
+            guard canAutoReconnect else {
                 AppLogger.webSocket("Reconnection cancelled")
                 return
             }
@@ -1769,14 +1774,14 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         switch connectionState {
         case .connected:
             // For transient errors, go directly to reconnecting state (less alarming to user)
-            if isTransient && shouldAutoReconnect {
+            if isTransient && canAutoReconnect {
                 AppLogger.webSocket("Transient disconnect: \(errorMessage) - reconnecting silently")
                 Task {
                     try? await reconnect()
                 }
             } else {
                 updateState(.failed(reason: errorMessage))
-                if shouldAutoReconnect {
+                if canAutoReconnect {
                     Task {
                         try? await reconnect()
                     }
@@ -1784,7 +1789,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
             }
         case .connecting:
             // Connection failed during initial connect
-            if isTransient && shouldAutoReconnect {
+            if isTransient && canAutoReconnect {
                 AppLogger.webSocket("Transient connect failure: \(errorMessage) - retrying")
                 Task {
                     try? await reconnect()
@@ -1831,7 +1836,7 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
                 }
             case .failed, .disconnected:
                 // Attempt reconnection if we have connection info
-                if connectionInfo != nil && shouldAutoReconnect {
+                if connectionInfo != nil && canAutoReconnect {
                     AppLogger.webSocket("Reconnecting after foregrounding")
                     try? await reconnect()
                 }
