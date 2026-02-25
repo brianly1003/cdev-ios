@@ -66,6 +66,10 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
     // Configuration
     private let maxRecordingDuration: TimeInterval = 60  // 1 minute max
     private var recordingTimeoutTask: Task<Void, Never>?
+    private var recordingTimeoutDeadline: Date?
+    private var isAutoStopSuspended = false
+    private var suspendedSilenceState: (lastSpeechTime: Date?, hasSpeechStarted: Bool)?
+    private var suspendedTimeoutRemaining: TimeInterval?
 
     // MARK: - Initialization
 
@@ -198,6 +202,11 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
 
         // Stop any existing recording
         await stopAudioEngine()
+        stopSilenceDetection()
+        cancelRecordingTimeout()
+        isAutoStopSuspended = false
+        suspendedSilenceState = nil
+        suspendedTimeoutRemaining = nil
 
         state = .preparing
 
@@ -231,6 +240,9 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
         stopAudioLevelMonitoring()
         stopSilenceDetection()
         cancelRecordingTimeout()
+        isAutoStopSuspended = false
+        suspendedSilenceState = nil
+        suspendedTimeoutRemaining = nil
 
         // Calculate duration
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
@@ -268,9 +280,68 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
         stopAudioLevelMonitoring()
         stopSilenceDetection()
         cancelRecordingTimeout()
+        isAutoStopSuspended = false
+        suspendedSilenceState = nil
+        suspendedTimeoutRemaining = nil
         lastTranscription = ""
         state = .idle
         AppLogger.log("[AppleSpeech] Recording cancelled")
+    }
+
+    func setAutoStopSuspended(_ isSuspended: Bool) {
+        guard case .recording = state else { return }
+        guard isAutoStopSuspended != isSuspended else { return }
+
+        isAutoStopSuspended = isSuspended
+
+        if isSuspended {
+            suspendedSilenceState = (
+                lastSpeechTime: lastSpeechTime,
+                hasSpeechStarted: hasSpeechStarted
+            )
+
+            silenceTimer?.invalidate()
+            silenceTimer = nil
+
+            if let deadline = recordingTimeoutDeadline {
+                suspendedTimeoutRemaining = max(0, deadline.timeIntervalSinceNow)
+            } else {
+                suspendedTimeoutRemaining = nil
+            }
+            cancelRecordingTimeout()
+
+            AppLogger.log("[AppleSpeech] Auto-stop suspended")
+            return
+        }
+
+        if let silenceState = suspendedSilenceState {
+            lastSpeechTime = silenceState.lastSpeechTime
+            hasSpeechStarted = silenceState.hasSpeechStarted
+        } else {
+            lastSpeechTime = Date()
+            hasSpeechStarted = false
+        }
+        suspendedSilenceState = nil
+        resetSilenceTimer()
+
+        if let remaining = suspendedTimeoutRemaining {
+            if remaining > 0 {
+                startRecordingTimeout(duration: remaining)
+            } else {
+                Task { [weak self] in
+                    guard let self = self else { return }
+                    if case .recording = self.state {
+                        AppLogger.log("[AppleSpeech] Recording timeout reached")
+                        _ = try? await self.stopRecording()
+                    }
+                }
+            }
+            suspendedTimeoutRemaining = nil
+        } else {
+            startRecordingTimeout()
+        }
+
+        AppLogger.log("[AppleSpeech] Auto-stop resumed")
     }
 
     // MARK: - Private Methods - Permissions
@@ -522,13 +593,31 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
 
     // MARK: - Private Methods - Timeout
 
-    private func startRecordingTimeout() {
+    private func startRecordingTimeout(duration: TimeInterval? = nil) {
+        cancelRecordingTimeout()
+
+        let timeoutDuration = max(0, duration ?? maxRecordingDuration)
+        recordingTimeoutDeadline = Date().addingTimeInterval(timeoutDuration)
+
+        guard timeoutDuration > 0 else {
+            Task { [weak self] in
+                guard let self = self else { return }
+                if case .recording = self.state {
+                    AppLogger.log("[AppleSpeech] Recording timeout reached")
+                    _ = try? await self.stopRecording()
+                }
+            }
+            return
+        }
+
+        let timeoutNanoseconds = UInt64(timeoutDuration * 1_000_000_000)
         recordingTimeoutTask = Task { [weak self] in
             guard let self = self else { return }
 
-            try? await Task.sleep(nanoseconds: UInt64(maxRecordingDuration * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            guard !Task.isCancelled else { return }
 
-            if case .recording = self.state {
+            if case .recording = self.state, !self.isAutoStopSuspended {
                 AppLogger.log("[AppleSpeech] Recording timeout reached")
                 _ = try? await self.stopRecording()
             }
@@ -538,6 +627,7 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
     private func cancelRecordingTimeout() {
         recordingTimeoutTask?.cancel()
         recordingTimeoutTask = nil
+        recordingTimeoutDeadline = nil
     }
 }
 

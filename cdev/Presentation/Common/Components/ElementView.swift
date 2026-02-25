@@ -877,10 +877,6 @@ private struct InlineThinkingView: View {
                         .italic()
                         .foregroundStyle(ColorSystem.primary.opacity(0.7))
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(ColorSystem.primary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
 
@@ -898,10 +894,6 @@ private struct InlineThinkingView: View {
                 .italic()
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, Spacing.xs)
-                .padding(.vertical, 4)
-                .background(ColorSystem.terminalBgHighlight)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -2173,10 +2165,6 @@ struct ThinkingElementView: View {
                         .italic()
                         .foregroundStyle(ColorSystem.primary.opacity(0.7))
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(ColorSystem.primary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
 
@@ -2194,10 +2182,6 @@ struct ThinkingElementView: View {
                 .italic()
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, Spacing.xs)
-                .padding(.vertical, 4)
-                .background(ColorSystem.terminalBgHighlight)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.leading, Spacing.sm)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }

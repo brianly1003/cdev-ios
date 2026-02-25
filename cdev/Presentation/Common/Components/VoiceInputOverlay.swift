@@ -59,6 +59,12 @@ struct VoiceInputOverlay: View {
             )
             .presentationDetents([.medium])
         }
+        .onChange(of: showLanguagePicker) { _, isPresented in
+            viewModel.setAutoStopSuspended(isPresented)
+        }
+        .onDisappear {
+            viewModel.setAutoStopSuspended(false)
+        }
     }
 
     // MARK: - Status Row (Compact) - LIVE-style indicator
@@ -225,6 +231,26 @@ struct VoiceInputOverlay: View {
             }
             .buttonStyle(.plain)
 
+            if shouldShowRetryButton {
+                Button {
+                    viewModel.retryRecording()
+                    Haptics.selection()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: layout.iconMedium, weight: .semibold))
+                        .foregroundStyle(ColorSystem.primary)
+                        .frame(width: layout.buttonHeight, height: layout.buttonHeight)
+                        .background(ColorSystem.primary.opacity(0.15))
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(ColorSystem.primary.opacity(0.3), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
+            }
+
             // Main action button - full width
             Button {
                 handleMainAction()
@@ -257,6 +283,13 @@ struct VoiceInputOverlay: View {
             .disabled(viewModel.isProcessing || (!viewModel.isRecording && viewModel.currentTranscription.isEmpty))
         }
         .padding(.horizontal, layout.standardPadding)
+    }
+
+    private var shouldShowRetryButton: Bool {
+        !settings.autoSendOnSilence &&
+        !viewModel.isRecording &&
+        !viewModel.isProcessing &&
+        !viewModel.currentTranscription.isEmpty
     }
 
     private var mainButtonText: String {

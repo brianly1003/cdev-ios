@@ -574,142 +574,133 @@ private struct ElementsScrollView: View {
 
     var body: some View {
         let _ = AppLogger.log("[ElementsScrollView] Rendering \(elements.count) elements, isStreaming=\(isStreaming), hasMore=\(hasMoreMessages)")
-        ZStack(alignment: .bottom) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        // Top anchor - always present for stable scroll-to-top
-                        Color.clear
-                            .frame(height: 1)
-                            .id("top")
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // Top anchor - always present for stable scroll-to-top
+                    Color.clear
+                        .frame(height: 1)
+                        .id("top")
 
-                        // Load more indicator at top (pull down to load older messages)
-                        if hasMoreMessages {
-                            LoadMoreIndicator(isLoading: isLoadingMore)
-                                .id("loadMore")
+                    // Load more indicator at top (pull down to load older messages)
+                    if hasMoreMessages {
+                        LoadMoreIndicator(isLoading: isLoadingMore)
+                            .id("loadMore")
+                    }
+
+                    ForEach(elements) { element in
+                        ElementView(
+                            element: element,
+                            showTimestamp: showTimestamps,
+                            searchText: searchText,
+                            isCurrentMatch: element.id == currentMatchId,
+                            isMatch: isMatch(element)
+                        )
+                        .id(element.id)
+                    }
+
+                    // Streaming indicator in content flow (not overlay),
+                    // so new messages never animate behind/under it.
+                    if isStreaming {
+                        StreamingIndicatorView(message: spinnerMessage)
+                            .padding(.leading, Spacing.xxxs)
+                            .padding(.top, Spacing.xxxs)
+                            .padding(.bottom, Spacing.xxxs)
+                            .transition(.opacity)
+                    }
+
+                    // Bottom anchor - always present for stable scroll-to-bottom
+                    // Height ensures comfortable spacing below last message when auto-scrolled
+                    Color.clear
+                        .frame(height: isStreaming ? Spacing.xxxs : Spacing.md)
+                        .id("bottom")
+                }
+                .padding(.horizontal, Spacing.xs)
+                .padding(.top, Spacing.xs)
+                .padding(.bottom, isStreaming ? Spacing.xs : Spacing.xl)
+            }
+            .refreshable {
+                // Pull-to-refresh triggers load more (older messages) or refreshes latest.
+                // Use detached task to prevent cancellation when refresh gesture ends.
+                if let onLoadMore = onLoadMore {
+                    AppLogger.log("[ElementsScrollView] Pull-to-refresh triggered")
+                    didTriggerLoadMore = true  // Set flag before loading
+                    await withCheckedContinuation { continuation in
+                        Task.detached {
+                            await onLoadMore()
+                            continuation.resume()
                         }
-
-                        ForEach(elements) { element in
-                            ElementView(
-                                element: element,
-                                showTimestamp: showTimestamps,
-                                searchText: searchText,
-                                isCurrentMatch: element.id == currentMatchId,
-                                isMatch: isMatch(element)
-                            )
-                            .id(element.id)
-                        }
-
-                        // Extra padding at bottom when streaming indicator is visible
-                        if isStreaming {
-                            Color.clear
-                                .frame(height: 40)
-                        }
-
-                        // Bottom anchor - always present for stable scroll-to-bottom
-                        // Height ensures comfortable spacing below last message when auto-scrolled
-                        Color.clear
-                            .frame(height: Spacing.md)
-                            .id("bottom")
                     }
-                    .padding(.horizontal, Spacing.xs)
-                    .padding(.top, Spacing.xs)
-                    .padding(.bottom, Spacing.xl)
-                }
-                .refreshable {
-                    // Pull-to-refresh triggers load more (older messages) or refreshes latest.
-                    // Use detached task to prevent cancellation when refresh gesture ends.
-                    if let onLoadMore = onLoadMore {
-                        AppLogger.log("[ElementsScrollView] Pull-to-refresh triggered")
-                        didTriggerLoadMore = true  // Set flag before loading
-                        await withCheckedContinuation { continuation in
-                            Task.detached {
-                                await onLoadMore()
-                                continuation.resume()
-                            }
-                        }
-                        AppLogger.log("[ElementsScrollView] Load more completed")
-                    }
-                }
-                .onAppear {
-                    AppLogger.log("[ElementsScrollView] onAppear - elementsCount=\(elements.count), isLoadingMore=\(isLoadingMore), isVisible=\(isVisible)")
-                    // IMPORTANT: Skip scroll if tab is not visible
-                    // This prevents LazyVStack content disappearing bug - see handleScrollRequest docs
-                    guard isVisible else {
-                        AppLogger.log("[ElementsScrollView] Skipping onAppear scroll - tab not visible")
-                        return
-                    }
-                    // Skip auto-scroll if we're in the middle of loading more messages
-                    guard !isLoadingMore && !didTriggerLoadMore else {
-                        AppLogger.log("[ElementsScrollView] Skipping onAppear scroll during load more")
-                        return
-                    }
-                    scheduleScroll(proxy: proxy, animated: false)
-                }
-                .onDisappear {
-                    AppLogger.log("[ElementsScrollView] onDisappear - elementsCount=\(elements.count)")
-                }
-                .onChange(of: elements.count) { oldCount, newCount in
-                    // Only scroll if count actually increased and we haven't just scrolled
-                    guard newCount > oldCount, newCount != lastScrolledCount else { return }
-
-                    // Skip auto-scroll when loading older messages (pull-to-refresh)
-                    if didTriggerLoadMore {
-                        AppLogger.log("[ElementsScrollView] Skipping auto-scroll after load more (\(oldCount) -> \(newCount))")
-                        didTriggerLoadMore = false  // Reset flag after handling
-                        return
-                    }
-                    scheduleScroll(proxy: proxy, animated: true)
-                }
-                .onChange(of: isVisible) { oldVisible, newVisible in
-                    // NOTE: Do NOT auto-scroll when tab becomes visible
-                    // This preserves the user's scroll position when switching tabs
-                    AppLogger.log("[ElementsScrollView] isVisible changed - old=\(oldVisible), new=\(newVisible), elementsCount=\(elements.count)")
-                    // Previously this would schedule a scroll to bottom, but that causes
-                    // the scroll position to reset when switching tabs, which is jarring UX
-                }
-                .onChange(of: isInputFocused) { _, focused in
-                    // Auto-scroll when keyboard appears or dismisses
-                    guard !elements.isEmpty else { return }
-                    if focused {
-                        scheduleScrollForKeyboard(proxy: proxy)
-                    } else {
-                        // Re-adjust scroll when keyboard dismisses to remove extra space
-                        scheduleScrollAfterKeyboardDismiss(proxy: proxy)
-                    }
-                }
-                .onChange(of: isStreaming) { _, streaming in
-                    // Auto-scroll when streaming starts to show indicator
-                    // NOTE: Use non-animated scroll to prevent AttributeGraph cycle
-                    // The streaming indicator has its own transition animation
-                    guard streaming else { return }
-                    scheduleScroll(proxy: proxy, animated: false)
-                }
-                .onChange(of: currentMatchIndex) { _, _ in
-                    // Scroll to current search match
-                    if let matchId = currentMatchId {
-                        scrollToMatch(proxy: proxy, matchId: matchId)
-                    }
-                }
-                .onChange(of: scrollRequest) { oldValue, newValue in
-                    // Handle scroll request from floating toolkit
-                    AppLogger.log("[ElementsScrollView] scrollRequest onChange - old=\(String(describing: oldValue)), new=\(String(describing: newValue))")
-                    guard let direction = newValue else {
-                        AppLogger.log("[ElementsScrollView] scrollRequest is nil, ignoring")
-                        return
-                    }
-                    handleScrollRequest(direction: direction, proxy: proxy)
+                    AppLogger.log("[ElementsScrollView] Load more completed")
                 }
             }
+            .onAppear {
+                AppLogger.log("[ElementsScrollView] onAppear - elementsCount=\(elements.count), isLoadingMore=\(isLoadingMore), isVisible=\(isVisible)")
+                // IMPORTANT: Skip scroll if tab is not visible
+                // This prevents LazyVStack content disappearing bug - see handleScrollRequest docs
+                guard isVisible else {
+                    AppLogger.log("[ElementsScrollView] Skipping onAppear scroll - tab not visible")
+                    return
+                }
+                // Skip auto-scroll if we're in the middle of loading more messages
+                guard !isLoadingMore && !didTriggerLoadMore else {
+                    AppLogger.log("[ElementsScrollView] Skipping onAppear scroll during load more")
+                    return
+                }
+                scheduleScroll(proxy: proxy, animated: false)
+            }
+            .onDisappear {
+                AppLogger.log("[ElementsScrollView] onDisappear - elementsCount=\(elements.count)")
+            }
+            .onChange(of: elements.count) { oldCount, newCount in
+                // Only scroll if count actually increased and we haven't just scrolled
+                guard newCount > oldCount, newCount != lastScrolledCount else { return }
 
-            // Streaming indicator - fixed at bottom
-            // NOTE: Removed .animation() modifier to prevent AttributeGraph cycle
-            // The transition handles the appear/disappear animation
-            if isStreaming {
-                StreamingIndicatorView(message: spinnerMessage)
-                    .padding(.horizontal, Spacing.sm)
-                    .padding(.bottom, Spacing.xs)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                // Skip auto-scroll when loading older messages (pull-to-refresh)
+                if didTriggerLoadMore {
+                    AppLogger.log("[ElementsScrollView] Skipping auto-scroll after load more (\(oldCount) -> \(newCount))")
+                    didTriggerLoadMore = false  // Reset flag after handling
+                    return
+                }
+                scheduleScroll(proxy: proxy, animated: true)
+            }
+            .onChange(of: isVisible) { oldVisible, newVisible in
+                // NOTE: Do NOT auto-scroll when tab becomes visible
+                // This preserves the user's scroll position when switching tabs
+                AppLogger.log("[ElementsScrollView] isVisible changed - old=\(oldVisible), new=\(newVisible), elementsCount=\(elements.count)")
+                // Previously this would schedule a scroll to bottom, but that causes
+                // the scroll position to reset when switching tabs, which is jarring UX
+            }
+            .onChange(of: isInputFocused) { _, focused in
+                // Auto-scroll when keyboard appears or dismisses
+                guard !elements.isEmpty else { return }
+                if focused {
+                    scheduleScrollForKeyboard(proxy: proxy)
+                } else {
+                    // Re-adjust scroll when keyboard dismisses to remove extra space
+                    scheduleScrollAfterKeyboardDismiss(proxy: proxy)
+                }
+            }
+            .onChange(of: isStreaming) { _, streaming in
+                // Auto-scroll when streaming starts to show indicator
+                // NOTE: Use non-animated scroll to prevent AttributeGraph cycle
+                guard streaming else { return }
+                scheduleScroll(proxy: proxy, animated: false)
+            }
+            .onChange(of: currentMatchIndex) { _, _ in
+                // Scroll to current search match
+                if let matchId = currentMatchId {
+                    scrollToMatch(proxy: proxy, matchId: matchId)
+                }
+            }
+            .onChange(of: scrollRequest) { oldValue, newValue in
+                // Handle scroll request from floating toolkit
+                AppLogger.log("[ElementsScrollView] scrollRequest onChange - old=\(String(describing: oldValue)), new=\(String(describing: newValue))")
+                guard let direction = newValue else {
+                    AppLogger.log("[ElementsScrollView] scrollRequest is nil, ignoring")
+                    return
+                }
+                handleScrollRequest(direction: direction, proxy: proxy)
             }
         }
     }
@@ -967,6 +958,25 @@ private struct LogsScrollView: View {
 struct StreamingIndicatorView: View {
     var message: String?  // Custom message from pty_spinner (e.g., "Vibing…")
 
+    private var displayParts: (main: String, hint: String?) {
+        let fallback = "Thinking…"
+        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = (trimmed?.isEmpty == false) ? (trimmed ?? fallback) : fallback
+
+        // Split into:
+        // - main: "Thinking..." / "Vibing..."
+        // - hint: "(tap stop to interrupt)" (lighter)
+        if let hintStart = raw.range(of: " (") {
+            let main = String(raw[..<hintStart.lowerBound]).trimmingCharacters(in: .whitespaces)
+            let hint = String(raw[hintStart.lowerBound...]).trimmingCharacters(in: .whitespaces)
+            if !main.isEmpty, !hint.isEmpty {
+                return (main, hint)
+            }
+        }
+
+        return (raw, nil)
+    }
+
     var body: some View {
         HStack(spacing: Spacing.xs) {
             // Pulsing brain icon
@@ -975,24 +985,27 @@ struct StreamingIndicatorView: View {
                 .foregroundStyle(ColorSystem.primary)
                 .symbolEffect(.pulse)
 
-            // Show message from pty_spinner, or fallback "Thinking…" for Live mode
-            if let message = message, !message.isEmpty {
-                Text(message)
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(ColorSystem.textSecondary)
+            if let hint = displayParts.hint {
+                (
+                    Text(displayParts.main)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(ColorSystem.textSecondary)
+                    + Text(" ")
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                    + Text(hint)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                )
             } else {
-                Text("Thinking…")
-                    .font(Typography.terminalSmall)
+                Text(displayParts.main)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(ColorSystem.textSecondary)
             }
 
             Spacer()
         }
-        .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
-        .background(ColorSystem.terminalBgElevated)
-        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
-        .shadow(color: Color.black.opacity(0.2), radius: 2, y: 1)
     }
 }
 

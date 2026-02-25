@@ -59,6 +59,10 @@ protocol VoiceInputServiceProtocol: AnyObject {
 
     /// Cancel recording without result
     func cancelRecording()
+
+    /// Suspend/resume auto-stop behavior (silence detection and timeout)
+    /// while the user is interacting with overlay UI (e.g., language picker).
+    func setAutoStopSuspended(_ isSuspended: Bool)
 }
 
 // MARK: - Permission Status
@@ -105,4 +109,7 @@ extension VoiceInputServiceProtocol {
     var supportsRealtimeTranscription: Bool {
         provider.supportsRealtime
     }
+
+    /// Default no-op for providers that don't implement auto-stop suspension.
+    func setAutoStopSuspended(_ isSuspended: Bool) {}
 }

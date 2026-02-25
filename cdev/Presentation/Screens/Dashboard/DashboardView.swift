@@ -343,6 +343,7 @@ struct DashboardView: View {
                         } label: {
                             Image(systemName: "gearshape")
                         }
+                        .foregroundStyle(ColorSystem.primary)
                     }
                 }
                 .sheet(isPresented: $showDebugLogs) {
@@ -520,12 +521,10 @@ struct DashboardView: View {
             previousConnectionState = viewModel.connectionState
             viewModel.ensureWindowForCurrentWorkspace()
 
-            // Connect voice input completion to prompt text
+            // Send voice transcription immediately from overlay "Send"/auto-send actions.
             voiceInputViewModel.onTranscriptionComplete = { transcription in
-                if viewModel.promptText.isEmpty {
-                    viewModel.promptText = transcription
-                } else {
-                    viewModel.promptText += " " + transcription
+                Task {
+                    await viewModel.sendVoiceTranscription(transcription)
                 }
             }
         }
@@ -547,6 +546,16 @@ struct DashboardView: View {
                 }
                 Haptics.success()
             }
+        }
+        // Dismiss keyboard when voice overlay appears
+        .onChange(of: voiceInputViewModel.showOverlay) { _, isShowing in
+            if isShowing {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        }
+        // Live provider switching: update voice service when provider changes in Settings
+        .onChange(of: voiceInputSettings.selectedProvider) { _, newProvider in
+            voiceInputViewModel.switchProvider(newProvider)
         }
         // Navigate to workspace list when session fails (e.g., user declined trust_folder)
         .onChange(of: viewModel.shouldShowWorkspaceList) { _, shouldShow in

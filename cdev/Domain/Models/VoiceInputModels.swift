@@ -6,13 +6,11 @@ import Foundation
 enum VoiceInputProvider: String, CaseIterable, Codable, Sendable {
     case appleSpeech = "apple_speech"
     case whisperAPI = "whisper_api"
-    case whisperOnDevice = "whisper_local"
 
     var displayName: String {
         switch self {
         case .appleSpeech: return "Apple (Built-in)"
         case .whisperAPI: return "Whisper API"
-        case .whisperOnDevice: return "Whisper (On-Device)"
         }
     }
 
@@ -20,7 +18,6 @@ enum VoiceInputProvider: String, CaseIterable, Codable, Sendable {
         switch self {
         case .appleSpeech: return "Apple"
         case .whisperAPI: return "Whisper"
-        case .whisperOnDevice: return "Local"
         }
     }
 
@@ -36,21 +33,17 @@ enum VoiceInputProvider: String, CaseIterable, Codable, Sendable {
         self == .whisperAPI
     }
 
-    var vietnameseAccuracyRating: String {
+    /// Short description of the provider for picker UI
+    var subtitle: String {
         switch self {
-        case .appleSpeech: return "Good"
-        case .whisperAPI: return "Excellent"
-        case .whisperOnDevice: return "Very Good"
+        case .appleSpeech: return "On-device, single language"
+        case .whisperAPI: return "Cloud, multi-language"
         }
     }
 
     /// Whether this provider is currently available for use
     var isAvailable: Bool {
-        switch self {
-        case .appleSpeech: return true
-        case .whisperAPI: return true
-        case .whisperOnDevice: return false  // Future implementation
-        }
+        true
     }
 }
 

@@ -218,14 +218,6 @@ private struct AssistantContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
-            // Thinking section (collapsible)
-            if message.hasThinking {
-                ThinkingSection(
-                    blocks: message.thinkingBlocks,
-                    isExpanded: $isThinkingExpanded
-                )
-            }
-
             // Tool calls section (collapsible)
             if message.hasToolCalls {
                 ToolCallsSection(
@@ -251,6 +243,14 @@ private struct AssistantContent: View {
                     TokenBadge(label: "out", count: usage.outputTokens)
                 }
                 .padding(.top, 2)
+            }
+
+            // Thinking section (collapsible, terminal-style, shown at bottom)
+            if message.hasThinking {
+                ThinkingSection(
+                    blocks: message.thinkingBlocks,
+                    isExpanded: $isThinkingExpanded
+                )
             }
         }
     }
@@ -302,10 +302,6 @@ private struct ThinkingSection: View {
                         .font(Typography.terminalSmall)
                 }
                 .foregroundStyle(ColorSystem.primary.opacity(0.7))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(ColorSystem.primary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
             .padding(.leading, Spacing.sm)
@@ -316,15 +312,10 @@ private struct ThinkingSection: View {
                     ForEach(blocks) { block in
                         Text(block.content)
                             .font(Typography.terminalSmall)
-                            .foregroundStyle(ColorSystem.textTertiary)
-                            .italic()
+                            .foregroundStyle(ColorSystem.textSecondary)
                             .textSelection(.enabled)
                     }
                 }
-                .padding(.horizontal, Spacing.xs)
-                .padding(.vertical, 4)
-                .background(ColorSystem.terminalBgHighlight)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.leading, Spacing.md)
             }
         }

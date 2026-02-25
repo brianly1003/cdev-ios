@@ -18,8 +18,14 @@ final class VoiceInputViewModel: ObservableObject {
     var selectedLanguage: VoiceInputLanguage {
         get { settings.selectedLanguage }
         set {
+            guard settings.selectedLanguage != newValue else { return }
+            let shouldRestartRecording = isRecording
             settings.selectedLanguage = newValue
             objectWillChange.send()
+
+            if shouldRestartRecording {
+                restartRecordingForLanguageChange(to: newValue)
+            }
         }
     }
 
@@ -63,9 +69,10 @@ final class VoiceInputViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let voiceService: VoiceInputServiceProtocol
+    private var voiceService: VoiceInputServiceProtocol
     private let settings = VoiceInputSettingsStore.shared
     private var cancellables = Set<AnyCancellable>()
+    private var languageSwitchTask: Task<Void, Never>?
 
     // Callback for when transcription is complete and should be sent
     var onTranscriptionComplete: ((String) -> Void)?
@@ -75,9 +82,35 @@ final class VoiceInputViewModel: ObservableObject {
 
     // MARK: - Initialization
 
-    init(voiceService: VoiceInputServiceProtocol = AppleSpeechService()) {
+    init(voiceService: VoiceInputServiceProtocol? = nil) {
         self.voiceService = voiceService
+            ?? VoiceInputServiceFactory.makeService(for: VoiceInputSettingsStore.shared.selectedProvider)
         setupBindings()
+    }
+
+    /// Switch to a different voice provider, tearing down existing subscriptions
+    func switchProvider(_ newProvider: VoiceInputProvider) {
+        // Cancel any in-progress recording
+        if isRecording || isProcessing {
+            cancelRecording()
+        }
+
+        // Tear down existing subscriptions
+        cancellables.removeAll()
+        cancelLanguageSwitchTask()
+
+        // Create new service
+        voiceService = VoiceInputServiceFactory.makeService(for: newProvider)
+
+        // Re-bind publishers
+        setupBindings()
+
+        // Reset state
+        state = .idle
+        currentTranscription = ""
+        audioLevel = 0
+
+        AppLogger.log("[VoiceInput] Switched provider to \(newProvider.displayName)")
     }
 
     private func setupBindings() {
@@ -154,6 +187,7 @@ final class VoiceInputViewModel: ObservableObject {
 
     /// Start voice recording
     func startRecording() {
+        cancelLanguageSwitchTask()
         guard canStart else { return }
 
         showOverlay = true
@@ -189,6 +223,7 @@ final class VoiceInputViewModel: ObservableObject {
     /// Stop recording and get transcription
     /// Does NOT auto-dismiss - user must tap Done to confirm
     func stopRecording() {
+        cancelLanguageSwitchTask()
         guard isRecording else { return }
 
         Task {
@@ -208,9 +243,24 @@ final class VoiceInputViewModel: ObservableObject {
         }
     }
 
+    /// Discard current transcription and start a fresh recording.
+    /// Used by the overlay retry action when auto-send is disabled.
+    func retryRecording() {
+        cancelLanguageSwitchTask()
+        guard !isProcessing else { return }
+
+        if isRecording {
+            voiceService.cancelRecording()
+        }
+        currentTranscription = ""
+        permissionError = nil
+        startRecording()
+    }
+
     /// Complete voice input and send to chat
     /// Called when user taps "Done" or "Send"
     func completeAndSend() {
+        cancelLanguageSwitchTask()
         let text = currentTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             onTranscriptionComplete?(text)
@@ -222,6 +272,7 @@ final class VoiceInputViewModel: ObservableObject {
 
     /// Cancel recording without result
     func cancelRecording() {
+        cancelLanguageSwitchTask()
         voiceService.cancelRecording()
         currentTranscription = ""
         showOverlay = false
@@ -230,6 +281,7 @@ final class VoiceInputViewModel: ObservableObject {
 
     /// Apply current transcription (used when user confirms in overlay)
     func applyTranscription() {
+        cancelLanguageSwitchTask()
         let text = currentTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             onTranscriptionComplete?(text)
@@ -239,11 +291,17 @@ final class VoiceInputViewModel: ObservableObject {
 
     /// Dismiss overlay (cancel or after completion)
     func dismissOverlay() {
+        cancelLanguageSwitchTask()
         if isRecording {
             cancelRecording()
         } else {
             showOverlay = false
         }
+    }
+
+    /// Pause/resume auto-stop while user is choosing language.
+    func setAutoStopSuspended(_ isSuspended: Bool) {
+        voiceService.setAutoStopSuspended(isSuspended)
     }
 
     /// Clear any error state
@@ -262,6 +320,7 @@ final class VoiceInputViewModel: ObservableObject {
     // MARK: - Private Methods
 
     private func handleError(_ error: VoiceInputError) {
+        cancelLanguageSwitchTask()
         AppLogger.log("[VoiceInput] Error: \(error.localizedDescription)")
 
         if error.requiresSettings {
@@ -279,6 +338,42 @@ final class VoiceInputViewModel: ObservableObject {
                     showOverlay = false
                     state = .idle
                 }
+            }
+        }
+    }
+
+    private func cancelLanguageSwitchTask() {
+        languageSwitchTask?.cancel()
+        languageSwitchTask = nil
+    }
+
+    private func restartRecordingForLanguageChange(to language: VoiceInputLanguage) {
+        cancelLanguageSwitchTask()
+
+        languageSwitchTask = Task { [weak self] in
+            guard let self = self else { return }
+
+            AppLogger.log("[VoiceInput] Language changed during recording, restarting with \(language.id)")
+
+            // Restart recording so the active recognizer uses the new locale.
+            self.voiceService.cancelRecording()
+            self.currentTranscription = ""
+
+            // Allow audio teardown to complete before creating a new recognizer task.
+            try? await Task.sleep(nanoseconds: 120_000_000)
+
+            guard !Task.isCancelled else { return }
+            guard self.showOverlay else { return }
+
+            do {
+                try await self.voiceService.startRecording(language: language)
+                Haptics.selection()
+            } catch let error as VoiceInputError {
+                guard !Task.isCancelled else { return }
+                self.handleError(error)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.handleError(.recordingFailed(message: error.localizedDescription))
             }
         }
     }

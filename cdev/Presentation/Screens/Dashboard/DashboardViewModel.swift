@@ -1234,6 +1234,22 @@ final class DashboardViewModel: ObservableObject {
 
     // MARK: - Public Actions
 
+    /// Queue voice transcription into the prompt composer and send immediately.
+    /// If the assistant is currently running, `sendPrompt()` keeps the text in the composer.
+    func sendVoiceTranscription(_ transcription: String) async {
+        let trimmed = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let existingDraft = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existingDraft.isEmpty {
+            promptText = trimmed
+        } else {
+            promptText = "\(existingDraft) \(trimmed)"
+        }
+
+        await sendPrompt()
+    }
+
     /// Send prompt to Claude (or handle built-in commands)
     func sendPrompt() async {
         guard !promptText.isBlank else { return }

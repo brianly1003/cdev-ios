@@ -36,15 +36,15 @@ struct SettingsView: View {
 
                         // Appearance Section (Themes coming soon)
                         SettingsSection(title: "Appearance", icon: "paintpalette") {
+                            SettingsThemeRow(
+                                currentTheme: currentTheme,
+                                onTap: { showThemePicker = true }
+                            )
+
                             SettingsToggleRow(
                                 icon: "clock",
                                 title: "Timestamps",
                                 isOn: $showTimestamps
-                            )
-
-                            SettingsThemeRow(
-                                currentTheme: currentTheme,
-                                onTap: { showThemePicker = true }
                             )
                         }
 
@@ -659,8 +659,21 @@ private struct VoiceInputSettingsSection: View {
                     )
                 )
 
-                // Auto-send on Silence (only visible when enabled)
+                // Settings rows (only visible when enabled)
                 if settings.isEnabled {
+                    // Provider picker
+                    VoiceInputProviderRow(
+                        currentProvider: settings.selectedProvider
+                    ) { provider in
+                        settings.selectedProvider = provider
+                    }
+
+                    // API key input (Whisper API only)
+                    if settings.selectedProvider == .whisperAPI {
+                        WhisperAPIKeyRow(settings: settings)
+                    }
+
+                    // Auto-send on Silence
                     VoiceInputToggleRow(
                         icon: "bolt.fill",
                         title: "Auto-send on Silence",
@@ -682,6 +695,239 @@ private struct VoiceInputSettingsSection: View {
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
         }
         .animation(.easeInOut(duration: 0.2), value: settings.isEnabled)
+        .animation(.easeInOut(duration: 0.2), value: settings.selectedProvider)
+    }
+}
+
+// MARK: - Voice Input Provider Row
+
+private struct VoiceInputProviderRow: View {
+    let currentProvider: VoiceInputProvider
+    let onSelect: (VoiceInputProvider) -> Void
+
+    @State private var showPicker = false
+
+    var body: some View {
+        Button {
+            showPicker = true
+            Haptics.selection()
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.primary)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Provider")
+                        .font(Typography.body)
+                        .foregroundStyle(ColorSystem.textPrimary)
+
+                    Text("Speech recognition engine")
+                        .font(Typography.caption2)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text(currentProvider.shortName)
+                        .font(Typography.terminalSmall)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                }
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(ColorSystem.terminalBgElevated)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showPicker) {
+            VoiceProviderPickerView(
+                selectedProvider: currentProvider,
+                onSelect: { provider in
+                    onSelect(provider)
+                    showPicker = false
+                }
+            )
+            .presentationDetents([.medium])
+        }
+    }
+}
+
+// MARK: - Voice Provider Picker View
+
+private struct VoiceProviderPickerView: View {
+    let selectedProvider: VoiceInputProvider
+    let onSelect: (VoiceInputProvider) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        NavigationStack {
+            List(VoiceInputProvider.allCases, id: \.self) { provider in
+                Button {
+                    onSelect(provider)
+                    Haptics.selection()
+                } label: {
+                    HStack(spacing: layout.contentSpacing) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(provider.displayName)
+                                .font(layout.bodyFont)
+                                .foregroundStyle(ColorSystem.textPrimary)
+
+                            Text(provider.subtitle)
+                                .font(layout.captionFont)
+                                .foregroundStyle(ColorSystem.textTertiary)
+                        }
+
+                        Spacer()
+
+                        if provider == selectedProvider {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: layout.iconMedium, weight: .semibold))
+                                .foregroundStyle(ColorSystem.primary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+            .navigationTitle("Voice Provider")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(ColorSystem.primary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Whisper API Key Row
+
+private struct WhisperAPIKeyRow: View {
+    @ObservedObject var settings: VoiceInputSettingsStore
+    @State private var apiKeyText = ""
+    @State private var isEditing = false
+    @FocusState private var isFieldFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "key")
+                    .font(.system(size: 14))
+                    .foregroundStyle(ColorSystem.primary)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("OpenAI API Key")
+                        .font(Typography.body)
+                        .foregroundStyle(ColorSystem.textPrimary)
+
+                    if settings.hasWhisperAPIKey && !isEditing {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(ColorSystem.success)
+                            Text("Configured")
+                                .font(Typography.caption2)
+                                .foregroundStyle(ColorSystem.success)
+                        }
+                    } else {
+                        Text("Required for Whisper API")
+                            .font(Typography.caption2)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+                }
+
+                Spacer()
+
+                if settings.hasWhisperAPIKey && !isEditing {
+                    HStack(spacing: 8) {
+                        Button {
+                            isEditing = true
+                            apiKeyText = ""
+                            isFieldFocused = true
+                        } label: {
+                            Text("Edit")
+                                .font(Typography.terminalSmall)
+                                .foregroundStyle(ColorSystem.primary)
+                        }
+
+                        Button {
+                            settings.deleteWhisperAPIKey()
+                            apiKeyText = ""
+                            Haptics.light()
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12))
+                                .foregroundStyle(ColorSystem.error)
+                        }
+                    }
+                } else if !isEditing {
+                    Button {
+                        isEditing = true
+                        isFieldFocused = true
+                    } label: {
+                        Text("Add")
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.primary)
+                    }
+                }
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+
+            if isEditing {
+                HStack(spacing: Spacing.xs) {
+                    SecureField("sk-...", text: $apiKeyText)
+                        .font(Typography.terminal)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .focused($isFieldFocused)
+
+                    Button {
+                        if !apiKeyText.isEmpty {
+                            settings.saveWhisperAPIKey(apiKeyText)
+                            Haptics.medium()
+                        }
+                        apiKeyText = ""
+                        isEditing = false
+                    } label: {
+                        Text("Save")
+                            .font(Typography.buttonLabel)
+                            .foregroundStyle(apiKeyText.isEmpty
+                                ? ColorSystem.textQuaternary
+                                : ColorSystem.primary)
+                    }
+                    .disabled(apiKeyText.isEmpty)
+
+                    Button {
+                        apiKeyText = ""
+                        isEditing = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12))
+                            .foregroundStyle(ColorSystem.textTertiary)
+                    }
+                }
+                .padding(.horizontal, Spacing.sm)
+                .padding(.bottom, Spacing.xs)
+            }
+        }
+        .background(ColorSystem.terminalBgElevated)
+        .animation(.easeInOut(duration: 0.15), value: isEditing)
     }
 }
 
