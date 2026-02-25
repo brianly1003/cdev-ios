@@ -437,6 +437,9 @@ final class HTTPService: HTTPServiceProtocol {
         let durationMs = Int(duration * 1000)
         let responseBody = String(data: data, encoding: .utf8)
 
+        // Strip Authorization header to prevent token persistence in log file
+        let sanitizedHeaders = headers?.filter { $0.key.lowercased() != "authorization" }
+
         if (200...299).contains(statusCode) {
             AppLogger.network("[HTTP] ← \(statusCode) \(path) (\(durationMs)ms)")
 
@@ -451,7 +454,7 @@ final class HTTPService: HTTPServiceProtocol {
                     responseBody: responseBody,
                     duration: duration,
                     fullURL: fullURL,
-                    headers: headers
+                    headers: sanitizedHeaders
                 )
             }
         } else {
@@ -472,7 +475,7 @@ final class HTTPService: HTTPServiceProtocol {
                     responseBody: responseBody,
                     duration: duration,
                     fullURL: fullURL,
-                    headers: headers
+                    headers: sanitizedHeaders
                 )
             }
 
@@ -539,6 +542,8 @@ final class HTTPService: HTTPServiceProtocol {
         }
 
         // Log to debug store for admin tool (with cURL-ready data)
+        // Strip Authorization header to prevent token persistence in log file
+        let sanitizedHeaders = headers?.filter { $0.key.lowercased() != "authorization" }
         Task { @MainActor in
             DebugLogStore.shared.logHTTPRequest(
                 method: method,
@@ -546,7 +551,7 @@ final class HTTPService: HTTPServiceProtocol {
                 queryParams: queryParamsStr,
                 body: body,
                 fullURL: fullURL,
-                headers: headers
+                headers: sanitizedHeaders
             )
         }
     }
@@ -607,7 +612,9 @@ final class HTTPService: HTTPServiceProtocol {
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else { return false }
 
-        // Retryable network errors
+        // Retryable network errors - transient connectivity issues only.
+        // Certificate errors (bad date, untrusted) must NOT be retried as they may
+        // indicate a MITM attack or misconfigured server and should fail immediately.
         let retryableCodes: Set<Int> = [
             NSURLErrorNetworkConnectionLost,     // -1005
             NSURLErrorNotConnectedToInternet,    // -1009
@@ -615,8 +622,6 @@ final class HTTPService: HTTPServiceProtocol {
             NSURLErrorCannotConnectToHost,       // -1004
             NSURLErrorCannotFindHost,            // -1003
             NSURLErrorSecureConnectionFailed,    // -1200
-            NSURLErrorServerCertificateHasBadDate, // -1201
-            NSURLErrorServerCertificateUntrusted,  // -1202
         ]
 
         return retryableCodes.contains(nsError.code)

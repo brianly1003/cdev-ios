@@ -79,8 +79,12 @@ final class FileRepository: FileRepositoryProtocol {
     }
 
     func readFile(path: String) async throws -> FileContentResponse {
-        // Check cache first
-        if let cachedContent = await cache.getContent(path: path) {
+        // Binary files (images, etc.) are never cached — the cache stores plain String content
+        // and would lose the imageData, causing the raw base64 string to be shown as text.
+        let isBinary = Self.isBinaryPath(path)
+
+        // Check cache first (text files only)
+        if !isBinary, let cachedContent = await cache.getContent(path: path) {
             return FileContentResponse(path: path, content: cachedContent)
         }
 
@@ -92,12 +96,20 @@ final class FileRepository: FileRepositoryProtocol {
             response = try await fetchRemoteContent(path: path)
         }
 
-        // Cache if not truncated and under size limit
-        if !response.truncated {
+        // Cache only text files that aren't truncated
+        if !isBinary && !response.truncated {
             await cache.cacheContent(path: path, content: response.content)
         }
 
         return response
+    }
+
+    /// Returns true for file extensions the server returns as base64-encoded binary.
+    private static func isBinaryPath(_ path: String) -> Bool {
+        let ext = (path as NSString).pathExtension.lowercased()
+        return ["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "tiff",
+                "pdf", "zip", "tar", "gz", "rar", "7z",
+                "ttf", "otf", "woff", "woff2"].contains(ext)
     }
 
     func searchFiles(query: String) async throws -> [FileEntry] {
@@ -286,12 +298,19 @@ final class FileRepository: FileRepositoryProtocol {
             timeout: nil
         )
 
+        // Decode base64-encoded binary content (images, PDFs, etc.)
+        var imageData: Data? = nil
+        if result.encoding == "base64", let b64 = result.content {
+            imageData = Data(base64Encoded: b64)
+        }
+
         return FileContentResponse(
             path: result.path ?? path,
             content: result.content ?? "",
             encoding: result.encoding ?? "utf-8",
             size: result.size,
-            truncated: result.truncated ?? false
+            truncated: result.truncated ?? false,
+            imageData: imageData
         )
     }
 

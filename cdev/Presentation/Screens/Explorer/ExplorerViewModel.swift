@@ -33,6 +33,7 @@ final class ExplorerViewModel: ObservableObject {
             #endif
         }
     }
+    @Published private(set) var fileImageData: Data?
     @Published private(set) var isLoadingFile = false {
         didSet {
             #if DEBUG
@@ -257,6 +258,7 @@ final class ExplorerViewModel: ObservableObject {
         navigationStack = []
         selectedFile = nil
         fileContent = nil
+        fileImageData = nil
         searchQuery = ""
         searchResults = []
         error = nil
@@ -326,6 +328,7 @@ final class ExplorerViewModel: ObservableObject {
                 // Only update if this file is still selected
                 if self.selectedFile?.path == filePath {
                     fileContent = response.content
+                    fileImageData = response.imageData
                     AppLogger.log("[ExplorerViewModel] Loaded file '\(filePath)' (\(response.size) bytes) - setting fileContent, currentSelectedFile='\(self.selectedFile?.path ?? "nil")'")
                 } else {
                     AppLogger.log("[ExplorerViewModel] File loaded but selectedFile changed - ignoring result for '\(filePath)', currentSelectedFile='\(self.selectedFile?.path ?? "nil")'")
@@ -378,6 +381,7 @@ final class ExplorerViewModel: ObservableObject {
         fileLoadingTask = nil
         selectedFile = nil
         fileContent = nil
+        fileImageData = nil
     }
 
     /// Handle entry selection (file or directory)

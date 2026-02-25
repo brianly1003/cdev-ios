@@ -52,24 +52,28 @@ protocol FileRepositoryProtocol: AnyObject {
 }
 
 /// Response for file content read operation
-struct FileContentResponse: Codable {
+struct FileContentResponse {
     let path: String
     let content: String
     let encoding: String
     let size: Int
     let truncated: Bool
+    /// Decoded binary data for base64-encoded files (images, PDFs, etc.)
+    let imageData: Data?
 
     init(
         path: String,
         content: String,
         encoding: String = "utf-8",
         size: Int? = nil,
-        truncated: Bool = false
+        truncated: Bool = false,
+        imageData: Data? = nil
     ) {
         self.path = path
         self.content = content
         self.encoding = encoding
         self.size = size ?? content.utf8.count
         self.truncated = truncated
+        self.imageData = imageData
     }
 }

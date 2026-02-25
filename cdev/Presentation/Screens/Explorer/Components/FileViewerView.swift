@@ -5,6 +5,7 @@ import SwiftUI
 struct FileViewerView: View {
     let file: FileEntry
     let content: String?
+    var imageData: Data? = nil
     let isLoading: Bool
     let onDismiss: () -> Void
 
@@ -35,11 +36,19 @@ struct FileViewerView: View {
     @State private var isCaseSensitive = false
     @State private var showNoResults = false
     @State private var isSearching = false  // Loading indicator
-    @State private var searchTask: Task<Void, Never>?  // For cancellation
     @FocusState private var isSearchFocused: Bool
+
+    // Image zoom/pan state
+    @State private var imageScale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var imageOffset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
 
     // Pre-computed lines cache (computed once per content)
     @State private var cachedLines: [String]?
+
+    // Stable skeleton widths - computed once so skeleton doesn't jitter on re-renders
+    @State private var skeletonWidths: [CGFloat] = (0..<8).map { _ in .random(in: 80...200) }
 
     // Environment for iPad detection
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -55,6 +64,8 @@ struct FileViewerView: View {
 
                 if isLoading {
                     loadingView
+                } else if let data = imageData, let uiImage = UIImage(data: data) {
+                    imageViewerView(uiImage: uiImage)
                 } else if let displayContent = displayContent {
                     // Show rendered markdown or code editor
                     if showRenderedMarkdown {
@@ -97,9 +108,26 @@ struct FileViewerView: View {
         .presentationDragIndicator(isFullscreen ? .hidden : .visible)
         // Disable interactive dismiss while loading or in fullscreen to prevent accidental swipes
         .interactiveDismissDisabled(isFullscreen || isLoading)
-        .onChange(of: searchQuery) { _, newValue in
-            // Debounce search input to reduce CPU usage
-            debouncedSearch(query: newValue)
+        // .task(id:) auto-cancels and restarts when searchQuery changes,
+        // replacing the manual searchTask/@State cancel/create pattern.
+        .task(id: searchQuery) {
+            guard !searchQuery.isEmpty else {
+                searchMatches = []
+                currentMatchIndex = 0
+                showNoResults = false
+                debouncedQuery = ""
+                isSearching = false
+                return
+            }
+            isSearching = true
+            do {
+                try await Task.sleep(for: .milliseconds(searchDebounceMs))
+            } catch {
+                return  // Cancelled when searchQuery changed again
+            }
+            debouncedQuery = searchQuery
+            performSearch(query: searchQuery)
+            isSearching = false
         }
         .onChange(of: isCaseSensitive) { _, _ in
             // Immediate search on case toggle (no debounce needed)
@@ -115,11 +143,6 @@ struct FileViewerView: View {
                 return .handled
             }
             return .ignored
-        }
-        .onDisappear {
-            // Cancel any pending search task to prevent memory leaks
-            searchTask?.cancel()
-            searchTask = nil
         }
     }
 
@@ -257,45 +280,7 @@ struct FileViewerView: View {
 
     // MARK: - Search Logic
 
-    /// Debounced search - cancels previous search task and waits before executing
-    private func debouncedSearch(query: String) {
-        // Cancel any pending search task
-        searchTask?.cancel()
-
-        // Clear results immediately if query is empty
-        guard !query.isEmpty else {
-            searchMatches = []
-            currentMatchIndex = 0
-            showNoResults = false
-            debouncedQuery = ""
-            isSearching = false
-            return
-        }
-
-        // Show loading state
-        isSearching = true
-
-        // Create new debounced task
-        searchTask = Task { @MainActor in
-            // Wait for debounce interval
-            do {
-                try await Task.sleep(nanoseconds: searchDebounceMs * 1_000_000)
-            } catch {
-                // Task was cancelled, exit early
-                return
-            }
-
-            // Check if task was cancelled during sleep
-            guard !Task.isCancelled else { return }
-
-            // Update debounced query and perform search
-            debouncedQuery = query
-            performSearch(query: query)
-            isSearching = false
-        }
-    }
-
-    /// Perform the actual search (called after debounce)
+    /// Perform the actual search (called after debounce via .task(id: searchQuery))
     private func performSearch(query: String) {
         guard !query.isEmpty else {
             searchMatches = []
@@ -389,10 +374,7 @@ struct FileViewerView: View {
     }
 
     private func closeSearch() {
-        // Cancel any pending search task
-        searchTask?.cancel()
-        searchTask = nil
-
+        // Setting searchQuery to "" triggers .task(id: searchQuery) cancellation automatically
         isSearchFocused = false
         withAnimation(.easeOut(duration: 0.2)) {
             isSearchActive = false
@@ -407,9 +389,9 @@ struct FileViewerView: View {
 
     // MARK: - Editor Toolbar
 
-    /// Check if toolbar actions should be disabled (loading or no content)
+    /// Check if toolbar actions should be disabled (loading, image view, or no content)
     private var isToolbarDisabled: Bool {
-        isLoading || content == nil
+        isLoading || (imageData != nil) || content == nil
     }
 
     private var editorToolbar: some View {
@@ -549,7 +531,7 @@ struct FileViewerView: View {
         VStack(spacing: Spacing.lg) {
             // Skeleton loading animation
             VStack(alignment: .leading, spacing: Spacing.xs) {
-                ForEach(0..<8, id: \.self) { index in
+                ForEach(Array(skeletonWidths.enumerated()), id: \.offset) { index, width in
                     HStack(spacing: Spacing.sm) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(ColorSystem.terminalBgHighlight)
@@ -557,7 +539,7 @@ struct FileViewerView: View {
 
                         RoundedRectangle(cornerRadius: 2)
                             .fill(ColorSystem.terminalBgHighlight)
-                            .frame(width: CGFloat.random(in: 80...200), height: 12)
+                            .frame(width: width, height: 12)
                     }
                     .opacity(0.3 + Double(index) * 0.08)
                 }
@@ -570,6 +552,79 @@ struct FileViewerView: View {
         }
         // Note: Don't use .animation(.repeatForever()) here - it causes SwiftUI issues
         // when the view is removed from hierarchy (switching from loading to content)
+    }
+
+    // MARK: - Image Viewer
+
+    @ViewBuilder
+    private func imageViewerView(uiImage: UIImage) -> some View {
+        GeometryReader { geo in
+            ZStack {
+                ColorSystem.terminalBg
+
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .scaleEffect(imageScale)
+                    .offset(imageOffset)
+                    .gesture(
+                        SimultaneousGesture(
+                            // Pinch to zoom
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    imageScale = max(1.0, min(5.0, lastScale * value))
+                                }
+                                .onEnded { _ in
+                                    lastScale = imageScale
+                                    if imageScale < 1.0 {
+                                        withAnimation(.spring(response: 0.3)) {
+                                            imageScale = 1.0
+                                            lastScale = 1.0
+                                            imageOffset = .zero
+                                            lastOffset = .zero
+                                        }
+                                    }
+                                },
+                            // Drag to pan (only when zoomed)
+                            DragGesture()
+                                .onChanged { value in
+                                    guard imageScale > 1.0 else { return }
+                                    imageOffset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
+                                }
+                                .onEnded { _ in
+                                    lastOffset = imageOffset
+                                }
+                        )
+                    )
+                    // Double-tap toggles 2× zoom
+                    .onTapGesture(count: 2) {
+                        withAnimation(.spring(response: 0.3)) {
+                            if imageScale > 1.0 {
+                                imageScale = 1.0
+                                lastScale = 1.0
+                                imageOffset = .zero
+                                lastOffset = .zero
+                            } else {
+                                imageScale = 2.0
+                                lastScale = 2.0
+                            }
+                        }
+                        Haptics.selection()
+                    }
+            }
+            .clipped()
+        }
+        .onChange(of: imageData) { _, _ in
+            // Reset zoom when image changes
+            imageScale = 1.0
+            lastScale = 1.0
+            imageOffset = .zero
+            lastOffset = .zero
+        }
     }
 
     private var errorView: some View {
@@ -748,58 +803,80 @@ struct FileViewerView: View {
 
                 // File info
                 HStack(spacing: Spacing.md) {
-                    // Line count
-                    if let content = content {
-                        let lineCount = content.components(separatedBy: "\n").count
+                    if let data = imageData, let uiImage = UIImage(data: data) {
+                        // Image dimensions
                         HStack(spacing: 3) {
-                            Image(systemName: "text.alignleft")
+                            Image(systemName: "photo")
                                 .font(.system(size: 9))
-                            Text("\(lineCount) lines")
+                            Text("\(Int(uiImage.size.width))×\(Int(uiImage.size.height))")
                         }
                         .font(Typography.terminalSmall)
                         .foregroundStyle(ColorSystem.textTertiary)
-                    }
 
-                    // File size
-                    if let size = file.formattedSize {
-                        HStack(spacing: 3) {
-                            Image(systemName: "doc")
-                                .font(.system(size: 9))
-                            Text(size)
-                        }
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(ColorSystem.textTertiary)
-                    }
-
-                    // Encoding indicator
-                    Text("UTF-8")
-                        .font(Typography.terminalSmall)
-                        .foregroundStyle(ColorSystem.textQuaternary)
-
-                    // Beautify button (inline, only for JSON/Markdown)
-                    if isBeautifiable && !isLoading {
-                        // Separator
-                        Rectangle()
-                            .fill(ColorSystem.Editor.gutterBorder)
-                            .frame(width: 1, height: 12)
-
-                        Button {
-                            toggleBeautify()
-                        } label: {
+                        // File size
+                        if let size = file.formattedSize {
                             HStack(spacing: 3) {
-                                Image(systemName: isFormatted ? "arrow.uturn.backward" : "sparkles")
-                                    .font(.system(size: 9, weight: .semibold))
-
-                                Text(isFormatted ? "Original" : "Beautify")
-                                    .font(Typography.badge)
+                                Image(systemName: "doc")
+                                    .font(.system(size: 9))
+                                Text(size)
                             }
-                            .foregroundStyle(isFormatted ? ColorSystem.textSecondary : ColorSystem.primary)
-                            .padding(.horizontal, Spacing.xs)
-                            .padding(.vertical, 3)
-                            .background(isFormatted ? ColorSystem.terminalBgHighlight : ColorSystem.primaryGlow)
-                            .clipShape(Capsule())
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textTertiary)
                         }
-                        .buttonStyle(.plain)
+                    } else {
+                        // Line count
+                        if let content = content {
+                            let lineCount = content.components(separatedBy: "\n").count
+                            HStack(spacing: 3) {
+                                Image(systemName: "text.alignleft")
+                                    .font(.system(size: 9))
+                                Text("\(lineCount) lines")
+                            }
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                        }
+
+                        // File size
+                        if let size = file.formattedSize {
+                            HStack(spacing: 3) {
+                                Image(systemName: "doc")
+                                    .font(.system(size: 9))
+                                Text(size)
+                            }
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textTertiary)
+                        }
+
+                        // Encoding indicator
+                        Text("UTF-8")
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(ColorSystem.textQuaternary)
+
+                        // Beautify button (inline, only for JSON/Markdown)
+                        if isBeautifiable && !isLoading {
+                            // Separator
+                            Rectangle()
+                                .fill(ColorSystem.Editor.gutterBorder)
+                                .frame(width: 1, height: 12)
+
+                            Button {
+                                toggleBeautify()
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: isFormatted ? "arrow.uturn.backward" : "sparkles")
+                                        .font(.system(size: 9, weight: .semibold))
+
+                                    Text(isFormatted ? "Original" : "Beautify")
+                                        .font(Typography.badge)
+                                }
+                                .foregroundStyle(isFormatted ? ColorSystem.textSecondary : ColorSystem.primary)
+                                .padding(.horizontal, Spacing.xs)
+                                .padding(.vertical, 3)
+                                .background(isFormatted ? ColorSystem.terminalBgHighlight : ColorSystem.primaryGlow)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }

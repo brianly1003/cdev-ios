@@ -440,6 +440,7 @@ struct DashboardView: View {
                     FileViewerView(
                         file: file,
                         content: explorerViewModel.fileContent,
+                        imageData: explorerViewModel.fileImageData,
                         isLoading: explorerViewModel.isLoadingFile,
                         onDismiss: {
                             AppLogger.log("[DashboardView] FileViewerView onDismiss - dismissing cover")

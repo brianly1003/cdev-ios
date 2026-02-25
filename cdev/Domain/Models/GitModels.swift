@@ -770,7 +770,9 @@ struct GitStatusExtendedResponse: Decodable {
                 id: "untracked-\(file.path)",
                 path: file.path,
                 status: .untracked,
-                isStaged: false
+                isStaged: false,
+                additions: file.additions ?? 0,
+                deletions: file.deletions ?? 0
             )
         }
 
