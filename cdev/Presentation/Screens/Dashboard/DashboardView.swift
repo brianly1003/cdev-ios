@@ -1600,6 +1600,11 @@ private struct TerminalWindowsBar: View {
     let onSelect: (UUID) -> Void
     let onClose: (UUID) -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+    private var createButtonSize: CGFloat { max(24, layout.indicatorSize - 4) }
+    private var createButtonIconSize: CGFloat { max(12, layout.iconAction + 1) }
+
     private func title(for window: TerminalWindow, index: Int) -> String {
         if let sessionId = window.sessionId, !sessionId.isEmpty {
             let short = String(sessionId.suffix(6))
@@ -1653,16 +1658,14 @@ private struct TerminalWindowsBar: View {
 
             Button(action: onCreate) {
                 Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(ColorSystem.textSecondary)
-                    .frame(width: 28, height: 28)
-                    .background(
-                        Circle()
-                            .fill(ColorSystem.terminalBgHighlight)
-                            .overlay(Circle().stroke(ColorSystem.textQuaternary.opacity(0.5), lineWidth: 1))
-                    )
+                    .font(.system(size: createButtonIconSize, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .frame(width: createButtonSize, height: createButtonSize)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .padding(.bottom, 2)
             .padding(.trailing, Spacing.md)
         }
         .background(ColorSystem.terminalBgElevated)

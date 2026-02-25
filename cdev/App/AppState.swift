@@ -671,11 +671,12 @@ final class AppState: ObservableObject {
         httpService.baseURL = httpURL
 
         // Resolve runtime for this workspace before issuing runtime-scoped RPCs.
-        // Prefer workspace metadata so switching workspaces preserves Claude/Codex context.
+        // Prefer the user's stored runtime choice so that explicitly selecting Codex or Claude
+        // is respected even when the workspace has a different runtime's session active.
         let storedRuntime = sessionRepository.selectedSessionRuntime
         let workspaceRuntime = remoteWorkspace.activeRuntime
-        let preferredRuntime = workspaceRuntime ?? storedRuntime
-        let runtimeSource = workspaceRuntime == nil ? "stored" : "workspace"
+        let preferredRuntime = storedRuntime
+        let runtimeSource = workspaceRuntime == nil ? "stored" : "stored(override)"
 
         let runtime: AgentRuntime
         if RuntimeCapabilityRegistryStore.shared.isSupported(preferredRuntime) {

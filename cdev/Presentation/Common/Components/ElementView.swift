@@ -272,7 +272,7 @@ struct UserInputElementView: View {
 
     /// Parsed segments from content (bash commands, output, regular text)
     private var segments: [BashSegment] {
-        parseBashTags(from: content.text)
+        Self.parseBashTags(from: content.text)
     }
 
     var body: some View {
@@ -360,7 +360,7 @@ struct UserInputElementView: View {
     }
 
     /// Parse text for bash-related tags
-    private func parseBashTags(from text: String) -> [BashSegment] {
+    static func parseBashTags(from text: String) -> [BashSegment] {
         var segments: [BashSegment] = []
         var remaining = text
         var hasBashInput = false
@@ -463,7 +463,7 @@ struct UserInputElementView: View {
 }
 
 /// Segment type for parsed bash content
-private enum BashSegment {
+enum BashSegment {
     case bashInput(String)
     case bashStdout(String)
     case bashStderr(String)
@@ -476,7 +476,7 @@ private enum BashSegment {
 // MARK: - Bash Input Segment View
 
 /// Displays bash command with "!" prefix (Claude Code CLI style)
-private struct BashInputSegmentView: View {
+struct BashInputSegmentView: View {
     let command: String
     var searchText: String = ""
 
@@ -513,7 +513,7 @@ private struct BashInputSegmentView: View {
 
 /// Displays "(No content)" when bash command has empty output
 /// Styled like Claude Code CLI with tree line prefix
-private struct BashNoContentView: View {
+struct BashNoContentView: View {
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xxs) {
             // Tree line prefix (same as bash output)
@@ -532,7 +532,7 @@ private struct BashNoContentView: View {
 // MARK: - Bash Output Segment View
 
 /// Collapsible bash output (stdout/stderr)
-private struct BashOutputSegmentView: View {
+struct BashOutputSegmentView: View {
     let output: String
     let isError: Bool
     var searchText: String = ""
@@ -624,7 +624,7 @@ private struct BashOutputSegmentView: View {
 // MARK: - Local Command Output View
 
 /// Displays local command output (like /model command)
-private struct LocalCommandOutputView: View {
+struct LocalCommandOutputView: View {
     let output: String
     var searchText: String = ""
 
@@ -658,7 +658,7 @@ private struct LocalCommandOutputView: View {
 
 /// Displays slash command from user (like /model)
 /// Shows with ">" prefix since it's a user action
-private struct CommandMessageView: View {
+struct CommandMessageView: View {
     let name: String
     let message: String
     var searchText: String = ""

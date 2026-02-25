@@ -42,12 +42,38 @@ struct SessionPickerView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("Runtime", selection: $selectedRuntime) {
+                // Agent pill selector
+                HStack(spacing: Spacing.xs) {
                     ForEach(runtimeOptions) { runtime in
-                        Text(runtime.displayName).tag(runtime)
+                        Button {
+                            withAnimation(Animations.stateChange) {
+                                selectedRuntime = runtime
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: runtime.iconName)
+                                    .font(.system(size: 10, weight: .semibold))
+                                Text(runtime.displayName)
+                                    .font(Typography.buttonLabel)
+                            }
+                            .foregroundStyle(
+                                selectedRuntime == runtime
+                                    ? ColorSystem.terminalBg
+                                    : ColorSystem.Agent.color(for: runtime)
+                            )
+                            .padding(.horizontal, Spacing.sm)
+                            .padding(.vertical, 7)
+                            .background(
+                                selectedRuntime == runtime
+                                    ? ColorSystem.Agent.color(for: runtime)
+                                    : ColorSystem.Agent.tint(for: runtime)
+                            )
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
+                    Spacer()
                 }
-                .pickerStyle(.segmented)
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
 
@@ -63,7 +89,7 @@ struct SessionPickerView: View {
                 .padding(.horizontal, Spacing.xs)
                 .padding(.vertical, 6)
                 .background(ColorSystem.terminalBgElevated)
-                .cornerRadius(6)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .padding(.horizontal, Spacing.sm)
                 .padding(.vertical, Spacing.xs)
 
@@ -231,10 +257,10 @@ struct SessionRowView: View {
             }
             .frame(width: 12, height: 12)
 
-            // Summary and Session ID
+            // Summary and metadata
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(session.summary)
+                    Text(session.displaySummary)
                         .font(Typography.terminal)
                         .foregroundStyle(isCurrentSession ? ColorSystem.success : ColorSystem.textPrimary)
                         .lineLimit(1)
@@ -251,11 +277,27 @@ struct SessionRowView: View {
                     }
                 }
 
-                // Session ID (small, truncated)
-                Text(session.sessionId)
-                    .font(Typography.terminalTimestamp)
-                    .foregroundStyle(ColorSystem.textQuaternary)
-                    .lineLimit(1)
+                // Agent type badge + session ID
+                HStack(spacing: 4) {
+                    if let agentType = session.agentType {
+                        HStack(spacing: 2) {
+                            Image(systemName: agentType.iconName)
+                                .font(.system(size: 8))
+                            Text(agentType.displayName)
+                                .font(Typography.badge)
+                        }
+                        .foregroundStyle(ColorSystem.Agent.color(for: agentType))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(ColorSystem.Agent.tint(for: agentType))
+                        .clipShape(Capsule())
+                    }
+
+                    Text(session.sessionId)
+                        .font(Typography.terminalTimestamp)
+                        .foregroundStyle(ColorSystem.textQuaternary)
+                        .lineLimit(1)
+                }
             }
 
             Spacer(minLength: Spacing.xs)
@@ -295,7 +337,7 @@ struct SessionRowView: View {
         .padding(.leading, Spacing.sm)
         .padding(.trailing, Spacing.xs)  // Minimal trailing - content close to chevron
         .padding(.vertical, Spacing.xs)
-        .frame(height: 48)
+        .frame(minHeight: 52)
         .overlay(
             Rectangle()
                 .fill(ColorSystem.terminalBgHighlight)

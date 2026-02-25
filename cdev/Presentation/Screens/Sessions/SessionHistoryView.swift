@@ -32,7 +32,7 @@ struct SessionHistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Session header
-            SessionHeaderView(session: session)
+            SessionHeaderView(session: session, runtime: runtime)
 
             // Messages content
             if viewModel.isLoading {
@@ -48,7 +48,7 @@ struct SessionHistoryView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(viewModel.chatMessages) { message in
-                                ChatMessageView(message: message)
+                                ChatMessageView(message: message, runtime: runtime)
                                     .id(message.id)
                             }
 
@@ -73,14 +73,19 @@ struct SessionHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("History")
-                    .font(Typography.title3)
-                    .fontWeight(.semibold)
+                HStack(spacing: 4) {
+                    Image(systemName: runtime.iconName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ColorSystem.Agent.color(for: runtime))
+                    Text("History")
+                        .font(Typography.title3)
+                        .fontWeight(.semibold)
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {
             if let onResume = onResume {
-                ResumeSessionButton(onResume: onResume)
+                ResumeSessionButton(onResume: onResume, runtime: runtime)
             }
         }
         .task {
@@ -93,6 +98,7 @@ struct SessionHistoryView: View {
 
 private struct ResumeSessionButton: View {
     let onResume: () -> Void
+    let runtime: AgentRuntime
 
     var body: some View {
         Button {
@@ -100,24 +106,18 @@ private struct ResumeSessionButton: View {
             onResume()
         } label: {
             HStack(spacing: Spacing.xs) {
-                Image(systemName: "arrow.uturn.backward")
+                Image(systemName: runtime.iconName)
                     .font(.system(size: 14, weight: .bold))
-                Text("Resume Session")
+                Text("Resume \(runtime.displayName) Session")
                     .font(Typography.buttonLabel)
                     .fontWeight(.bold)
             }
-            .foregroundStyle(ColorSystem.terminalBg)  // Dark text on bright bg
+            .foregroundStyle(ColorSystem.terminalBg)
             .frame(maxWidth: .infinity)
             .padding(.vertical, Spacing.sm)
-            .background(
-                LinearGradient(
-                    colors: [ColorSystem.primary, ColorSystem.primaryDim],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
+            .background(ColorSystem.Agent.color(for: runtime))
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
-            .shadow(color: ColorSystem.primaryGlow, radius: 8, y: 2)
+            .shadow(color: ColorSystem.Agent.glow(for: runtime), radius: 8, y: 2)
         }
         .padding(.horizontal, Spacing.md)
         .padding(.vertical, Spacing.sm)
@@ -129,17 +129,35 @@ private struct ResumeSessionButton: View {
 
 private struct SessionHeaderView: View {
     let session: SessionsResponse.SessionInfo
+    let runtime: AgentRuntime
+
+    private var displayRuntime: AgentRuntime {
+        session.agentType ?? runtime
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xxs) {
             // Summary
-            Text(session.summary)
+            Text(session.displaySummary)
                 .font(Typography.terminal)
                 .foregroundStyle(ColorSystem.textPrimary)
                 .lineLimit(2)
 
             // Metadata row
-            HStack(spacing: Spacing.sm) {
+            HStack(spacing: Spacing.xs) {
+                // Agent type badge
+                HStack(spacing: 3) {
+                    Image(systemName: displayRuntime.iconName)
+                        .font(.system(size: 9))
+                    Text(displayRuntime.displayName)
+                        .font(Typography.badge)
+                }
+                .foregroundStyle(ColorSystem.Agent.color(for: displayRuntime))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(ColorSystem.Agent.tint(for: displayRuntime))
+                .clipShape(Capsule())
+
                 // Message count
                 HStack(spacing: 3) {
                     Image(systemName: "bubble.left")
@@ -175,6 +193,12 @@ private struct SessionHeaderView: View {
         .padding(.horizontal, Spacing.sm)
         .padding(.vertical, Spacing.xs)
         .background(ColorSystem.terminalBgElevated)
+        .overlay(
+            Rectangle()
+                .fill(ColorSystem.Agent.color(for: displayRuntime).opacity(0.3))
+                .frame(height: 1),
+            alignment: .bottom
+        )
     }
 }
 

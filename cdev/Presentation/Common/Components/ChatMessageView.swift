@@ -5,12 +5,14 @@ import SwiftUI
 struct ChatMessageView: View {
     let message: ChatMessage
     let showTimestamp: Bool
+    let runtime: AgentRuntime?
     @State private var isToolsExpanded = false
     @State private var isThinkingExpanded = false
 
-    init(message: ChatMessage, showTimestamp: Bool = true) {
+    init(message: ChatMessage, showTimestamp: Bool = true, runtime: AgentRuntime? = nil) {
         self.message = message
         self.showTimestamp = showTimestamp
+        self.runtime = runtime
     }
 
     var body: some View {
@@ -67,10 +69,15 @@ struct ChatMessageView: View {
             .foregroundStyle(ColorSystem.Log.user)
 
         case .assistant:
+            let agentColor = runtime.map { ColorSystem.Agent.color(for: $0) } ?? ColorSystem.primary
+            let agentTint = runtime.map { ColorSystem.Agent.tint(for: $0) } ?? ColorSystem.primary.opacity(0.15)
+            let agentIcon = runtime?.iconName ?? "sparkle"
+            let agentLabel = runtime?.displayName.lowercased() ?? "claude"
+
             HStack(spacing: 3) {
-                Image(systemName: "sparkle")
+                Image(systemName: agentIcon)
                     .font(.system(size: 8))
-                Text("claude")
+                Text(agentLabel)
                     .font(Typography.terminalSmall)
                     .fontWeight(.semibold)
 
@@ -80,11 +87,11 @@ struct ChatMessageView: View {
                         .font(Typography.badge)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
-                        .background(ColorSystem.primary.opacity(0.15))
+                        .background(agentTint)
                         .clipShape(Capsule())
                 }
             }
-            .foregroundStyle(ColorSystem.primary)
+            .foregroundStyle(agentColor)
 
         case .system:
             HStack(spacing: 3) {
@@ -104,9 +111,23 @@ struct ChatMessageView: View {
     }
 
     private func shortModelName(_ model: String) -> String {
+        // Claude model names
         if model.contains("opus") { return "opus" }
         if model.contains("sonnet") { return "sonnet" }
         if model.contains("haiku") { return "haiku" }
+        // Codex CLI model variants (gpt-5.x-codex-*) — preserve version + variant
+        if model.contains("codex-spark") { return model.replacingOccurrences(of: "gpt-", with: "") }
+        if model.contains("codex-mini") { return model.replacingOccurrences(of: "gpt-", with: "") }
+        if model.contains("codex-max") { return model.replacingOccurrences(of: "gpt-", with: "") }
+        if model.contains("codex") { return model.replacingOccurrences(of: "gpt-", with: "") }
+        // Generic GPT-5 model names — strip "gpt-" prefix to save space
+        if model.contains("gpt-5") { return model.replacingOccurrences(of: "gpt-", with: "") }
+        if model.contains("o3-mini") { return "o3-mini" }
+        if model.contains("o3") { return "o3" }
+        if model.contains("o1") { return "o1" }
+        if model.contains("gpt-4o") { return "4o" }
+        if model.contains("gpt-4") { return "gpt-4" }
+        // Truncate unknown long model names
         if model.count > 12 {
             return String(model.prefix(10)) + "..."
         }
@@ -120,11 +141,56 @@ private struct UserContent: View {
     let message: ChatMessage
 
     var body: some View {
-        Text(message.textContent)
-            .font(Typography.terminal)
-            .foregroundStyle(ColorSystem.Log.user)
-            .textSelection(.enabled)
+        contentView(for: UserInputElementView.parseBashTags(from: message.textContent))
+    }
+
+    @ViewBuilder
+    private func contentView(for segs: [BashSegment]) -> some View {
+        if segs.isEmpty {
+            EmptyView()
+        } else if segs.count == 1, case .text(let rawText) = segs[0], rawText == message.textContent {
+            // Plain user text — no bash tags
+            Text(message.textContent)
+                .font(Typography.terminal)
+                .foregroundStyle(ColorSystem.Log.user)
+                .textSelection(.enabled)
+                .padding(.leading, Spacing.sm)
+        } else {
+            // Bash/command segments — render with CLI-style formatting
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(segs.enumerated()), id: \.offset) { _, seg in
+                    segmentView(for: seg)
+                }
+            }
             .padding(.leading, Spacing.sm)
+        }
+    }
+
+    @ViewBuilder
+    private func segmentView(for segment: BashSegment) -> some View {
+        switch segment {
+        case .bashInput(let command):
+            BashInputSegmentView(command: command)
+        case .bashStdout(let output):
+            BashOutputSegmentView(output: output, isError: false)
+        case .bashStderr(let output):
+            if !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                BashOutputSegmentView(output: output, isError: true)
+            }
+        case .localCommandStdout(let output):
+            LocalCommandOutputView(output: output)
+        case .commandMessage(let name, let msg):
+            CommandMessageView(name: name, message: msg)
+        case .text(let text):
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(text)
+                    .font(Typography.terminal)
+                    .foregroundStyle(ColorSystem.Log.user)
+                    .textSelection(.enabled)
+            }
+        case .noContent:
+            BashNoContentView()
+        }
     }
 }
 
