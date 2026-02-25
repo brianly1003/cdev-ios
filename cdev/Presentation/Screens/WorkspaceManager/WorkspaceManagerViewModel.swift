@@ -635,7 +635,7 @@ final class WorkspaceManagerViewModel: ObservableObject {
             AppLogger.log("[WorkspaceManager] Cancelling active retry loop for new connection request")
             connectionCancelled = true
             currentRetryAttempt = 0
-            await webSocketService.disconnect()
+            webSocketService.disconnect()
 
             let waitDeadline = Date().addingTimeInterval(3)
             while isConnecting && Date() < waitDeadline {

@@ -160,7 +160,7 @@ struct PrivacyPolicyView: View {
     private var howItWorksSection: some View {
         PolicySection(title: "How \(Constants.Brand.appName) Works", icon: "arrow.triangle.2.circlepath") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("\(Constants.Brand.appName) is a companion app that connects directly to your local Claude Code agent. All communication stays within your local network.")
+                Text("\(Constants.Brand.appName) is a companion app that connects directly to your cdev-agent endpoint. By default this is your local network, and you can optionally configure a remote host.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -171,7 +171,7 @@ struct PrivacyPolicyView: View {
                     Text("│  Your iPhone │ ←→ │ Your Agent  │")
                     Text("│    (Cdev)    │     │  (Computer) │")
                     Text("└─────────────┘     └─────────────┘")
-                    Text("        └── Local Network Only ──┘")
+                    Text("       └── Local or Remote Host ──┘")
                 }
                 .font(Typography.terminalSmall)
                 .foregroundStyle(ColorSystem.primary)
@@ -188,22 +188,22 @@ struct PrivacyPolicyView: View {
     private var networkCommunicationSection: some View {
         PolicySection(title: "Network Communication", icon: "network") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("The app communicates only with your local agent:")
+                Text("The app communicates only with the agent endpoint you configure:")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
 
                 VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
-                    PolicyBulletPoint("HTTP/WebSocket to your agent's local IP address")
-                    PolicyBulletPoint("Real-time log streaming over your WiFi network")
-                    PolicyBulletPoint("Prompts sent directly to your agent, not to any cloud")
-                    PolicyBulletPoint("No internet connection required for core functionality")
+                    PolicyBulletPoint("HTTP/WebSocket to your agent endpoint (local IP or remote host)")
+                    PolicyBulletPoint("Real-time log streaming over local network or internet, based on your setup")
+                    PolicyBulletPoint("Prompts are sent directly to your agent endpoint; this app does not run a relay server")
+                    PolicyBulletPoint("In local mode, core functionality works without public internet access")
                 }
 
                 // No cloud badge
                 HStack(spacing: layout.tightSpacing) {
                     Image(systemName: "icloud.slash")
                         .font(.system(size: layout.iconSmall))
-                    Text("NO CLOUD SERVERS")
+                    Text("NO APP VENDOR RELAY")
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                 }
                 .foregroundStyle(ColorSystem.info)

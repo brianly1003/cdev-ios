@@ -185,7 +185,7 @@ struct TermsOfServiceView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: layout.iconSmall))
                         .foregroundStyle(ColorSystem.warning)
-                    Text("Requires cdev-agent running on your local network. The app does not function independently.")
+                    Text("Requires cdev-agent reachable from your device (local network or remote host you configure). The app does not function independently.")
                         .font(Typography.terminalSmall)
                         .foregroundStyle(ColorSystem.textSecondary)
                 }
