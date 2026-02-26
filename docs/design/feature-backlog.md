@@ -43,7 +43,5 @@ backlog aligned with the present architecture.
 
 ## Source Consolidation Note
 
-This file supersedes prior draft transcripts:
-
-- `../archive/new-features-draft_001.md`
-- `../archive/new-features-draft_002.md`
+This file supersedes prior draft transcripts that were removed during
+documentation cleanup.

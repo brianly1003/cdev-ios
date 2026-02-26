@@ -35,9 +35,6 @@ This index organizes the active documentation set for `cdev-ios`.
 - `privacy-policy.md` - Privacy policy.
 - `terms-of-service.md` - Terms of service.
 
-## Archive
-
-- `archive/` - Historical or superseded docs retained for context.
 
 ## Naming Convention
 

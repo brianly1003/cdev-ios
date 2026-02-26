@@ -20,8 +20,7 @@ This document describes the current JSON-RPC documentation sources for
 - Runtime routing depends on `agent_type` and selected runtime context.
 - Session/watch/message flows are coordinated by runtime strategy in app code.
 
-## Historical Plan
+## Historical Note
 
-The December 2025 migration planning document has been archived:
-
-- `archive/json-rpc-migration-plan-2025.md`
+The initial December 2025 migration plan was removed during docs cleanup after
+its actionable content was consolidated into active references.

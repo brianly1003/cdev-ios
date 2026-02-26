@@ -293,35 +293,44 @@ final class DashboardViewModel: ObservableObject {
     @Published var sessions: [SessionsResponse.SessionInfo] = []
     @Published var availableRuntimes: [AgentRuntime] = AgentRuntime.availableRuntimes()
     @Published var showSessionPicker: Bool = false
-    @Published var selectedSessionRuntime: AgentRuntime = .claude {
-        didSet {
-            guard oldValue != selectedSessionRuntime else { return }
+    /// Per-window runtime: reads from the active window's `.runtime` field.
+    /// Write via `setWindowRuntime(_:for:)` instead of assigning directly.
+    var selectedSessionRuntime: AgentRuntime {
+        activeWindow?.runtime ?? sessionRepository.selectedSessionRuntime
+    }
 
-            sessionRepository.selectedSessionRuntime = selectedSessionRuntime
-            // Clear runtime-agnostic stored session immediately to avoid cross-runtime leakage
-            // if the user sends before async runtime-switch orchestration finishes.
-            setSelectedSession(nil)
-            isSessionPinnedByUser = false
+    /// Switch the runtime for a specific window (or the active window if nil).
+    /// Persists the choice as the default for new windows and orchestrates a full
+    /// runtime switch when the target window is the active one.
+    func setWindowRuntime(_ newRuntime: AgentRuntime, for windowId: UUID? = nil) async {
+        let targetId = windowId ?? activeTerminalWindowId
+        guard let targetId, let window = appState?.terminalWindow(id: targetId) else { return }
+        let oldRuntime = window.runtime
+        guard oldRuntime != newRuntime else { return }
 
-            runtimeSwitchTask?.cancel()
-            let previousRuntime = oldValue
-            let nextRuntime = selectedSessionRuntime
+        appState?.setTerminalWindowRuntime(targetId, runtime: newRuntime)
+        sessionRepository.selectedSessionRuntime = newRuntime  // persist as default for new windows
+        objectWillChange.send()
 
-            runtimeSwitchTask = Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                await self.runtimeCoordinator.handleRuntimeSwitch(
-                    from: previousRuntime,
-                    to: nextRuntime,
-                    selectedRuntime: { self.selectedSessionRuntime },
-                    isCancelled: { Task.isCancelled },
-                    watchOwnerIdProvider: { self.currentSessionWatchOwnerId() },
-                    stopWatching: { await self.stopWatchingSession() },
-                    clearRuntimeState: { await self.resetStateForRuntimeSwitch() },
-                    loadSessions: { await self.loadSessions() },
-                    loadRecentHistory: { await self.loadRecentSessionHistory(isReconnection: false) },
-                    refreshStatus: { await self.refreshStatus() }
-                )
-            }
+        // Only full runtime switch if this is the active window
+        guard targetId == activeTerminalWindowId else { return }
+
+        setSelectedSession(nil)
+        isSessionPinnedByUser = false
+        runtimeSwitchTask?.cancel()
+        runtimeSwitchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await runtimeCoordinator.handleRuntimeSwitch(
+                from: oldRuntime, to: newRuntime,
+                selectedRuntime: { self.selectedSessionRuntime },
+                isCancelled: { Task.isCancelled },
+                watchOwnerIdProvider: { self.currentSessionWatchOwnerId() },
+                stopWatching: { await self.stopWatchingSession() },
+                clearRuntimeState: { await self.resetStateForRuntimeSwitch() },
+                loadSessions: { await self.loadSessions() },
+                loadRecentHistory: { await self.loadRecentSessionHistory(isReconnection: false) },
+                refreshStatus: { await self.refreshStatus() }
+            )
         }
     }
     @Published var sessionsHasMore: Bool = false
