@@ -2385,7 +2385,7 @@ final class DashboardViewModel: ObservableObject {
         if let sessionId = (event.sessionId ?? payload.sessionId)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !sessionId.isEmpty {
-            rows.append(.init(label: "Session ID", value: "…\(String(sessionId.suffix(8)))"))
+            rows.append(.init(label: "Session ID", value: sessionId))
         }
 
         if let toolUseId = payload.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),

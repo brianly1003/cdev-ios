@@ -2451,8 +2451,9 @@ private struct NotificationFeedCard: View {
                     )
                 }
                 if let sessionId = item.sessionId, !sessionId.isEmpty {
+                    let compactSessionId = sessionId.count > 8 ? "…\(sessionId.suffix(8))" : sessionId
                     NotificationBadge(
-                        text: "…\(String(sessionId.suffix(8)))",
+                        text: compactSessionId,
                         foreground: ColorSystem.textSecondary,
                         background: ColorSystem.terminalBgHighlight
                     )
@@ -2506,7 +2507,7 @@ private struct NotificationDetailView: View {
                             .font(.system(size: layout.iconMedium, weight: .semibold))
                             .foregroundStyle(item.status.iconColor)
                         Text(item.title)
-                            .font(layout.isCompact ? Typography.bannerBody : Typography.bannerTitle)
+                            .font(Typography.bannerTitle)
                             .foregroundStyle(ColorSystem.textPrimary)
                     }
 
@@ -2538,6 +2539,7 @@ private struct NotificationDetailView: View {
                         .font(Typography.terminalTimestamp)
                         .foregroundStyle(ColorSystem.textTertiary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(layout.standardPadding)
                 .background(
                     RoundedRectangle(cornerRadius: CornerRadius.large)
@@ -2547,7 +2549,7 @@ private struct NotificationDetailView: View {
                                 .strokeBorder(item.status.borderColor, lineWidth: layout.borderWidth)
                         )
                 )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, layout.standardPadding)
 
                 if let note = item.note, !note.isEmpty {
                     HStack(spacing: layout.ultraTightSpacing + 2) {
