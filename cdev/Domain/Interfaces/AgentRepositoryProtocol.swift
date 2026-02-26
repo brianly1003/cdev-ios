@@ -9,7 +9,13 @@ protocol AgentRepositoryProtocol {
     func fetchStatus() async throws -> AgentStatus
 
     /// Run Claude with prompt
-    func runClaude(prompt: String, mode: SessionMode, sessionId: String?, runtime: AgentRuntime) async throws
+    func runClaude(
+        prompt: String,
+        mode: SessionMode,
+        sessionId: String?,
+        runtime: AgentRuntime,
+        yoloMode: Bool
+    ) async throws
 
     /// Stop Claude
     /// - Parameter sessionId: Optional session ID to stop. If nil, uses current session from workspace.

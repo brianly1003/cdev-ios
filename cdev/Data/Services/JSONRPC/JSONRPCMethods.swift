@@ -880,12 +880,14 @@ struct SessionSendParams: Codable, Sendable {
     let mode: String?  // "new" or "continue"
     let permissionMode: SessionPermissionMode?  // Permission handling mode
     let agentType: String?  // Optional runtime routing ("claude", "codex")
+    let yoloMode: Bool?  // Optional runtime-agnostic bypass intent
 
     enum CodingKeys: String, CodingKey {
         case prompt, mode
         case sessionId = "session_id"
         case permissionMode = "permission_mode"
         case agentType = "agent_type"
+        case yoloMode = "yolo_mode"
     }
 
     init(
@@ -893,7 +895,8 @@ struct SessionSendParams: Codable, Sendable {
         prompt: String,
         mode: String? = "continue",
         permissionMode: SessionPermissionMode? = nil,
-        agentType: String? = nil
+        agentType: String? = nil,
+        yoloMode: Bool? = nil
     ) {
         // For "new" mode, don't include session_id even if provided
         if mode == "new" {
@@ -905,6 +908,7 @@ struct SessionSendParams: Codable, Sendable {
         self.mode = mode
         self.permissionMode = permissionMode
         self.agentType = agentType
+        self.yoloMode = yoloMode
     }
 
     /// Custom encoder to omit nil session_id (important for "new" mode)
@@ -915,6 +919,7 @@ struct SessionSendParams: Codable, Sendable {
         try container.encodeIfPresent(sessionId, forKey: .sessionId)
         try container.encodeIfPresent(permissionMode, forKey: .permissionMode)
         try container.encodeIfPresent(agentType, forKey: .agentType)
+        try container.encodeIfPresent(yoloMode, forKey: .yoloMode)
     }
 }
 

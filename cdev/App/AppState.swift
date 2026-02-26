@@ -6,6 +6,7 @@ struct TerminalWindow: Identifiable, Equatable, Sendable {
     let workspaceId: String
     var sessionId: String?
     var runtime: AgentRuntime
+    var isYoloModeEnabled: Bool
     var title: String
     var isFocused: Bool
     var isOpen: Bool
@@ -15,6 +16,7 @@ struct TerminalWindow: Identifiable, Equatable, Sendable {
         workspaceId: String,
         sessionId: String? = nil,
         runtime: AgentRuntime = .defaultRuntime,
+        isYoloModeEnabled: Bool = false,
         title: String? = nil,
         isFocused: Bool = false,
         isOpen: Bool = true
@@ -23,6 +25,7 @@ struct TerminalWindow: Identifiable, Equatable, Sendable {
         self.workspaceId = workspaceId
         self.sessionId = sessionId
         self.runtime = runtime
+        self.isYoloModeEnabled = isYoloModeEnabled
         self.title = title ?? "\(runtime.displayName) Window"
         self.isFocused = isFocused
         self.isOpen = isOpen
@@ -201,12 +204,14 @@ final class AppState: ObservableObject {
         workspaceId: String,
         sessionId: String? = nil,
         runtime: AgentRuntime = .defaultRuntime,
+        isYoloModeEnabled: Bool = false,
         title: String? = nil
     ) -> TerminalWindow {
         let window = TerminalWindow(
             workspaceId: workspaceId,
             sessionId: sessionId,
             runtime: runtime,
+            isYoloModeEnabled: isYoloModeEnabled,
             title: title
         )
 
@@ -256,6 +261,15 @@ final class AppState: ObservableObject {
             guard window.id == windowId else { return window }
             var next = window
             next.runtime = runtime
+            return next
+        }
+    }
+
+    func setTerminalWindowYoloMode(_ windowId: UUID, enabled: Bool) {
+        terminalWindows = terminalWindows.map { window in
+            guard window.id == windowId else { return window }
+            var next = window
+            next.isYoloModeEnabled = enabled
             return next
         }
     }

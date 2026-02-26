@@ -395,12 +395,14 @@ final class WorkspaceManagerService: ObservableObject {
     ///   - prompt: The prompt text to send
     ///   - mode: "new" or "continue"
     ///   - runtime: Agent runtime for routing (claude, codex)
+    ///   - yoloMode: When true, requests runtime-specific auto-approval/bypass behavior
     func sendPrompt(
         sessionId: String?,
         workspaceId: String? = nil,
         prompt: String,
         mode: String = "new",
-        runtime: AgentRuntime = .claude
+        runtime: AgentRuntime = .claude,
+        yoloMode: Bool = false
     ) async throws {
         guard let ws = webSocketService else {
             throw WorkspaceManagerError.notConnected
@@ -426,11 +428,12 @@ final class WorkspaceManagerService: ObservableObject {
                 prompt: prompt,
                 mode: mode,
                 permissionMode: "interactive",
-                agentType: runtime.rawValue
+                agentType: runtime.rawValue,
+                yoloMode: yoloMode ? true : nil
             )
         )
 
-        AppLogger.log("[WorkspaceManager] Sent prompt (mode: \(mode), runtime: \(runtime.rawValue), sessionId: \(sessionId ?? "nil"), workspaceId: \(effectiveWorkspaceId ?? "nil")) (interactive mode)")
+        AppLogger.log("[WorkspaceManager] Sent prompt (mode: \(mode), runtime: \(runtime.rawValue), sessionId: \(sessionId ?? "nil"), workspaceId: \(effectiveWorkspaceId ?? "nil"), yolo: \(yoloMode)) (interactive mode)")
     }
 
     /// Respond to a permission request or question
@@ -1152,6 +1155,7 @@ private struct WMSessionSendParams: Encodable {
     let mode: String
     let permissionMode: String
     let agentType: String?
+    let yoloMode: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -1160,6 +1164,7 @@ private struct WMSessionSendParams: Encodable {
         case mode
         case permissionMode = "permission_mode"
         case agentType = "agent_type"
+        case yoloMode = "yolo_mode"
     }
 
     /// Custom encoder to omit nil fields
@@ -1171,6 +1176,7 @@ private struct WMSessionSendParams: Encodable {
         try container.encode(mode, forKey: .mode)
         try container.encode(permissionMode, forKey: .permissionMode)
         try container.encodeIfPresent(agentType, forKey: .agentType)
+        try container.encodeIfPresent(yoloMode, forKey: .yoloMode)
     }
 }
 

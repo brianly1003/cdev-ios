@@ -101,7 +101,7 @@ struct SettingsView: View {
                             SettingsLinkRow(
                                 icon: "ladybug",
                                 title: "Report Issue",
-                                url: URL(string: "https://github.com/brianly1003/cdev/issues")!
+                                url: URL(string: "https://github.com/brianly1003/cdev-ios/issues")!
                             )
                         }
 

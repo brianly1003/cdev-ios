@@ -284,6 +284,10 @@ struct UserInputElementView: View {
         if segments.isEmpty {
             // Empty segments (e.g., only empty bash-stdout/bash-stderr tags) - render nothing
             EmptyView()
+        } else if shouldRenderAsAssistantStyleCommand(content.text) {
+            // Render normalized "• You ran ..." local command summaries using
+            // assistant-style markdown/tree visuals (same language as "Explored").
+            assistantStyleCommandView(content.text)
         } else if segments.count == 1, case .text(let text) = segments[0], text == content.text {
             // Regular user input - display with > prompt
             regularUserInputView
@@ -316,6 +320,22 @@ struct UserInputElementView: View {
             .padding(.vertical, Spacing.xxs)
             .frame(minHeight: 20)
         }
+    }
+
+    @ViewBuilder
+    private func assistantStyleCommandView(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: Spacing.xxs) {
+            Circle()
+                .fill(ColorSystem.primary)
+                .frame(width: 6, height: 6)
+                .padding(.top, 5)
+
+            MarkdownTextView(text: text, searchText: searchText)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, Spacing.xxs)
+        .frame(minHeight: 20)
     }
 
     private var regularUserInputView: some View {
@@ -517,6 +537,15 @@ struct UserInputElementView: View {
         let args = commandArgs?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let inline = args.isEmpty ? rawName : "\(rawName) \(args)"
         return (name: rawName, message: inline)
+    }
+
+    private func shouldRenderAsAssistantStyleCommand(_ text: String) -> Bool {
+        let lines = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let first = lines.first else { return false }
+        return first.hasPrefix("• You ran ")
     }
 }
 

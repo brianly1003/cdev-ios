@@ -2,6 +2,9 @@ import SwiftUI
 
 /// Compact banner for pending interactions (permissions, questions)
 struct InteractionBanner: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
     let interaction: PendingInteraction
     let onApprove: () -> Void
     let onDeny: () -> Void
@@ -11,16 +14,26 @@ struct InteractionBanner: View {
 
     @State private var answerText = ""
 
+    private var headerFont: Font {
+        layout.isCompact ? Typography.bannerTitle : Typography.bodyBold
+    }
+
+    private var descriptionFont: Font {
+        layout.isCompact ? Typography.caption1 : Typography.body
+    }
+
     var body: some View {
-        VStack(spacing: Spacing.sm) {
+        VStack(spacing: layout.tightSpacing) {
             // Header
-            HStack(spacing: Spacing.xs) {
+            HStack(spacing: layout.contentSpacing) {
                 Image(systemName: iconName)
-                    .font(.system(size: 14))
+                    .font(.system(size: layout.iconMedium, weight: .semibold))
                     .foregroundStyle(iconColor)
 
                 Text(headerText)
-                    .font(Typography.bodyBold)
+                    .font(headerFont)
+                    .foregroundStyle(ColorSystem.textPrimary)
+                    .lineLimit(1)
 
                 Spacer()
 
@@ -31,10 +44,10 @@ struct InteractionBanner: View {
 
             // Description
             Text(interaction.description)
-                .font(Typography.body)
-                .foregroundStyle(ColorSystem.textPrimary)
+                .font(descriptionFont)
+                .foregroundStyle(ColorSystem.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .lineLimit(3)
+                .lineLimit(2)
 
             // Actions
             switch interaction.type {
@@ -66,11 +79,11 @@ struct InteractionBanner: View {
                 }
             }
         }
-        .padding(Spacing.sm)
+        .padding(layout.smallPadding)
         .background(bannerBackground)
         .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
-        .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, Spacing.xs)
+        .padding(.horizontal, layout.smallPadding)
+        .padding(.vertical, layout.ultraTightSpacing)
     }
 
     private var iconName: String {
@@ -83,9 +96,9 @@ struct InteractionBanner: View {
 
     private var iconColor: Color {
         switch interaction.type {
-        case .permission: return .warningOrange
-        case .ptyPermission: return .warningOrange
-        case .question: return .primaryBlue
+        case .permission: return ColorSystem.warning
+        case .ptyPermission: return ColorSystem.warning
+        case .question: return ColorSystem.primary
         }
     }
 
@@ -101,9 +114,9 @@ struct InteractionBanner: View {
 
     private var bannerBackground: Color {
         switch interaction.type {
-        case .permission: return Color.warningOrange.opacity(0.15)
-        case .ptyPermission: return Color.warningOrange.opacity(0.15)
-        case .question: return Color.primaryBlue.opacity(0.15)
+        case .permission: return ColorSystem.warning.opacity(0.14)
+        case .ptyPermission: return ColorSystem.warning.opacity(0.14)
+        case .question: return ColorSystem.primary.opacity(0.12)
         }
     }
 }

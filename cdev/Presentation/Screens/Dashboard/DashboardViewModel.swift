@@ -2,6 +2,142 @@ import Foundation
 import Combine
 import UIKit
 
+enum DashboardNotificationCategory: String, CaseIterable, Sendable {
+    case permission
+    case runtime
+    case session
+    case system
+}
+
+enum DashboardNotificationSeverity: String, Sendable {
+    case info
+    case warning
+    case success
+    case critical
+}
+
+enum DashboardNotificationStatus: String, Sendable {
+    case pendingReview
+    case autoApproved
+    case approved
+    case denied
+    case dismissed
+    case resolvedElsewhere
+    case informational
+
+    var isOpen: Bool {
+        self == .pendingReview || self == .autoApproved
+    }
+}
+
+enum DashboardNotificationFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case unread
+    case permissions
+    case autoApproved
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .unread: return "Unread"
+        case .permissions: return "Permissions"
+        case .autoApproved: return "Yolo"
+        }
+    }
+}
+
+struct DashboardNotificationDetail: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let label: String
+    let value: String
+
+    init(id: UUID = UUID(), label: String, value: String) {
+        self.id = id
+        self.label = label
+        self.value = value
+    }
+}
+
+struct DashboardNotificationItem: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let sourceEventId: String
+    let category: DashboardNotificationCategory
+    let severity: DashboardNotificationSeverity
+    let createdAt: Date
+    var readAt: Date?
+    var status: DashboardNotificationStatus
+    var wasAutoApproved: Bool
+    let title: String
+    let message: String
+    let source: String
+    let runtimeId: String?
+    let workspaceId: String?
+    let sessionId: String?
+    let toolUseId: String?
+    let options: [PTYPromptOption]
+    var note: String?
+    let details: [DashboardNotificationDetail]
+
+    init(
+        id: UUID = UUID(),
+        sourceEventId: String,
+        category: DashboardNotificationCategory,
+        severity: DashboardNotificationSeverity,
+        createdAt: Date,
+        readAt: Date? = nil,
+        status: DashboardNotificationStatus,
+        wasAutoApproved: Bool = false,
+        title: String,
+        message: String,
+        source: String,
+        runtimeId: String?,
+        workspaceId: String?,
+        sessionId: String?,
+        toolUseId: String?,
+        options: [PTYPromptOption] = [],
+        note: String? = nil,
+        details: [DashboardNotificationDetail] = []
+    ) {
+        self.id = id
+        self.sourceEventId = sourceEventId
+        self.category = category
+        self.severity = severity
+        self.createdAt = createdAt
+        self.readAt = readAt
+        self.status = status
+        self.wasAutoApproved = wasAutoApproved
+        self.title = title
+        self.message = message
+        self.source = source
+        self.runtimeId = runtimeId
+        self.workspaceId = workspaceId
+        self.sessionId = sessionId
+        self.toolUseId = toolUseId
+        self.options = options
+        self.note = note
+        self.details = details
+    }
+
+    var isUnread: Bool {
+        readAt == nil
+    }
+
+    var runtimeDisplayName: String {
+        guard let runtimeId, !runtimeId.isEmpty else { return "Unknown" }
+        if let runtime = AgentRuntime.runtimeForID(runtimeId) {
+            return runtime.displayName
+        }
+        return runtimeId.capitalized
+    }
+
+    mutating func markRead(at timestamp: Date = Date()) {
+        guard readAt == nil else { return }
+        readAt = timestamp
+    }
+}
+
 /// Main dashboard view model - central hub for all agent interactions
 @MainActor
 final class DashboardViewModel: ObservableObject {
@@ -30,6 +166,8 @@ final class DashboardViewModel: ObservableObject {
         }
     }
     @Published var pendingInteraction: PendingInteraction?
+    @Published private(set) var notificationItems: [DashboardNotificationItem] = []
+    @Published var notificationFilter: DashboardNotificationFilter = .all
 
     // External Sessions (Claude running in VS Code, Cursor, terminal via hooks)
     @Published var externalSessionManager = ExternalSessionManager()
@@ -66,9 +204,49 @@ final class DashboardViewModel: ObservableObject {
         chatElements.count > 0 ? chatElements.count : logs.filter { $0.stream != .system }.count
     }
 
+    var filteredNotificationItems: [DashboardNotificationItem] {
+        switch notificationFilter {
+        case .all:
+            return notificationItems
+        case .unread:
+            return notificationItems.filter(\.isUnread)
+        case .permissions:
+            return notificationItems.filter { $0.category == .permission }
+        case .autoApproved:
+            return notificationItems.filter(\.wasAutoApproved)
+        }
+    }
+
+    var notificationUnreadCount: Int {
+        notificationItems.reduce(into: 0) { count, item in
+            if item.isUnread { count += 1 }
+        }
+    }
+
+    var permissionNotificationCount: Int {
+        notificationItems.reduce(into: 0) { count, item in
+            if item.category == .permission { count += 1 }
+        }
+    }
+
+    var autoApprovedNotificationCount: Int {
+        notificationItems.reduce(into: 0) { count, item in
+            if item.wasAutoApproved { count += 1 }
+        }
+    }
+
     // UI State
     @Published var promptText: String = ""
     @Published var isBashMode: Bool = false  // Persistent bash mode toggle
+    @Published var isYoloModeEnabled: Bool = false {
+        didSet {
+            guard oldValue != isYoloModeEnabled else { return }
+            guard let appState, let activeWindowId = activeTerminalWindowId else { return }
+            appState.setTerminalWindowYoloMode(activeWindowId, enabled: isYoloModeEnabled)
+            persistWindowSnapshot(for: activeWindowId)
+            AppLogger.log("[Dashboard] Yolo mode toggled: \(isYoloModeEnabled ? "ON" : "OFF")")
+        }
+    }
     @Published var isLoading: Bool = false
     @Published var error: AppError?
     @Published var showPromptSheet: Bool = false
@@ -289,6 +467,7 @@ final class DashboardViewModel: ObservableObject {
 
         appState.activateTerminalWindow(windowId)
         activeTerminalWindowId = windowId
+        isYoloModeEnabled = window.isYoloModeEnabled
         syncPendingTempSessionForActiveWindow()
 
         guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
@@ -380,6 +559,7 @@ final class DashboardViewModel: ObservableObject {
                 await activateTerminalWindow(nextActiveId)
             } else {
                 await clearWindowDisplayState()
+                isYoloModeEnabled = false
                 setSelectedSession(nil)
                 isWatchingSession = false
                 watchingSessionId = nil
@@ -430,11 +610,19 @@ final class DashboardViewModel: ObservableObject {
         return fallbackSessionWatchOwnerId
     }
 
+    private func syncActiveWindowSettingsFromState() {
+        guard let window = activeWindow else { return }
+        if isYoloModeEnabled != window.isYoloModeEnabled {
+            isYoloModeEnabled = window.isYoloModeEnabled
+        }
+    }
+
     private func syncActiveTerminalWindowContext(sessionId: String?) {
         guard let appState else { return }
         guard let window = ensureActiveTerminalWindow() else { return }
         appState.setTerminalWindowRuntime(window.id, runtime: selectedSessionRuntime)
         appState.setTerminalWindowSession(window.id, sessionId: sessionId)
+        appState.setTerminalWindowYoloMode(window.id, enabled: isYoloModeEnabled)
     }
 
     private func beginWindowOperation(windowId: UUID?) -> UUID? {
@@ -798,6 +986,7 @@ final class DashboardViewModel: ObservableObject {
     // Fallback when claude_message isn't emitted for PTY sessions
     private var hasReceivedClaudeMessageForSession: Bool = false
     private var lastPtyOutputLine: String?
+    private var lastYoloAutoApprovedPermissionId: String?
 
     // Deduplication for real-time messages
     // O(1) lookup to prevent duplicate elements from multiple sources
@@ -816,6 +1005,7 @@ final class DashboardViewModel: ObservableObject {
     // Memory management: max elements to keep in memory
     // Older elements will be removed when this limit is exceeded
     private let maxChatElements = 500
+    private let maxNotificationItems = 400
 
     // MARK: - Init
 
@@ -847,11 +1037,13 @@ final class DashboardViewModel: ObservableObject {
         if let appState {
             terminalWindows = appState.terminalWindows
             activeTerminalWindowId = appState.activeTerminalWindowId
+            syncActiveWindowSettingsFromState()
 
             appState.$terminalWindows
                 .receive(on: RunLoop.main)
                 .sink { [weak self] windows in
                     self?.terminalWindows = windows
+                    self?.syncActiveWindowSettingsFromState()
                 }
                 .store(in: &appStateWindowCancellables)
 
@@ -859,6 +1051,7 @@ final class DashboardViewModel: ObservableObject {
                 .receive(on: RunLoop.main)
                 .sink { [weak self] activeId in
                     self?.activeTerminalWindowId = activeId
+                    self?.syncActiveWindowSettingsFromState()
                 }
                 .store(in: &appStateWindowCancellables)
         }
@@ -1418,7 +1611,8 @@ final class DashboardViewModel: ObservableObject {
                     prompt: finalPrompt,
                     mode: mode,
                     sessionId: sessionIdToSend,
-                    runtime: selectedSessionRuntime
+                    runtime: selectedSessionRuntime,
+                    yoloMode: isYoloModeEnabled
                 )
 
                 // Clear attached images after successful send
@@ -2052,11 +2246,17 @@ final class DashboardViewModel: ObservableObject {
             pendingInteraction = nil
             return
         }
+        let interaction = pendingInteraction
 
         // Get current session ID
-        let sessionId = userSelectedSessionId ?? agentStatus.sessionId
+        let sessionId = interaction?.sessionId ?? userSelectedSessionId ?? agentStatus.sessionId
         guard let sessionId = sessionId, !sessionId.isEmpty else {
             AppLogger.log("[Dashboard] No session ID for PTY dismiss", type: .error)
+            updatePermissionNotificationStatus(
+                interaction: interaction,
+                status: .dismissed,
+                note: "Dismissed from mobile permission panel."
+            )
             pendingInteraction = nil
             return
         }
@@ -2064,11 +2264,23 @@ final class DashboardViewModel: ObservableObject {
         do {
             // Send escape key to server to cancel the permission prompt
             try await _agentRepository.sendInput(sessionId: sessionId, input: "escape", runtime: selectedSessionRuntime)
+            updatePermissionNotificationStatus(
+                interaction: interaction,
+                sessionId: sessionId,
+                status: .dismissed,
+                note: "Dismissed from mobile permission panel."
+            )
             pendingInteraction = nil
             AppLogger.log("[Dashboard] PTY permission dismissed with escape key")
             Haptics.light()
         } catch {
             // Still clear local state even if server request fails
+            updatePermissionNotificationStatus(
+                interaction: interaction,
+                sessionId: sessionId,
+                status: .dismissed,
+                note: "Dismissed locally after escape send failure."
+            )
             pendingInteraction = nil
             AppLogger.log("[Dashboard] PTY dismiss failed: \(error)", type: .error)
         }
@@ -2090,6 +2302,244 @@ final class DashboardViewModel: ObservableObject {
         return ptyKeys.contains(lowercasedKey) ||
                hookBridgeKeys.contains(lowercasedKey) ||
                key.count == 1
+    }
+
+    private func appendNotification(_ item: DashboardNotificationItem) {
+        if notificationItems.contains(where: { $0.sourceEventId == item.sourceEventId }) {
+            return
+        }
+
+        notificationItems.insert(item, at: 0)
+        if notificationItems.count > maxNotificationItems {
+            notificationItems.removeLast(notificationItems.count - maxNotificationItems)
+        }
+    }
+
+    private func inferredRuntimeId(for event: AgentEvent) -> String? {
+        if let agentType = event.agentType?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !agentType.isEmpty {
+            return agentType.lowercased()
+        }
+
+        if let activeRuntime = activeWindow?.runtime.rawValue,
+           !activeRuntime.isEmpty {
+            return activeRuntime
+        }
+
+        return selectedSessionRuntime.rawValue
+    }
+
+    private func notificationSourceLabel(for payload: PTYPermissionPayload) -> String {
+        payload.isHookBridgeMode ? "hook-bridge" : "pty-interactive"
+    }
+
+    private func permissionStatus(for key: String) -> DashboardNotificationStatus? {
+        switch key.lowercased() {
+        case "1", "2", "y", "enter", "return", "allow_once", "allow_session":
+            return .approved
+        case "n", "3", "esc", "escape", "deny":
+            return .denied
+        default:
+            return nil
+        }
+    }
+
+    private func permissionStatus(for decision: PermissionDecision) -> DashboardNotificationStatus {
+        switch decision {
+        case .allow: return .approved
+        case .deny: return .denied
+        }
+    }
+
+    private func notificationDetails(
+        for event: AgentEvent,
+        payload: PTYPermissionPayload,
+        yoloEnabledAtReceipt: Bool
+    ) -> [DashboardNotificationDetail] {
+        var rows: [DashboardNotificationDetail] = []
+        let permissionType = payload.type?.displayName ?? "Permission"
+        rows.append(.init(label: "Permission Type", value: permissionType))
+        rows.append(.init(label: "Source", value: notificationSourceLabel(for: payload)))
+        rows.append(.init(label: "Yolo Mode", value: yoloEnabledAtReceipt ? "Enabled" : "Disabled"))
+
+        let target = payload.displayTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !target.isEmpty, target.lowercased() != "unknown" {
+            rows.append(.init(label: "Target", value: target))
+        }
+
+        if let command = payload.command?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !command.isEmpty {
+            rows.append(.init(label: "Command", value: command))
+        }
+
+        if let toolName = payload.toolName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !toolName.isEmpty {
+            rows.append(.init(label: "Tool", value: toolName))
+        }
+
+        if let workspaceId = event.workspaceId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !workspaceId.isEmpty {
+            rows.append(.init(label: "Workspace ID", value: workspaceId))
+        }
+
+        if let sessionId = (event.sessionId ?? payload.sessionId)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionId.isEmpty {
+            rows.append(.init(label: "Session ID", value: "…\(String(sessionId.suffix(8)))"))
+        }
+
+        if let toolUseId = payload.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !toolUseId.isEmpty {
+            rows.append(.init(label: "Tool Use ID", value: toolUseId))
+        }
+
+        rows.append(.init(label: "Event ID", value: event.id))
+        return rows
+    }
+
+    private func recordPermissionNotification(event: AgentEvent, payload: PTYPermissionPayload) {
+        let titlePrefix = payload.title
+        let title = payload.isHookBridgeMode ? "\(titlePrefix) (LIVE)" : titlePrefix
+        let runtimeId = inferredRuntimeId(for: event)
+        let optionValues = payload.options ?? []
+        let details = notificationDetails(
+            for: event,
+            payload: payload,
+            yoloEnabledAtReceipt: isYoloModeEnabled
+        )
+
+        let item = DashboardNotificationItem(
+            sourceEventId: event.id,
+            category: .permission,
+            severity: .warning,
+            createdAt: event.timestamp,
+            status: .pendingReview,
+            title: title,
+            message: payload.displayDescription,
+            source: notificationSourceLabel(for: payload),
+            runtimeId: runtimeId,
+            workspaceId: event.workspaceId ?? payload.workspaceId,
+            sessionId: event.sessionId ?? payload.sessionId,
+            toolUseId: payload.toolUseId,
+            options: optionValues,
+            details: details
+        )
+
+        appendNotification(item)
+    }
+
+    private func permissionNotificationIndex(
+        toolUseId: String? = nil,
+        sourceEventId: String? = nil,
+        sessionId: String? = nil
+    ) -> Int? {
+        if let toolUseId = toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !toolUseId.isEmpty,
+           let index = notificationItems.firstIndex(where: { item in
+               item.category == .permission && item.toolUseId == toolUseId
+           }) {
+            return index
+        }
+
+        if let sourceEventId,
+           let index = notificationItems.firstIndex(where: { item in
+               item.category == .permission && item.sourceEventId == sourceEventId
+           }) {
+            return index
+        }
+
+        if let sessionId = sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionId.isEmpty,
+           let index = notificationItems.firstIndex(where: { item in
+               item.category == .permission &&
+               item.sessionId == sessionId &&
+               item.status.isOpen
+           }) {
+            return index
+        }
+
+        return notificationItems.firstIndex(where: { item in
+            item.category == .permission && item.status.isOpen
+        })
+    }
+
+    private func updatePermissionNotificationStatus(
+        interaction: PendingInteraction? = nil,
+        toolUseId: String? = nil,
+        sessionId: String? = nil,
+        status: DashboardNotificationStatus,
+        note: String? = nil,
+        markAutoApproved: Bool = false
+    ) {
+        let eventId = interaction?.id
+        let effectiveToolUseId = toolUseId ?? interaction?.toolUseId
+        let effectiveSessionId = sessionId ?? interaction?.sessionId
+
+        guard let index = permissionNotificationIndex(
+            toolUseId: effectiveToolUseId,
+            sourceEventId: eventId,
+            sessionId: effectiveSessionId
+        ) else {
+            return
+        }
+
+        notificationItems[index].status = status
+        if markAutoApproved {
+            notificationItems[index].wasAutoApproved = true
+        }
+        if let note = note?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !note.isEmpty {
+            notificationItems[index].note = note
+        }
+    }
+
+    func markNotificationAsRead(_ id: UUID) {
+        guard let index = notificationItems.firstIndex(where: { $0.id == id }) else { return }
+        notificationItems[index].markRead()
+    }
+
+    func markAllNotificationsAsRead() {
+        let timestamp = Date()
+        for index in notificationItems.indices where notificationItems[index].isUnread {
+            notificationItems[index].markRead(at: timestamp)
+        }
+    }
+
+    func clearReadNotifications() {
+        notificationItems.removeAll { !$0.isUnread }
+    }
+
+    func clearAllNotifications() {
+        notificationItems.removeAll()
+    }
+
+    private func yoloAutoApprovalKey(for interaction: PendingInteraction) -> String? {
+        let keys = Set((interaction.ptyOptions ?? []).map { $0.key.lowercased() })
+        if keys.contains("2") { return "2" }
+        if keys.contains("allow_session") { return "allow_session" }
+        if keys.contains("1") { return "1" }
+        if keys.contains("allow_once") { return "allow_once" }
+        return nil
+    }
+
+    private func maybeAutoApproveLivePermission(_ interaction: PendingInteraction) {
+        guard isYoloModeEnabled else { return }
+        guard selectedSessionRuntime == .claude else { return } // Codex does not support hook-bridge permission flow yet.
+        guard interaction.isPTYMode, interaction.isHookBridgeMode else { return } // LIVE mode only.
+        guard lastYoloAutoApprovedPermissionId != interaction.id else { return }
+        guard let key = yoloAutoApprovalKey(for: interaction) else { return }
+
+        lastYoloAutoApprovedPermissionId = interaction.id
+        updatePermissionNotificationStatus(
+            interaction: interaction,
+            status: .autoApproved,
+            note: "Auto-approved by Yolo mode (LIVE).",
+            markAutoApproved: true
+        )
+        AppLogger.log("[Dashboard] Yolo auto-approving LIVE permission with key '\(key)'")
+        Task { [weak self] in
+            await self?.respondToPTYPermission(key: key)
+        }
     }
 
     // MARK: - PTY Mode Permission Responses
@@ -2132,6 +2582,14 @@ final class DashboardViewModel: ObservableObject {
                 decision: decision,
                 scope: scope
             )
+            let status = permissionStatus(for: decision)
+            let note = scope == .session ? "Applied for this session." : "Applied once."
+            updatePermissionNotificationStatus(
+                interaction: interaction,
+                toolUseId: toolUseId,
+                status: status,
+                note: note
+            )
             pendingInteraction = nil
             AppLogger.log("[Dashboard] Hook bridge permission responded successfully", type: .success)
         } catch {
@@ -2139,6 +2597,12 @@ final class DashboardViewModel: ObservableObject {
             // This can happen if user responded on desktop, cancelled, or closed Claude Code
             // In this case, silently dismiss the permission UI instead of showing an error
             if isPermissionAlreadyHandledError(error) {
+                updatePermissionNotificationStatus(
+                    interaction: interaction,
+                    toolUseId: toolUseId,
+                    status: .resolvedElsewhere,
+                    note: "Resolved from another device or runtime."
+                )
                 AppLogger.log("[Dashboard] Permission request already handled elsewhere - dismissing silently", type: .info)
                 pendingInteraction = nil
                 return
@@ -2257,6 +2721,13 @@ final class DashboardViewModel: ObservableObject {
 
             // Send "enter" to confirm selection
             try await _agentRepository.sendInput(sessionId: sessionId, input: "enter", runtime: selectedSessionRuntime)
+            let selectedOptionLabel = options.first(where: { $0.key == key })?.label
+            updatePermissionNotificationStatus(
+                interaction: interaction,
+                sessionId: sessionId,
+                status: permissionStatus(for: key) ?? .informational,
+                note: selectedOptionLabel.map { "Selected: \($0)" }
+            )
             pendingInteraction = nil
             AppLogger.log("[Dashboard] PTY permission responded: navigated to option '\(key)' and pressed enter")
         } catch {
@@ -3109,10 +3580,22 @@ final class DashboardViewModel: ObservableObject {
             // PTY mode permission prompt with options
             // Validate that options have proper keys before updating UI
             // This prevents flickering from intermediate/malformed events
-            if case .ptyPermission(let payload) = event.payload,
-               let options = payload.options,
-               !options.isEmpty,
-               options.allSatisfy({ isValidPTYOptionKey($0.key) }) {
+            if case .ptyPermission(let payload) = event.payload {
+                let options = payload.options ?? []
+                let hasValidOptions = !options.isEmpty && options.allSatisfy({ isValidPTYOptionKey($0.key) })
+                recordPermissionNotification(event: event, payload: payload)
+
+                guard hasValidOptions else {
+                    updatePermissionNotificationStatus(
+                        toolUseId: payload.toolUseId,
+                        sessionId: event.sessionId ?? payload.sessionId,
+                        status: .informational,
+                        note: "Received without actionable options."
+                    )
+                    AppLogger.log("[Dashboard] PTY permission skipped - invalid or missing options")
+                    return
+                }
+
                 pendingInteraction = PendingInteraction.fromPTYPermission(event: event)
                 agentState = .waiting  // Update state to show waiting indicator
                 Haptics.permissionAlert()
@@ -3136,8 +3619,9 @@ final class DashboardViewModel: ObservableObject {
                 }
 
                 AppLogger.log("[Dashboard] PTY permission received with \(options.count) valid options, type=\(payload.type?.rawValue ?? "unknown")")
-            } else {
-                AppLogger.log("[Dashboard] PTY permission skipped - invalid or missing options")
+                if let interaction = pendingInteraction {
+                    maybeAutoApproveLivePermission(interaction)
+                }
             }
 
         case .ptyPermissionResolved:
@@ -3147,6 +3631,20 @@ final class DashboardViewModel: ObservableObject {
                 let input = payload.input ?? payload.decision ?? "unknown"
                 let toolUseId = payload.toolUseId
                 AppLogger.log("[Dashboard] PTY permission resolved by another device: resolvedBy=\(resolvedBy), input=\(input), toolUseId=\(toolUseId ?? "nil")")
+                let status: DashboardNotificationStatus
+                if payload.wasApproved {
+                    status = .approved
+                } else if payload.wasDenied {
+                    status = .denied
+                } else {
+                    status = .resolvedElsewhere
+                }
+                updatePermissionNotificationStatus(
+                    toolUseId: toolUseId,
+                    sessionId: payload.sessionId,
+                    status: status,
+                    note: "Resolved by \(resolvedBy)."
+                )
 
                 // Clear the pending permission UI if it matches
                 // For hook bridge mode: match by toolUseId for accurate correlation

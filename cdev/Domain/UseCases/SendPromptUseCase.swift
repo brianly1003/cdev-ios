@@ -2,7 +2,13 @@ import Foundation
 
 /// Use case for sending prompts to the selected runtime (Claude/Codex)
 protocol SendPromptUseCase {
-    func execute(prompt: String, mode: SessionMode, sessionId: String?, runtime: AgentRuntime) async throws
+    func execute(
+        prompt: String,
+        mode: SessionMode,
+        sessionId: String?,
+        runtime: AgentRuntime,
+        yoloMode: Bool
+    ) async throws
 }
 
 final class DefaultSendPromptUseCase: SendPromptUseCase {
@@ -16,7 +22,8 @@ final class DefaultSendPromptUseCase: SendPromptUseCase {
         prompt: String,
         mode: SessionMode = .new,
         sessionId: String? = nil,
-        runtime: AgentRuntime = .claude
+        runtime: AgentRuntime = .claude,
+        yoloMode: Bool = false
     ) async throws {
         // Validate prompt
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -25,7 +32,13 @@ final class DefaultSendPromptUseCase: SendPromptUseCase {
 
         AppLogger.log("Sending prompt (runtime: \(runtime.rawValue), mode: \(mode.rawValue))")
 
-        try await agentRepository.runClaude(prompt: prompt, mode: mode, sessionId: sessionId, runtime: runtime)
+        try await agentRepository.runClaude(
+            prompt: prompt,
+            mode: mode,
+            sessionId: sessionId,
+            runtime: runtime,
+            yoloMode: yoloMode
+        )
 
         AppLogger.log("Prompt sent successfully", type: .success)
     }

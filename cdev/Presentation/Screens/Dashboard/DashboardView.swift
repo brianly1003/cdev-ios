@@ -22,6 +22,7 @@ struct DashboardView: View {
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var showCameraPermissionAlert = false
+    @State private var showNotificationCenter = false
     @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
     @State private var isTextFieldEditing: Bool = false  // Tracks actual editing state from UITextView
@@ -86,10 +87,19 @@ struct DashboardView: View {
                             Task { await viewModel.createTerminalWindow() }
                         },
                         onSelect: { windowId in
+                            if viewModel.selectedTab == .diffs || viewModel.selectedTab == .explorer {
+                                withAnimation(Animations.stateChange) {
+                                    viewModel.selectedTab = .logs
+                                }
+                            }
                             Task { await viewModel.activateTerminalWindow(windowId) }
                         },
                         onClose: { windowId in
                             Task { await viewModel.closeTerminalWindow(windowId) }
+                        },
+                        notificationUnreadCount: viewModel.notificationUnreadCount,
+                        onNotificationTap: {
+                            showNotificationCenter = true
                         }
                     )
 
@@ -245,6 +255,7 @@ struct DashboardView: View {
                                 agentState: viewModel.agentState,
                                 promptText: $viewModel.promptText,
                                 isBashMode: $viewModel.isBashMode,
+                                isYoloModeEnabled: $viewModel.isYoloModeEnabled,
                                 isLoading: viewModel.isLoading,
                                 isFocused: $isInputFocused,
                                 isEditing: $isTextFieldEditing,  // Actual editing state from UITextView
@@ -348,6 +359,10 @@ struct DashboardView: View {
                 }
                 .sheet(isPresented: $showDebugLogs) {
                     AdminToolsView()
+                        .responsiveSheet()
+                }
+                .sheet(isPresented: $showNotificationCenter) {
+                    NotificationCenterSheet(viewModel: viewModel)
                         .responsiveSheet()
                 }
                 .fullScreenCover(isPresented: $showSettings) {
@@ -729,6 +744,8 @@ private struct MissionControlHeader: View {
     let onCreate: () -> Void
     let onSelect: (UUID) -> Void
     let onClose: (UUID) -> Void
+    let notificationUnreadCount: Int
+    let onNotificationTap: () -> Void
 
     @State private var chromeFlash: Double = 0
 
@@ -754,7 +771,9 @@ private struct MissionControlHeader: View {
                 isWatchingSession: isWatchingSession,
                 onWorkspaceTap: onWorkspaceTap,
                 externalSessionManager: externalSessionManager,
-                isEmbeddedInMissionControl: true
+                isEmbeddedInMissionControl: true,
+                notificationUnreadCount: notificationUnreadCount,
+                onNotificationTap: onNotificationTap
             )
 
             Divider()
@@ -864,6 +883,8 @@ struct StatusBarView: View {
     var onWorkspaceTap: (() -> Void)?
     var externalSessionManager: ExternalSessionManager?
     var isEmbeddedInMissionControl: Bool = false
+    var notificationUnreadCount: Int = 0
+    var onNotificationTap: (() -> Void)?
 
     @StateObject private var sessionAwareness = SessionAwarenessManager.shared
     @State private var isPulsing = false
@@ -926,6 +947,16 @@ struct StatusBarView: View {
                 }
 
                 Spacer()
+
+                if let onNotificationTap = onNotificationTap {
+                    NotificationInboxButton(
+                        unreadCount: notificationUnreadCount,
+                        onTap: {
+                            onNotificationTap()
+                            Haptics.selection()
+                        }
+                    )
+                }
 
                 // Enhanced workspace badge - shows workspace count + ⌘K hint
                 EnhancedWorkspaceBadge(
@@ -1245,6 +1276,7 @@ struct ActionBarView: View {
     let agentState: ClaudeState
     @Binding var promptText: String
     @Binding var isBashMode: Bool
+    @Binding var isYoloModeEnabled: Bool
     let isLoading: Bool
     var isFocused: FocusState<Bool>.Binding
     @Binding var isEditing: Bool  // Actual editing state from UITextView (more reliable than FocusState)
@@ -1593,6 +1625,7 @@ struct ActionBarView: View {
             AgentSelectorBar(
                 selectedRuntime: $selectedRuntime,
                 availableRuntimes: availableRuntimes,
+                isYoloModeEnabled: $isYoloModeEnabled,
                 isBashMode: isBashMode,
                 onAgentChanged: onAgentChanged
             )
@@ -1853,6 +1886,57 @@ private struct TerminalWindowsBar: View {
     }
 }
 
+// MARK: - Notification Inbox Button
+
+private struct NotificationInboxButton: View {
+    let unreadCount: Int
+    let onTap: () -> Void
+
+    private var hasUnread: Bool { unreadCount > 0 }
+    private var unreadLabel: String {
+        unreadCount > 99 ? "99+" : "\(unreadCount)"
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack(alignment: .topTrailing) {
+                HStack(spacing: 4) {
+                    Image(systemName: hasUnread ? "bell.badge.fill" : "bell")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(hasUnread ? ColorSystem.warning : ColorSystem.textTertiary)
+
+                    Text("Inbox")
+                        .font(Typography.statusLabel)
+                        .foregroundStyle(hasUnread ? ColorSystem.warning : ColorSystem.textSecondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(hasUnread ? ColorSystem.warning.opacity(0.14) : ColorSystem.terminalBgHighlight)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(hasUnread ? ColorSystem.warning.opacity(0.35) : .clear, lineWidth: 1)
+                        )
+                )
+
+                if hasUnread {
+                    Text(unreadLabel)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(ColorSystem.error)
+                        .clipShape(Capsule())
+                        .offset(x: 8, y: -6)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(hasUnread ? "Inbox, \(unreadCount) unread notifications" : "Inbox")
+    }
+}
+
 // MARK: - Enhanced Workspace Badge
 
 /// Enhanced workspace badge with workspace count and ⌘K hint
@@ -1938,6 +2022,7 @@ private struct EnhancedWorkspaceBadge: View {
 struct AgentSelectorBar: View {
     @Binding var selectedRuntime: AgentRuntime
     let availableRuntimes: [AgentRuntime]
+    @Binding var isYoloModeEnabled: Bool
     var isBashMode: Bool = false
     var onAgentChanged: ((AgentRuntime) -> Void)?
 
@@ -2018,6 +2103,32 @@ struct AgentSelectorBar: View {
                 .transition(.scale.combined(with: .opacity))
             }
 
+            Button {
+                withAnimation(Animations.stateChange) {
+                    isYoloModeEnabled.toggle()
+                }
+                Haptics.selection()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "bolt.shield.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("yolo")
+                        .font(Typography.terminalSmall)
+                }
+                .foregroundStyle(isYoloModeEnabled ? ColorSystem.warning : ColorSystem.textTertiary)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isYoloModeEnabled ? ColorSystem.warning.opacity(0.14) : ColorSystem.terminalBgHighlight.opacity(0.6))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isYoloModeEnabled ? ColorSystem.warning.opacity(0.35) : .clear, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
             Spacer()
 
             // Future: Add more selectors here (model, session mode, etc.)
@@ -2025,6 +2136,570 @@ struct AgentSelectorBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(Animations.stateChange, value: isBashMode)
+        .animation(Animations.stateChange, value: isYoloModeEnabled)
+    }
+}
+
+// MARK: - Notification Center
+
+private struct NotificationCenterSheet: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: layout.smallPadding) {
+                NotificationCenterSummaryCard(
+                    totalCount: viewModel.notificationItems.count,
+                    unreadCount: viewModel.notificationUnreadCount,
+                    permissionCount: viewModel.permissionNotificationCount,
+                    yoloCount: viewModel.autoApprovedNotificationCount
+                )
+
+                NotificationFilterChips(
+                    selectedFilter: $viewModel.notificationFilter,
+                    allCount: viewModel.notificationItems.count,
+                    unreadCount: viewModel.notificationUnreadCount,
+                    permissionCount: viewModel.permissionNotificationCount,
+                    yoloCount: viewModel.autoApprovedNotificationCount
+                )
+
+                if viewModel.filteredNotificationItems.isEmpty {
+                    NotificationCenterEmptyState(filter: viewModel.notificationFilter)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: layout.smallPadding) {
+                            ForEach(viewModel.filteredNotificationItems) { item in
+                                NavigationLink {
+                                    NotificationDetailView(item: item)
+                                        .onAppear {
+                                            viewModel.markNotificationAsRead(item.id)
+                                        }
+                                } label: {
+                                    NotificationFeedCard(item: item)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, layout.standardPadding)
+                        .padding(.bottom, layout.largePadding)
+                    }
+                }
+            }
+            .padding(.horizontal, layout.standardPadding)
+            .padding(.top, layout.ultraTightSpacing)
+            .background(ColorSystem.terminalBg.ignoresSafeArea())
+            .navigationTitle("Notification Center")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Mark all as read") {
+                            viewModel.markAllNotificationsAsRead()
+                        }
+                        .disabled(viewModel.notificationUnreadCount == 0)
+
+                        Button("Clear read notifications") {
+                            viewModel.clearReadNotifications()
+                        }
+                        .disabled(viewModel.notificationItems.allSatisfy(\.isUnread))
+
+                        Divider()
+
+                        Button("Clear all notifications", role: .destructive) {
+                            viewModel.clearAllNotifications()
+                        }
+                        .disabled(viewModel.notificationItems.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct NotificationCenterSummaryCard: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    let totalCount: Int
+    let unreadCount: Int
+    let permissionCount: Int
+    let yoloCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: layout.tightSpacing) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
+                    Text("Runtime Activity Feed")
+                        .font(Typography.bannerTitle)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                    Text("Permission prompts and operational events are retained here for audit and review.")
+                        .font(layout.isCompact ? Typography.caption2 : Typography.caption1)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Image(systemName: "bell.and.waves.left.and.right.fill")
+                    .font(.system(size: layout.iconAction, weight: .semibold))
+                    .foregroundStyle(ColorSystem.primary)
+                    .padding(layout.tightSpacing)
+                    .background(ColorSystem.primary.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+            }
+
+            HStack(spacing: layout.tightSpacing) {
+                NotificationMetricChip(label: "Total", value: totalCount, color: ColorSystem.info)
+                NotificationMetricChip(label: "Unread", value: unreadCount, color: ColorSystem.warning)
+                NotificationMetricChip(label: "Permissions", value: permissionCount, color: ColorSystem.primary)
+                NotificationMetricChip(label: "Yolo", value: yoloCount, color: ColorSystem.success)
+            }
+        }
+        .padding(.horizontal, layout.standardPadding)
+        .padding(.vertical, layout.smallPadding)
+        .background(
+            RoundedRectangle(cornerRadius: CornerRadius.large)
+                .fill(ColorSystem.terminalBgElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CornerRadius.large)
+                        .strokeBorder(ColorSystem.terminalBgHighlight, lineWidth: layout.borderWidth)
+                )
+        )
+    }
+}
+
+private struct NotificationMetricChip: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    let label: String
+    let value: Int
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
+            Text(label)
+                .font(Typography.caption2)
+                .foregroundStyle(ColorSystem.textTertiary)
+            Text("\(value)")
+                .font(.system(size: layout.isCompact ? 13 : 15, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, layout.smallPadding)
+        .padding(.vertical, layout.ultraTightSpacing + 2)
+        .background(color.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+    }
+}
+
+private struct NotificationFilterChips: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    @Binding var selectedFilter: DashboardNotificationFilter
+    let allCount: Int
+    let unreadCount: Int
+    let permissionCount: Int
+    let yoloCount: Int
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: layout.tightSpacing) {
+                ForEach(DashboardNotificationFilter.allCases) { filter in
+                    Button {
+                        withAnimation(Animations.stateChange) {
+                            selectedFilter = filter
+                        }
+                        Haptics.selection()
+                    } label: {
+                        HStack(spacing: layout.ultraTightSpacing + 2) {
+                            Text(filter.title)
+                                .font(layout.isCompact ? Typography.caption1 : Typography.footnote)
+                                .fontWeight(.medium)
+                            Text("\(count(for: filter))")
+                                .font(.system(size: layout.iconSmall, weight: .bold, design: .monospaced))
+                                .padding(.horizontal, layout.ultraTightSpacing + 2)
+                                .padding(.vertical, layout.ultraTightSpacing)
+                                .background(
+                                    selectedFilter == filter
+                                        ? ColorSystem.primary.opacity(0.15)
+                                        : ColorSystem.terminalBgHighlight
+                                )
+                                .clipShape(Capsule())
+                        }
+                        .foregroundStyle(selectedFilter == filter ? ColorSystem.primary : ColorSystem.textSecondary)
+                        .padding(.horizontal, layout.smallPadding)
+                        .padding(.vertical, layout.ultraTightSpacing + 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: CornerRadius.medium)
+                                .fill(selectedFilter == filter ? ColorSystem.primary.opacity(0.15) : ColorSystem.terminalBgElevated)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: CornerRadius.medium)
+                                        .strokeBorder(
+                                            selectedFilter == filter ? ColorSystem.primary.opacity(0.35) : ColorSystem.terminalBgHighlight,
+                                            lineWidth: layout.borderWidth
+                                        )
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, layout.ultraTightSpacing)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private func count(for filter: DashboardNotificationFilter) -> Int {
+        switch filter {
+        case .all: return allCount
+        case .unread: return unreadCount
+        case .permissions: return permissionCount
+        case .autoApproved: return yoloCount
+        }
+    }
+}
+
+private struct NotificationCenterEmptyState: View {
+    let filter: DashboardNotificationFilter
+
+    var body: some View {
+        VStack(spacing: Spacing.sm) {
+            Image(systemName: "bell.slash")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(ColorSystem.textTertiary)
+            Text("No \(filter.title.lowercased()) notifications")
+                .font(Typography.bodyBold)
+                .foregroundStyle(ColorSystem.textSecondary)
+            Text("New runtime events will appear here.")
+                .font(Typography.caption1)
+                .foregroundStyle(ColorSystem.textTertiary)
+        }
+        .padding(Spacing.lg)
+    }
+}
+
+private struct NotificationFeedCard: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    let item: DashboardNotificationItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: layout.ultraTightSpacing + 2) {
+            HStack(alignment: .top, spacing: layout.contentSpacing) {
+                ZStack {
+                    Circle()
+                        .fill(item.status.tintColor)
+                        .frame(width: layout.indicatorSizeSmall + 16, height: layout.indicatorSizeSmall + 16)
+                    Image(systemName: item.iconName)
+                        .font(.system(size: layout.iconSmall + 2, weight: .semibold))
+                        .foregroundStyle(item.status.iconColor)
+                }
+
+                VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
+                    HStack(spacing: layout.ultraTightSpacing + 2) {
+                        Text(item.title)
+                            .font(Typography.bannerTitle)
+                            .foregroundStyle(ColorSystem.textPrimary)
+                            .lineLimit(1)
+
+                        if item.isUnread {
+                            Circle()
+                                .fill(ColorSystem.warning)
+                                .frame(width: layout.dotSize, height: layout.dotSize)
+                        }
+                    }
+
+                    Text(item.message)
+                        .font(layout.isCompact ? Typography.caption2 : Typography.caption1)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(item.createdAt.relativeString)
+                    .font(Typography.terminalTimestamp)
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+
+            HStack(spacing: Spacing.xs) {
+                NotificationBadge(
+                    text: item.status.displayName,
+                    foreground: item.status.iconColor,
+                    background: item.status.tintColor
+                )
+                NotificationBadge(
+                    text: item.runtimeDisplayName,
+                    foreground: ColorSystem.info,
+                    background: ColorSystem.info.opacity(0.15)
+                )
+                if item.wasAutoApproved {
+                    NotificationBadge(
+                        text: "Yolo",
+                        foreground: ColorSystem.success,
+                        background: ColorSystem.success.opacity(0.15)
+                    )
+                }
+                if let sessionId = item.sessionId, !sessionId.isEmpty {
+                    NotificationBadge(
+                        text: "…\(String(sessionId.suffix(8)))",
+                        foreground: ColorSystem.textSecondary,
+                        background: ColorSystem.terminalBgHighlight
+                    )
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: layout.iconSmall, weight: .semibold))
+                    .foregroundStyle(ColorSystem.textQuaternary)
+            }
+        }
+        .padding(layout.smallPadding)
+        .background(
+            RoundedRectangle(cornerRadius: CornerRadius.large)
+                .fill(ColorSystem.terminalBgElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CornerRadius.large)
+                        .strokeBorder(item.status.borderColor, lineWidth: layout.borderWidth)
+                )
+        )
+    }
+}
+
+private struct NotificationBadge: View {
+    let text: String
+    let foreground: Color
+    let background: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(background)
+            .clipShape(Capsule())
+    }
+}
+
+private struct NotificationDetailView: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    let item: DashboardNotificationItem
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: layout.smallPadding) {
+                VStack(alignment: .leading, spacing: layout.ultraTightSpacing + 2) {
+                    HStack(spacing: layout.ultraTightSpacing + 2) {
+                        Image(systemName: item.iconName)
+                            .font(.system(size: layout.iconMedium, weight: .semibold))
+                            .foregroundStyle(item.status.iconColor)
+                        Text(item.title)
+                            .font(layout.isCompact ? Typography.bannerBody : Typography.bannerTitle)
+                            .foregroundStyle(ColorSystem.textPrimary)
+                    }
+
+                    Text(item.message)
+                        .font(layout.isCompact ? Typography.caption1 : Typography.body)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    HStack(spacing: layout.ultraTightSpacing + 2) {
+                        NotificationBadge(
+                            text: item.status.displayName,
+                            foreground: item.status.iconColor,
+                            background: item.status.tintColor
+                        )
+                        NotificationBadge(
+                            text: item.runtimeDisplayName,
+                            foreground: ColorSystem.info,
+                            background: ColorSystem.info.opacity(0.15)
+                        )
+                        if item.wasAutoApproved {
+                            NotificationBadge(
+                                text: "Auto via Yolo",
+                                foreground: ColorSystem.success,
+                                background: ColorSystem.success.opacity(0.15)
+                            )
+                        }
+                    }
+
+                    Text(item.createdAt.shortDateTimeString)
+                        .font(Typography.terminalTimestamp)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+                .padding(layout.standardPadding)
+                .background(
+                    RoundedRectangle(cornerRadius: CornerRadius.large)
+                        .fill(ColorSystem.terminalBgElevated)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CornerRadius.large)
+                                .strokeBorder(item.status.borderColor, lineWidth: layout.borderWidth)
+                        )
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let note = item.note, !note.isEmpty {
+                    HStack(spacing: layout.ultraTightSpacing + 2) {
+                        Image(systemName: "text.bubble.fill")
+                            .foregroundStyle(ColorSystem.warning)
+                        Text(note)
+                            .font(layout.isCompact ? Typography.caption2 : Typography.caption1)
+                            .foregroundStyle(ColorSystem.textSecondary)
+                    }
+                    .padding(layout.smallPadding)
+                    .background(ColorSystem.warning.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+                    .padding(.horizontal, layout.standardPadding)
+                }
+
+                if !item.options.isEmpty {
+                    VStack(alignment: .leading, spacing: layout.ultraTightSpacing + 2) {
+                        Text("Available Actions")
+                            .font(Typography.bannerTitle)
+                            .foregroundStyle(ColorSystem.textPrimary)
+                        ForEach(item.options) { option in
+                            HStack(spacing: layout.ultraTightSpacing + 2) {
+                                Text(option.key.uppercased())
+                                    .font(.system(size: layout.iconSmall, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(ColorSystem.primary)
+                                    .padding(.horizontal, layout.ultraTightSpacing + 2)
+                                    .padding(.vertical, layout.ultraTightSpacing)
+                                    .background(ColorSystem.primary.opacity(0.12))
+                                    .clipShape(Capsule())
+                                Text(option.label)
+                                    .font(layout.isCompact ? Typography.caption2 : Typography.caption1)
+                                    .foregroundStyle(ColorSystem.textSecondary)
+                                Spacer()
+                            }
+                            .padding(.vertical, layout.ultraTightSpacing)
+                        }
+                    }
+                    .padding(layout.standardPadding)
+                    .background(ColorSystem.terminalBgElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.large))
+                    .padding(.horizontal, layout.standardPadding)
+                }
+
+                if !item.details.isEmpty {
+                    VStack(alignment: .leading, spacing: layout.ultraTightSpacing + 2) {
+                        Text("Details")
+                            .font(Typography.bannerTitle)
+                            .foregroundStyle(ColorSystem.textPrimary)
+                        ForEach(item.details) { detail in
+                            HStack(alignment: .top, spacing: layout.contentSpacing) {
+                                Text(detail.label)
+                                    .font(layout.isCompact ? Typography.caption2 : Typography.caption1)
+                                    .foregroundStyle(ColorSystem.textTertiary)
+                                    .frame(width: layout.isCompact ? 94 : 120, alignment: .leading)
+                                Text(detail.value)
+                                    .font(layout.isCompact ? Typography.terminalTimestamp : Typography.terminalSmall)
+                                    .foregroundStyle(ColorSystem.textSecondary)
+                                    .textSelection(.enabled)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, layout.ultraTightSpacing)
+                        }
+                    }
+                    .padding(layout.standardPadding)
+                    .background(ColorSystem.terminalBgElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: CornerRadius.large))
+                    .padding(.horizontal, layout.standardPadding)
+                }
+            }
+            .padding(.vertical, layout.standardPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(ColorSystem.terminalBg.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Notification")
+                    .font(Typography.title3)
+                    .foregroundStyle(ColorSystem.textPrimary)
+            }
+        }
+    }
+}
+
+private extension DashboardNotificationItem {
+    var iconName: String {
+        switch category {
+        case .permission:
+            switch status {
+            case .approved, .autoApproved: return "checkmark.shield.fill"
+            case .denied: return "xmark.shield.fill"
+            case .dismissed: return "shield.slash.fill"
+            case .resolvedElsewhere: return "person.2.badge.gearshape.fill"
+            case .pendingReview, .informational: return "lock.shield.fill"
+            }
+        case .runtime:
+            return "cpu.fill"
+        case .session:
+            return "rectangle.on.rectangle.angled"
+        case .system:
+            return "info.circle.fill"
+        }
+    }
+}
+
+private extension DashboardNotificationStatus {
+    var displayName: String {
+        switch self {
+        case .pendingReview: return "Pending"
+        case .autoApproved: return "Auto-approved"
+        case .approved: return "Approved"
+        case .denied: return "Denied"
+        case .dismissed: return "Dismissed"
+        case .resolvedElsewhere: return "Resolved Elsewhere"
+        case .informational: return "Info"
+        }
+    }
+
+    var iconColor: Color {
+        switch self {
+        case .pendingReview: return ColorSystem.warning
+        case .autoApproved: return ColorSystem.success
+        case .approved: return ColorSystem.success
+        case .denied: return ColorSystem.error
+        case .dismissed: return ColorSystem.textSecondary
+        case .resolvedElsewhere: return ColorSystem.info
+        case .informational: return ColorSystem.info
+        }
+    }
+
+    var tintColor: Color {
+        switch self {
+        case .pendingReview: return ColorSystem.warning.opacity(0.15)
+        case .autoApproved: return ColorSystem.success.opacity(0.16)
+        case .approved: return ColorSystem.success.opacity(0.12)
+        case .denied: return ColorSystem.error.opacity(0.15)
+        case .dismissed: return ColorSystem.terminalBgHighlight
+        case .resolvedElsewhere: return ColorSystem.info.opacity(0.12)
+        case .informational: return ColorSystem.info.opacity(0.1)
+        }
+    }
+
+    var borderColor: Color {
+        switch self {
+        case .pendingReview: return ColorSystem.warning.opacity(0.28)
+        case .autoApproved: return ColorSystem.success.opacity(0.35)
+        case .approved: return ColorSystem.success.opacity(0.25)
+        case .denied: return ColorSystem.error.opacity(0.28)
+        case .dismissed: return ColorSystem.terminalBgHighlight
+        case .resolvedElsewhere: return ColorSystem.info.opacity(0.28)
+        case .informational: return ColorSystem.terminalBgHighlight
+        }
     }
 }
 

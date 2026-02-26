@@ -32,6 +32,7 @@ struct PrivacyPolicyView: View {
                         networkCommunicationSection
                         localStorageSection
                         thirdPartySection
+                        speechRecognitionSection
                         changesSection
                         contactSection
 
@@ -73,7 +74,7 @@ struct PrivacyPolicyView: View {
                 .font(.system(size: layout.isCompact ? 20 : 24, weight: .bold, design: .rounded))
                 .foregroundStyle(ColorSystem.textPrimary)
 
-            Text("Last Updated: January 2026")
+            Text("Last Updated: February 2026")
                 .font(Typography.terminalSmall)
                 .foregroundStyle(ColorSystem.textTertiary)
         }
@@ -160,20 +161,62 @@ struct PrivacyPolicyView: View {
     private var howItWorksSection: some View {
         PolicySection(title: "How \(Constants.Brand.appName) Works", icon: "arrow.triangle.2.circlepath") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("\(Constants.Brand.appName) is a companion app that connects directly to your cdev-agent endpoint. By default this is your local network, and you can optionally configure a remote host.")
+                Text("\(Constants.Brand.appName) is a companion app that connects directly to your cdev server endpoint. It supports both Claude Code and OpenAI Codex sessions. By default this is your local network, and you can optionally configure a remote host.")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 // Architecture diagram
-                VStack(spacing: layout.ultraTightSpacing) {
-                    Text("┌─────────────┐     ┌─────────────┐")
-                    Text("│  Your iPhone │ ←→ │ Your Agent  │")
-                    Text("│    (Cdev)    │     │  (Computer) │")
-                    Text("└─────────────┘     └─────────────┘")
-                    Text("       └── Local or Remote Host ──┘")
+                VStack(spacing: 6) {
+                    HStack(spacing: 8) {
+                        // iPhone box
+                        VStack(spacing: 2) {
+                            Text("Your iPhone")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            Text("(Cdev+)")
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .foregroundStyle(ColorSystem.textSecondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(ColorSystem.terminalBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(ColorSystem.primary.opacity(0.5), lineWidth: 1)
+                        )
+
+                        // Arrow
+                        HStack(spacing: 2) {
+                            Image(systemName: "arrow.left")
+                                .font(.system(size: 8, weight: .bold))
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 8, weight: .bold))
+                        }
+                        .foregroundStyle(ColorSystem.primary)
+
+                        // Server box
+                        VStack(spacing: 2) {
+                            Text("Your Server")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            Text("(cdev)")
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .foregroundStyle(ColorSystem.textSecondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(ColorSystem.terminalBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(ColorSystem.primary.opacity(0.5), lineWidth: 1)
+                        )
+                    }
+
+                    Text("Direct Connection (Local or Remote)")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ColorSystem.textTertiary)
                 }
-                .font(Typography.terminalSmall)
                 .foregroundStyle(ColorSystem.primary)
                 .padding(layout.smallPadding)
                 .frame(maxWidth: .infinity)
@@ -263,6 +306,30 @@ struct PrivacyPolicyView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 Text("Verify this claim by reviewing our source code.")
+                    .font(Typography.terminalSmall)
+                    .foregroundStyle(ColorSystem.textTertiary)
+            }
+        }
+    }
+
+    // MARK: - Speech Recognition Section
+
+    private var speechRecognitionSection: some View {
+        PolicySection(title: "Speech Recognition", icon: "mic") {
+            VStack(alignment: .leading, spacing: layout.contentSpacing) {
+                Text("\(Constants.Brand.appName) offers optional voice input for dictating prompts. When enabled:")
+                    .font(layout.isCompact ? Typography.terminal : Typography.body)
+                    .foregroundStyle(ColorSystem.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
+                    PolicyBulletPoint("Speech recognition is processed on-device by Apple using the iOS Speech framework")
+                    PolicyBulletPoint("Audio data may be sent to Apple's servers for transcription (standard iOS behavior)")
+                    PolicyBulletPoint("\(Constants.Brand.appName) does not record, store, or transmit your audio to any other service")
+                    PolicyBulletPoint("You can revoke permissions at any time in iOS Settings")
+                }
+
+                Text("For more information, see Apple's Privacy Policy.")
                     .font(Typography.terminalSmall)
                     .foregroundStyle(ColorSystem.textTertiary)
             }

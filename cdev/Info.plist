@@ -28,7 +28,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Camera access is needed to scan QR codes for connecting to Cdev+</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Local network access is needed to connect to cdev-agent on your computer</string>
+	<string>Local network access is needed to connect to cdev on your computer</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is needed for voice input to send prompts to Claude</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

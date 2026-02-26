@@ -71,7 +71,13 @@ final class AgentRepository: AgentRepositoryProtocol {
 
     // MARK: - Claude Control
 
-    func runClaude(prompt: String, mode: SessionMode, sessionId: String?, runtime: AgentRuntime) async throws {
+    func runClaude(
+        prompt: String,
+        mode: SessionMode,
+        sessionId: String?,
+        runtime: AgentRuntime,
+        yoloMode: Bool
+    ) async throws {
         // For "new" mode, don't use any session ID - start fresh
         // For "continue" mode, use provided sessionId or fallback to currentSessionId
         let effectiveSessionId: String?
@@ -95,7 +101,8 @@ final class AgentRepository: AgentRepositoryProtocol {
                 sessionId: sid,
                 prompt: prompt,
                 mode: "continue",
-                runtime: runtime
+                runtime: runtime,
+                yoloMode: yoloMode
             )
             return
         }
@@ -110,7 +117,8 @@ final class AgentRepository: AgentRepositoryProtocol {
                 workspaceId: workspaceId,
                 prompt: prompt,
                 mode: "new",
-                runtime: runtime
+                runtime: runtime,
+                yoloMode: yoloMode
             )
             return
         }

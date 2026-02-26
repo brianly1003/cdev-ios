@@ -34,6 +34,7 @@ struct TermsOfServiceView: View {
                         warrantySection
                         liabilitySection
                         contributionsSection
+                        terminationSection
                         contactSection
 
                         // Footer
@@ -75,7 +76,7 @@ struct TermsOfServiceView: View {
                 .foregroundStyle(ColorSystem.textPrimary)
                 .multilineTextAlignment(.center)
 
-            Text("Last Updated: January 2026")
+            Text("Last Updated: February 2026")
                 .font(Typography.terminalSmall)
                 .foregroundStyle(ColorSystem.textTertiary)
         }
@@ -167,13 +168,13 @@ struct TermsOfServiceView: View {
     private var serviceDescriptionSection: some View {
         TermsSection(title: "About \(Constants.Brand.appName)", icon: "iphone.and.arrow.forward") {
             VStack(alignment: .leading, spacing: layout.contentSpacing) {
-                Text("\(Constants.Brand.appName) is a free, open source mobile companion for Claude Code that enables you to:")
+                Text("\(Constants.Brand.appName) is a free, open source mobile companion for Claude Code & Codex that enables you to:")
                     .font(layout.isCompact ? Typography.terminal : Typography.body)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
-                    TermsBulletPoint("Monitor Claude Code sessions in real-time")
+                    TermsBulletPoint("Monitor Claude Code and Codex sessions in real-time")
                     TermsBulletPoint("View terminal output and logs remotely")
                     TermsBulletPoint("Send prompts and interact with your agent")
                     TermsBulletPoint("Manage file diffs and tool permissions")
@@ -185,7 +186,7 @@ struct TermsOfServiceView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: layout.iconSmall))
                         .foregroundStyle(ColorSystem.warning)
-                    Text("Requires cdev-agent reachable from your device (local network or remote host you configure). The app does not function independently.")
+                    Text("Requires cdev server reachable from your device (local network or remote host you configure). The app does not function independently.")
                         .font(Typography.terminalSmall)
                         .foregroundStyle(ColorSystem.textSecondary)
                 }
@@ -223,7 +224,7 @@ struct TermsOfServiceView: View {
                 VStack(alignment: .leading, spacing: layout.ultraTightSpacing) {
                     TermsBulletPoint("You retain all rights to your code and prompts")
                     TermsBulletPoint("Your content never passes through our servers")
-                    TermsBulletPoint("All communication stays on your local network")
+                    TermsBulletPoint("All communication is a direct connection to your server")
                     TermsBulletPoint("We make no claim to any of your data")
                 }
 
@@ -231,7 +232,7 @@ struct TermsOfServiceView: View {
                 HStack(spacing: layout.tightSpacing) {
                     Image(systemName: "network.badge.shield.half.filled")
                         .font(.system(size: layout.iconSmall))
-                    Text("LOCAL NETWORK ONLY")
+                    Text("DIRECT CONNECTION")
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                 }
                 .foregroundStyle(ColorSystem.info)
@@ -302,6 +303,17 @@ struct TermsOfServiceView: View {
                     .foregroundStyle(ColorSystem.primary)
                 }
             }
+        }
+    }
+
+    // MARK: - Termination Section
+
+    private var terminationSection: some View {
+        TermsSection(title: "Termination", icon: "xmark.circle") {
+            Text("You may stop using \(Constants.Brand.appName) at any time by uninstalling the app. All locally stored data is removed upon uninstallation. Since there are no user accounts or cloud services, there is nothing else to cancel or close.")
+                .font(layout.isCompact ? Typography.terminal : Typography.body)
+                .foregroundStyle(ColorSystem.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

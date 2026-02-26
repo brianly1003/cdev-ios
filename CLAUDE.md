@@ -16,7 +16,7 @@ xcodebuild -scheme cdev -destination 'platform=iOS Simulator,name=iPhone 15'
 
 ## Architecture
 
-cdev-ios is an iOS client for cdev-agent following **Clean Architecture + MVVM** pattern.
+cdev-ios is an iOS client for [cdev](https://github.com/brianly1003/cdev) following **Clean Architecture + MVVM** pattern.
 
 ### Layer Structure
 
@@ -57,7 +57,7 @@ Presentation → Domain ← Data
 3. **AsyncStream** - Real-time event streaming from WebSocket
 4. **Protocol-based interfaces** - Enables testing and flexibility
 
-## cdev-agent API Communication
+## cdev API Communication
 
 ### Architecture: HTTP + WebSocket Hybrid
 

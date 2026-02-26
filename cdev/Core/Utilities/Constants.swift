@@ -5,7 +5,7 @@ enum Constants {
     /// Brand identity - change here to update app name everywhere
     enum Brand {
         static let appName = "Cdev+"
-        static let tagline = "Mobile companion for Claude Code"
+        static let tagline = "Mobile companion for Claude Code & Codex"
         static let author = "Brian Ly"
         static let email = "brianly1003@gmail.com"
         static let githubRepo = "https://github.com/brianly1003/cdev-ios"

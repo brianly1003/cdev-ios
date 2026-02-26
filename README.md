@@ -1,29 +1,33 @@
 # cdev-ios
 
-Mobile companion app for [cdev-agent](https://github.com/brianly1003/cdev-agent) - monitor and control Claude Code CLI sessions from your iPhone.
+Mobile companion app for [cdev](https://github.com/brianly1003/cdev) - monitor and control Claude Code & Codex sessions from your iPhone or iPad.
 
 ## Features
 
-- **Real-time Terminal** - Watch Claude's output as it happens
-- **File Changes** - View diffs with syntax highlighting
+- **Real-time Terminal** - Watch Claude Code & Codex output as it happens
+- **Voice Input** - Dictate prompts hands-free with speech recognition
+- **File Explorer** - Browse workspace files and view diffs with syntax highlighting
+- **Source Control** - Monitor git status and file changes in real-time
 - **Permission Handling** - Approve/deny tool permissions with one tap
-- **Interactive Prompts** - Answer Claude's questions on the go
+- **Interactive Prompts** - Answer agent questions on the go
 - **QR Pairing** - Scan to connect, no manual setup
+- **Session Management** - Switch between sessions, continue or resume conversations
+- **iPad Support** - Responsive layout optimized for both iPhone and iPad
 
 ## Requirements
 
 - iOS 17.0+
 - Xcode 15.0+
-- cdev-agent running on your computer
+- [cdev](https://github.com/brianly1003/cdev) running on your computer
 
 ## Quick Start
 
-1. Start cdev-agent on your laptop:
+1. Start cdev on your laptop:
    ```bash
-   cdev-agent start --repo /path/to/your/project
+   cdev start --repo /path/to/your/project
    ```
 
-2. Open cdev on your iPhone
+2. Open Cdev+ on your iPhone or iPad
 
 3. Scan the QR code displayed by the agent
 
@@ -31,15 +35,15 @@ Mobile companion app for [cdev-agent](https://github.com/brianly1003/cdev-agent)
 
 ## Architecture
 
-Clean Architecture + MVVM following [CleanerApp](https://github.com/brianly1003/CleanerApp) patterns:
+Clean Architecture + MVVM pattern:
 
 ```
 cdev/
-├── App/           # DI Container, Entry Point
-├── Core/          # Design System, Utilities
-├── Domain/        # Business Logic, Models
-├── Data/          # Services, Repositories
-└── Presentation/  # SwiftUI Views, ViewModels
+├── App/           # DI Container, AppState, Entry Point
+├── Core/          # Design System, Utilities, Extensions
+├── Domain/        # Business Logic, Models, Protocols
+├── Data/          # Services (WebSocket, HTTP, Keychain), Repositories
+└── Presentation/  # SwiftUI Views, ViewModels, Components
 ```
 
 See [Docs Index](docs/readme.md) for development guidelines.
@@ -47,13 +51,15 @@ See [Docs Index](docs/readme.md) for development guidelines.
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) - Technical architecture and implementation details
-- [Design Specification](docs/DESIGN-SPEC.md) - UI/UX design principles
-- [Docs Index](docs/readme.md) - AI assistant guidelines
+- [Responsive Layout](docs/RESPONSIVE-LAYOUT.md) - iPhone/iPad adaptive design system
+- [Multi-Device Best Practices](docs/MULTI-DEVICE-BEST-PRACTICES.md) - Gesture handling, sheets, layouts
+- [Privacy Policy](docs/privacy-policy.md) - Privacy policy
+- [Terms of Service](docs/terms-of-service.md) - Terms of service
 
 ## Related Projects
 
-- [cdev-agent](https://github.com/brianly1003/cdev-agent) - Go daemon for Claude Code monitoring
+- [cdev](https://github.com/brianly1003/cdev) - Backend server for Claude Code & Codex monitoring
 
 ## License
 
-MIT
+[MIT](LICENSE)
