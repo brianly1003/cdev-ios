@@ -2522,10 +2522,17 @@ final class DashboardViewModel: ObservableObject {
         return nil
     }
 
+    private func isLivePermissionInteraction(_ interaction: PendingInteraction) -> Bool {
+        guard interaction.isPTYMode else { return false }
+        if interaction.isHookBridgeMode { return true }
+        let keys = Set((interaction.ptyOptions ?? []).map { $0.key.lowercased() })
+        return keys.contains("allow_once") || keys.contains("allow_session") || keys.contains("deny")
+    }
+
     private func maybeAutoApproveLivePermission(_ interaction: PendingInteraction) {
         guard isYoloModeEnabled else { return }
         guard selectedSessionRuntime == .claude else { return } // Codex does not support hook-bridge permission flow yet.
-        guard interaction.isPTYMode, interaction.isHookBridgeMode else { return } // LIVE mode only.
+        guard isLivePermissionInteraction(interaction) else { return } // LIVE mode only.
         guard lastYoloAutoApprovedPermissionId != interaction.id else { return }
         guard let key = yoloAutoApprovalKey(for: interaction) else { return }
 
@@ -2538,7 +2545,7 @@ final class DashboardViewModel: ObservableObject {
         )
         AppLogger.log("[Dashboard] Yolo auto-approving LIVE permission with key '\(key)'")
         Task { [weak self] in
-            await self?.respondToPTYPermission(key: key)
+            await self?.respondToPTYPermission(interaction: interaction, key: key)
         }
     }
 
@@ -2551,6 +2558,11 @@ final class DashboardViewModel: ObservableObject {
     /// Hook bridge mode: Uses permission/respond RPC with toolUseId.
     func respondToPTYPermission(key: String) async {
         guard let interaction = pendingInteraction, interaction.isPTYMode else { return }
+        await respondToPTYPermission(interaction: interaction, key: key)
+    }
+
+    private func respondToPTYPermission(interaction: PendingInteraction, key: String) async {
+        guard interaction.isPTYMode else { return }
         Haptics.light()
 
         // Check if this is hook bridge mode (toolUseId present)
@@ -2561,6 +2573,11 @@ final class DashboardViewModel: ObservableObject {
 
         // PTY mode: Use session/input with arrow key navigation
         await respondToPTYModePermission(interaction: interaction, key: key)
+    }
+
+    private func clearPendingInteractionIfMatching(_ interaction: PendingInteraction) {
+        guard pendingInteraction?.id == interaction.id else { return }
+        pendingInteraction = nil
     }
 
     /// Respond to hook bridge permission using permission/respond RPC
@@ -2590,7 +2607,7 @@ final class DashboardViewModel: ObservableObject {
                 status: status,
                 note: note
             )
-            pendingInteraction = nil
+            clearPendingInteractionIfMatching(interaction)
             AppLogger.log("[Dashboard] Hook bridge permission responded successfully", type: .success)
         } catch {
             // Check if this is a "request not found or already responded" error
@@ -2604,7 +2621,7 @@ final class DashboardViewModel: ObservableObject {
                     note: "Resolved from another device or runtime."
                 )
                 AppLogger.log("[Dashboard] Permission request already handled elsewhere - dismissing silently", type: .info)
-                pendingInteraction = nil
+                clearPendingInteractionIfMatching(interaction)
                 return
             }
 
@@ -2728,7 +2745,7 @@ final class DashboardViewModel: ObservableObject {
                 status: permissionStatus(for: key) ?? .informational,
                 note: selectedOptionLabel.map { "Selected: \($0)" }
             )
-            pendingInteraction = nil
+            clearPendingInteractionIfMatching(interaction)
             AppLogger.log("[Dashboard] PTY permission responded: navigated to option '\(key)' and pressed enter")
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)

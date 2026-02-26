@@ -7,6 +7,7 @@ and defines the pattern for adding future agent runtimes (Gemini, etc.).
 
 - Runtime selector supports `claude` and `codex`.
 - Event routing is runtime-safe via `agent_type` matching.
+- Permission handling supports both hook-bridge RPC and PTY interactive modes.
 - Session control RPCs are runtime-scoped and send `agent_type`:
   - `session/start`
   - `session/send`
@@ -19,6 +20,11 @@ and defines the pattern for adding future agent runtimes (Gemini, etc.).
 - Live watch routing is workspace-scoped and runtime-routed via `agent_type`:
   - Claude: `workspace/session/watch`, `workspace/session/unwatch`
   - Codex: `workspace/session/watch`, `workspace/session/unwatch`
+
+For detailed runtime/event routing and permission resolution behavior in the
+current dashboard implementation, see:
+- `agent-event-routing-and-permissions.md`
+- `yolo-pty-auto-approve-tracing.md`
 
 ## Runtime strategy model
 

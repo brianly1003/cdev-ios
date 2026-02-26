@@ -50,9 +50,11 @@ See [Docs Index](docs/readme.md) for development guidelines.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) - Technical architecture and implementation details
-- [Responsive Layout](docs/RESPONSIVE-LAYOUT.md) - iPhone/iPad adaptive design system
-- [Multi-Device Best Practices](docs/MULTI-DEVICE-BEST-PRACTICES.md) - Gesture handling, sheets, layouts
+- [Docs Index](docs/readme.md) - Organized documentation map
+- [Architecture](docs/architecture.md) - Technical architecture and implementation details
+- [Agent Event & Permission Flow](docs/agent-event-routing-and-permissions.md) - Runtime routing, PTY permissions, Yolo auto-approve
+- [Responsive Layout](docs/responsive-layout.md) - iPhone/iPad adaptive design system
+- [Multi-Device Best Practices](docs/multi-device-best-practices.md) - Gesture handling, sheets, layouts
 - [Privacy Policy](docs/privacy-policy.md) - Privacy policy
 - [Terms of Service](docs/terms-of-service.md) - Terms of service
 

@@ -334,7 +334,7 @@ Issue Reported
 ---
 
 ### Pattern: Gesture Blocked by Parent Container
-**File:** `docs/MULTI-DEVICE-BEST-PRACTICES.md`
+**File:** `multi-device-best-practices.md`
 
 **Symptoms:**
 - Buttons don't respond to taps

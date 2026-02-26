@@ -407,7 +407,7 @@ Key files in cdev-ios implementing this:
 | `GitModels.swift` | `WorkspaceGitState` enum and related types |
 | `GitSetupWizard.swift` | UI for step-by-step git setup |
 | `GitSetupComponents.swift` | Reusable UI components |
-| `docs/GIT-WORKSPACE-SETUP-DESIGN.md` | Full design document |
+| `git-workspace-setup-design.md` | Full design document |
 
 ---
 

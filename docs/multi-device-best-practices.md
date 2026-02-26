@@ -49,7 +49,7 @@ var body: some View {
 | Components | `buttonHeight` | 36 / 40 |
 | | `indicatorSize` | 32 / 36 |
 
-See `docs/RESPONSIVE-LAYOUT.md` for the complete reference.
+See `responsive-layout.md` for the complete reference.
 
 ## 2. Sheet Presentations
 
