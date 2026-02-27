@@ -42,6 +42,16 @@ struct DashboardView: View {
         _explorerViewModel = ObservedObject(wrappedValue: viewModel.explorerViewModel)
     }
 
+    /// Manual binding for per-window runtime selection (computed property can't use $-prefix).
+    private var runtimeBinding: Binding<AgentRuntime> {
+        Binding(
+            get: { viewModel.selectedSessionRuntime },
+            set: { newRuntime in
+                Task { await viewModel.setWindowRuntime(newRuntime) }
+            }
+        )
+    }
+
     /// Toolkit items - Easy to extend! Just add more .add() calls
     /// See PredefinedTool enum for available tools, or use .addCustom() for new ones
     private var toolkitItems: [ToolkitItem] {
@@ -265,7 +275,7 @@ struct DashboardView: View {
                                 onToggleBashMode: { viewModel.toggleBashMode() },
                                 onFocusChange: nil,
                                 // Agent selector - switch between Claude/Codex/etc.
-                                selectedRuntime: $viewModel.selectedSessionRuntime,
+                                selectedRuntime: runtimeBinding,
                                 availableRuntimes: viewModel.availableRuntimes,
                                 // Runtime switch orchestration is handled in DashboardViewModel.selectedSessionRuntime didSet.
                                 onAgentChanged: nil,
@@ -376,7 +386,7 @@ struct DashboardView: View {
                         hasMore: viewModel.sessionsHasMore,
                         isLoadingMore: viewModel.isLoadingMoreSessions,
                         agentRepository: viewModel.agentRepository,
-                        selectedRuntime: $viewModel.selectedSessionRuntime,
+                        selectedRuntime: runtimeBinding,
                         availableRuntimes: viewModel.availableRuntimes,
                         onSelect: { sessionId in
                             Task { await viewModel.resumeSession(sessionId) }
@@ -1787,11 +1797,11 @@ private struct TerminalWindowsBar: View {
     private var createButtonIconSize: CGFloat { max(12, layout.iconAction + 1) }
 
     private func title(for window: TerminalWindow, index: Int) -> String {
+        let prefix = window.runtime.shortName
         if let sessionId = window.sessionId, !sessionId.isEmpty {
-            let short = String(sessionId.suffix(6))
-            return "\(index). \(short)"
+            return "\(prefix) \(String(sessionId.suffix(6)))"
         }
-        return "\(index). new"
+        return "\(prefix) new"
     }
 
     var body: some View {

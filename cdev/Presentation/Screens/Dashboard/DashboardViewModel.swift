@@ -241,6 +241,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var isYoloModeEnabled: Bool = false {
         didSet {
             guard oldValue != isYoloModeEnabled else { return }
+            guard !isActivatingWindow else { return }  // Skip during tab activation (prevents snapshot contamination)
             guard let appState, let activeWindowId = activeTerminalWindowId else { return }
             appState.setTerminalWindowYoloMode(activeWindowId, enabled: isYoloModeEnabled)
             persistWindowSnapshot(for: activeWindowId)
@@ -409,6 +410,10 @@ final class DashboardViewModel: ObservableObject {
     private var pendingTempSessionIdByWindowId: [UUID: String] = [:]
     private var windowOperationTokenByWindowId: [UUID: UUID] = [:]
     private var windowStateByWindowId: [UUID: TerminalWindowSessionState] = [:]
+    /// Guard flag: suppresses snapshot persistence in `isYoloModeEnabled` didSet during tab activation.
+    /// Without this, the didSet fires after activeTerminalWindowId is updated but before the new window's
+    /// snapshot is restored, contaminating the new window's snapshot slot with the old window's data.
+    private var isActivatingWindow = false
 
     // Mobile-friendly text replacements (no esc/ctrl+c on mobile)
     private static let mobileStopText = "press ⏹ to interrupt"
@@ -470,14 +475,23 @@ final class DashboardViewModel: ObservableObject {
         guard let window = appState.terminalWindow(id: windowId) else { return }
         let activationToken = beginWindowOperation(windowId: windowId)
         let previousWindowId = activeTerminalWindowId
+        let previousRuntime = previousWindowId.flatMap { appState.terminalWindow(id: $0)?.runtime }
         if previousWindowId != windowId {
             persistWindowSnapshot(for: previousWindowId)
         }
 
         appState.activateTerminalWindow(windowId)
         activeTerminalWindowId = windowId
+        isActivatingWindow = true
         isYoloModeEnabled = window.isYoloModeEnabled
+        isActivatingWindow = false
+        objectWillChange.send()  // selectedSessionRuntime may have changed (computed from new active window)
         syncPendingTempSessionForActiveWindow()
+
+        // If the new window has a different runtime, reload sessions for that runtime
+        if previousRuntime != window.runtime {
+            Task { await loadSessions() }
+        }
 
         guard isWindowOperationCurrent(windowId: windowId, token: activationToken) else { return }
 
@@ -620,6 +634,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func syncActiveWindowSettingsFromState() {
+        guard !isActivatingWindow else { return }  // Already handled in activateTerminalWindow
         guard let window = activeWindow else { return }
         if isYoloModeEnabled != window.isYoloModeEnabled {
             isYoloModeEnabled = window.isYoloModeEnabled
@@ -629,7 +644,7 @@ final class DashboardViewModel: ObservableObject {
     private func syncActiveTerminalWindowContext(sessionId: String?) {
         guard let appState else { return }
         guard let window = ensureActiveTerminalWindow() else { return }
-        appState.setTerminalWindowRuntime(window.id, runtime: selectedSessionRuntime)
+        // Runtime is owned per-window; don't override it from the computed property.
         appState.setTerminalWindowSession(window.id, sessionId: sessionId)
         appState.setTerminalWindowYoloMode(window.id, enabled: isYoloModeEnabled)
     }
@@ -787,7 +802,8 @@ final class DashboardViewModel: ObservableObject {
     private func shouldRouteEventBySession(_ event: AgentEvent) -> Bool {
         switch event.type {
         case .claudeMessage, .claudeLog, .claudeSessionInfo, .claudeWaiting, .claudePermission,
-             .ptyOutput, .ptyState, .ptySpinner, .ptyPermission, .ptyPermissionResolved:
+             .ptyOutput, .ptyState, .ptySpinner, .ptyPermission, .ptyPermissionResolved,
+             .streamReadComplete:
             return true
         default:
             return false
@@ -1078,7 +1094,7 @@ final class DashboardViewModel: ObservableObject {
 
         // Load persisted session ID from storage and initialize agentStatus
         self.userSelectedSessionId = sessionRepository.selectedSessionId
-        self.selectedSessionRuntime = sessionRepository.selectedSessionRuntime
+        // selectedSessionRuntime is now a computed property reading from activeWindow?.runtime
         reconcileAvailableRuntimes(context: "init")
         if let storedId = userSelectedSessionId {
             AppLogger.log("[Dashboard] Loaded stored sessionId: \(storedId)")
@@ -2360,6 +2376,28 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
+    /// Apply immediate UI state after sending a local permission response.
+    /// We still run a delayed runtime-state sync to converge on backend truth.
+    private func applyLocalPermissionResponseState(approved: Bool, context: String) {
+        let previousState = agentState
+        if approved {
+            agentState = .running
+        } else if agentState == .waiting {
+            agentState = .idle
+            isStreaming = false
+            streamingStartTime = nil
+            spinnerMessage = nil
+        }
+
+        AppLogger.log("[Dashboard] Local permission response (\(context)): approved=\(approved), agentState \(previousState) → \(agentState)")
+
+        Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await self.syncCurrentSessionRuntimeState(context: "permission/\(context)")
+        }
+    }
+
     private func notificationDetails(
         for event: AgentEvent,
         payload: PTYPermissionPayload,
@@ -2617,6 +2655,7 @@ final class DashboardViewModel: ObservableObject {
                 note: note
             )
             clearPendingInteractionIfMatching(interaction)
+            applyLocalPermissionResponseState(approved: decision == .allow, context: "hook-bridge")
             AppLogger.log("[Dashboard] Hook bridge permission responded successfully", type: .success)
         } catch {
             // Check if this is a "request not found or already responded" error
@@ -2631,6 +2670,9 @@ final class DashboardViewModel: ObservableObject {
                 )
                 AppLogger.log("[Dashboard] Permission request already handled elsewhere - dismissing silently", type: .info)
                 clearPendingInteractionIfMatching(interaction)
+                Task { [weak self] in
+                    await self?.syncCurrentSessionRuntimeState(context: "permission/already-handled")
+                }
                 return
             }
 
@@ -2747,14 +2789,22 @@ final class DashboardViewModel: ObservableObject {
 
             // Send "enter" to confirm selection
             try await _agentRepository.sendInput(sessionId: sessionId, input: "enter", runtime: selectedSessionRuntime)
+            let responseStatus = permissionStatus(for: key)
             let selectedOptionLabel = options.first(where: { $0.key == key })?.label
             updatePermissionNotificationStatus(
                 interaction: interaction,
                 sessionId: sessionId,
-                status: permissionStatus(for: key) ?? .informational,
+                status: responseStatus ?? .informational,
                 note: selectedOptionLabel.map { "Selected: \($0)" }
             )
             clearPendingInteractionIfMatching(interaction)
+            if let responseStatus {
+                applyLocalPermissionResponseState(approved: responseStatus == .approved, context: "pty-input")
+            } else {
+                Task { [weak self] in
+                    await self?.syncCurrentSessionRuntimeState(context: "permission/pty-input")
+                }
+            }
             AppLogger.log("[Dashboard] PTY permission responded: navigated to option '\(key)' and pressed enter")
         } catch {
             self.error = error as? AppError ?? .unknown(underlying: error)
@@ -3219,7 +3269,7 @@ final class DashboardViewModel: ObservableObject {
                 "[Dashboard] Runtime fallback (\(context)): \(selectedSessionRuntime.rawValue) -> \(fallback.rawValue)",
                 type: .warning
             )
-            selectedSessionRuntime = fallback
+            Task { await setWindowRuntime(fallback) }
         }
     }
 
@@ -3305,9 +3355,16 @@ final class DashboardViewModel: ObservableObject {
             markStreamEvent(source: event.type.rawValue)
         }
 
-        // Route agent-specific stream events by runtime to prevent Claude/Codex cross-talk.
-        // Some lifecycle events are runtime-agnostic and must pass even without agent_type.
-        if !event.matchesRuntime(selectedSessionRuntime)
+        // Route agent-specific stream events by runtime to prevent cross-talk.
+        // Accept events matching the active window's runtime OR any open window's runtime
+        // (so background windows can buffer events via shouldBufferEventForInactiveWindow).
+        let matchesActiveRuntime = event.matchesRuntime(selectedSessionRuntime)
+        let matchesAnyOpenWindow = terminalWindows
+            .filter { $0.isOpen }
+            .contains { event.matchesRuntime($0.runtime) }
+
+        if !matchesActiveRuntime
+            && !matchesAnyOpenWindow
             && !shouldBypassRuntimeRouting(for: event)
             && !shouldAcceptLegacyUntypedEvent(event) {
             AppLogger.log("[Dashboard] Skipping \(event.type.rawValue) event for agent_type=\(event.agentType ?? "nil"), selected_runtime=\(selectedSessionRuntime.rawValue)")

@@ -63,6 +63,17 @@ struct LogListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ColorSystem.terminalBg)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isStreaming {
+                // Keep streaming status pinned above the action bar instead of in the scroll flow.
+                StreamingIndicatorView(message: spinnerMessage)
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.top, Spacing.xxxs)
+                    .padding(.bottom, Spacing.xxxs)
+                    .background(ColorSystem.terminalBg)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
     }
 
     // MARK: - Empty State View (with pull-to-refresh)
@@ -560,6 +571,7 @@ private struct ElementsScrollView: View {
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
     @State private var didTriggerLoadMore = false  // Track if we triggered load more (persists across re-renders)
+    @State private var needsCatchUpScrollOnVisible = false
 
     /// Current highlighted element ID
     private var currentMatchId: String? {
@@ -599,25 +611,15 @@ private struct ElementsScrollView: View {
                         .id(element.id)
                     }
 
-                    // Streaming indicator in content flow (not overlay),
-                    // so new messages never animate behind/under it.
-                    if isStreaming {
-                        StreamingIndicatorView(message: spinnerMessage)
-                            .padding(.leading, Spacing.xxxs)
-                            .padding(.top, Spacing.xxxs)
-                            .padding(.bottom, Spacing.xxxs)
-                            .transition(.opacity)
-                    }
-
                     // Bottom anchor - always present for stable scroll-to-bottom
                     // Height ensures comfortable spacing below last message when auto-scrolled
                     Color.clear
-                        .frame(height: isStreaming ? Spacing.xxxs : Spacing.md)
+                        .frame(height: Spacing.md)
                         .id("bottom")
                 }
                 .padding(.horizontal, Spacing.xs)
                 .padding(.top, Spacing.xs)
-                .padding(.bottom, isStreaming ? Spacing.xs : Spacing.xl)
+                .padding(.bottom, Spacing.xl)
             }
             .refreshable {
                 // Pull-to-refresh triggers load more (older messages) or refreshes latest.
@@ -662,18 +664,34 @@ private struct ElementsScrollView: View {
                     didTriggerLoadMore = false  // Reset flag after handling
                     return
                 }
+
+                guard isVisible else {
+                    needsCatchUpScrollOnVisible = true
+                    AppLogger.log("[ElementsScrollView] Deferring auto-scroll while hidden (\(oldCount) -> \(newCount))")
+                    return
+                }
                 scheduleScroll(proxy: proxy, animated: true)
             }
             .onChange(of: isVisible) { oldVisible, newVisible in
-                // NOTE: Do NOT auto-scroll when tab becomes visible
-                // This preserves the user's scroll position when switching tabs
                 AppLogger.log("[ElementsScrollView] isVisible changed - old=\(oldVisible), new=\(newVisible), elementsCount=\(elements.count)")
-                // Previously this would schedule a scroll to bottom, but that causes
-                // the scroll position to reset when switching tabs, which is jarring UX
+                if !newVisible {
+                    scrollTask?.cancel()
+                    return
+                }
+
+                // If messages were appended while hidden, perform one safe catch-up scroll.
+                if needsCatchUpScrollOnVisible {
+                    needsCatchUpScrollOnVisible = false
+                    guard !isLoadingMore && !didTriggerLoadMore else {
+                        AppLogger.log("[ElementsScrollView] Catch-up scroll deferred during load more")
+                        return
+                    }
+                    scheduleScroll(proxy: proxy, animated: false)
+                }
             }
             .onChange(of: isInputFocused) { _, focused in
                 // Auto-scroll when keyboard appears or dismisses
-                guard !elements.isEmpty else { return }
+                guard isVisible, !elements.isEmpty else { return }
                 if focused {
                     scheduleScrollForKeyboard(proxy: proxy)
                 } else {
@@ -685,11 +703,16 @@ private struct ElementsScrollView: View {
                 // Auto-scroll when streaming starts to show indicator
                 // NOTE: Use non-animated scroll to prevent AttributeGraph cycle
                 guard streaming else { return }
+                guard isVisible else {
+                    needsCatchUpScrollOnVisible = true
+                    AppLogger.log("[ElementsScrollView] Deferring streaming auto-scroll while hidden")
+                    return
+                }
                 scheduleScroll(proxy: proxy, animated: false)
             }
             .onChange(of: currentMatchIndex) { _, _ in
                 // Scroll to current search match
-                if let matchId = currentMatchId {
+                if isVisible, let matchId = currentMatchId {
                     scrollToMatch(proxy: proxy, matchId: matchId)
                 }
             }
@@ -698,6 +721,10 @@ private struct ElementsScrollView: View {
                 AppLogger.log("[ElementsScrollView] scrollRequest onChange - old=\(String(describing: oldValue)), new=\(String(describing: newValue))")
                 guard let direction = newValue else {
                     AppLogger.log("[ElementsScrollView] scrollRequest is nil, ignoring")
+                    return
+                }
+                guard isVisible else {
+                    AppLogger.log("[ElementsScrollView] Ignoring scrollRequest while hidden")
                     return
                 }
                 handleScrollRequest(direction: direction, proxy: proxy)
@@ -863,6 +890,7 @@ private struct LogsScrollView: View {
 
     @State private var scrollTask: Task<Void, Never>?
     @State private var lastScrolledCount = 0
+    @State private var needsCatchUpScrollOnVisible = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -888,21 +916,31 @@ private struct LogsScrollView: View {
                 .padding(.bottom, Spacing.xs)
             }
             .onAppear {
+                guard isVisible else { return }
                 scheduleScroll(proxy: proxy, animated: false)
             }
             .onChange(of: logs.count) { oldCount, newCount in
                 // Only scroll if count actually increased and we haven't just scrolled
                 guard newCount > oldCount, newCount != lastScrolledCount else { return }
+                guard isVisible else {
+                    needsCatchUpScrollOnVisible = true
+                    return
+                }
                 scheduleScroll(proxy: proxy, animated: true)
             }
             .onChange(of: isVisible) { _, visible in
-                // NOTE: Do NOT auto-scroll when tab becomes visible
-                // This preserves the user's scroll position when switching tabs
-                _ = visible  // Silence unused warning
+                if !visible {
+                    scrollTask?.cancel()
+                    return
+                }
+                if needsCatchUpScrollOnVisible {
+                    needsCatchUpScrollOnVisible = false
+                    scheduleScroll(proxy: proxy, animated: false)
+                }
             }
             .onChange(of: isInputFocused) { _, focused in
                 // Auto-scroll when keyboard appears (input focused)
-                guard focused, !logs.isEmpty else { return }
+                guard isVisible, focused, !logs.isEmpty else { return }
                 scheduleScrollForKeyboard(proxy: proxy)
             }
         }

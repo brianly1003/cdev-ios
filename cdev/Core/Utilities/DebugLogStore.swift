@@ -457,11 +457,12 @@ final class DebugLogStore: ObservableObject {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(logsToSave)
 
-            // Write with NSFileProtectionComplete so the file is inaccessible
-            // when the device is locked, protecting any request payloads at rest.
+            // Use completeUnlessOpen so writes succeed during device lock
+            // transitions (auto-save timer, willResignActive). File is still
+            // encrypted at rest once closed.
             try data.write(to: logsFilePath, options: .atomic)
             try FileManager.default.setAttributes(
-                [.protectionKey: FileProtectionType.complete],
+                [.protectionKey: FileProtectionType.completeUnlessOpen],
                 ofItemAtPath: logsFilePath.path
             )
             lastSaveTime = Date()
