@@ -462,7 +462,7 @@ final class AppState: ObservableObject {
     // MARK: - Agent Connection
 
     /// Connect directly to a cdev-agent at the given host
-    /// cdev-agent uses: WebSocket on port 8765, HTTP on port 8766
+    /// cdev-agent uses: WebSocket on port 8765, HTTP on port 16180
     func connectToAgent(host: String) async {
         AppLogger.log("[AppState] Connecting to cdev-agent at \(host)")
 
@@ -483,15 +483,15 @@ final class AppState: ObservableObject {
             if isLocal {
                 // Local network: explicit ports
                 wsURL = URL(string: "\(wsScheme)://\(hostOnly):8765/ws")!
-                httpURL = URL(string: "\(httpScheme)://\(hostOnly):8766")!
+                httpURL = URL(string: "\(httpScheme)://\(hostOnly):16180")!
             } else {
                 // Dev tunnels: port is in subdomain, no explicit port needed
                 // e.g., abc123x4-8765.asse.devtunnels.ms for WebSocket
-                // Need to handle HTTP separately (port 8766 tunnel)
+                // Need to handle HTTP separately (port 16180 tunnel)
                 wsURL = URL(string: "\(wsScheme)://\(hostWithPort)/ws")!
-                // For HTTP, user needs to provide the 8766 tunnel URL separately
+                // For HTTP, user needs to provide the 16180 tunnel URL separately
                 // For now, assume same host (might need adjustment)
-                let httpHost = hostWithPort.replacingOccurrences(of: "-8765.", with: "-8766.")
+                let httpHost = hostWithPort.replacingOccurrences(of: "-8765.", with: "-16180.")
                 httpURL = URL(string: "\(httpScheme)://\(httpHost)")!
             }
 
@@ -591,7 +591,7 @@ final class AppState: ObservableObject {
     }
 
     /// Replace port in dev tunnel subdomain
-    /// e.g., "abc123x4-8765.asse.devtunnels.ms" with port 8766 → "abc123x4-8766.asse.devtunnels.ms"
+    /// e.g., "abc123x4-8765.asse.devtunnels.ms" with port 16180 → "abc123x4-16180.asse.devtunnels.ms"
     private func replacePortInDevTunnel(host: String, newPort: Int) -> String {
         // Pattern: {id}-{port}.{rest}
         // Find the pattern: dash followed by 4-5 digit port, then dot
@@ -612,7 +612,7 @@ final class AppState: ObservableObject {
     // MARK: - Remote Workspace Connection
 
     /// Connect to a remote workspace from the Workspace Manager
-    /// Single-port architecture: uses the same server connection (port 8766)
+    /// Single-port architecture: uses the same server connection (port 16180)
     /// Starts a session for the workspace if none exists
     /// Returns true if connection succeeded, false otherwise
     @discardableResult
@@ -627,7 +627,7 @@ final class AppState: ObservableObject {
         let wsScheme = isLocal ? "ws" : "wss"
         let httpScheme = isLocal ? "http" : "https"
 
-        // Create URLs using single port (8766)
+        // Create URLs using single port (16180)
         let wsURL: URL
         let httpURL: URL
 

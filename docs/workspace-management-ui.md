@@ -30,13 +30,13 @@ Sophisticated workspace management system for developers working with multiple r
 │  🔍 Type to search...                           │
 │                                                  │
 │  📁 cdev-ios              [RUNNING] [IDLE]   ⌘1 │
-│     localhost:8766 • main • 2m ago              │
+│     localhost:16180 • main • 2m ago              │
 │                                                  │
 │  📁 messenger-integrator  [STOPPED]          ⌘2 │
 │     localhost:8767 • feat/qr • 5h ago           │
 │                                                  │
 │  📁 LazyBot               [RUNNING] [BUSY]   ⌘3 │
-│     192.168.1.100:8766 • dev • 10m ago          │
+│     192.168.1.100:16180 • dev • 10m ago          │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -109,7 +109,7 @@ Sophisticated workspace management system for developers working with multiple r
 │   │  📁 cdev-ios       │     │← Swipe cards
 │   │  ────────────────  │     │
 │   │  ✓ Running • Idle  │     │
-│   │  localhost:8766    │     │
+│   │  localhost:16180    │     │
 │   │  main • 2m ago     │     │
 │   │                    │     │
 │   │  [Switch] [•••]    │     │
@@ -148,7 +148,7 @@ Sophisticated workspace management system for developers working with multiple r
 
 **iPad**:
 ```
-[📁 cdev-ios ⌘K] [✓ localhost:8766] [● IDLE]
+[📁 cdev-ios ⌘K] [✓ localhost:16180] [● IDLE]
 ```
 
 **Color Coding**:
@@ -178,7 +178,7 @@ Sophisticated workspace management system for developers working with multiple r
 │                                            │
 │  ⚠️  Issues (1)                            │
 │  ──────────────                            │
-│  api-service: Port 8766 in use             │
+│  api-service: Port 16180 in use             │
 │  [Resolve] [Ignore]                        │
 │                                            │
 │  📊 Activity (last 24h)                    │

@@ -1599,7 +1599,9 @@ final class WebSocketService: NSObject, WebSocketServiceProtocol {
         switch rawEventType {
         case AgentEventType.sessionIdFailed.rawValue,
              AgentEventType.sessionIdResolved.rawValue,
-             "session_id_approved":
+             "session_id_approved",
+             AgentEventType.sessionJoined.rawValue,
+             AgentEventType.sessionLeft.rawValue:
             return true
         default:
             return false

@@ -537,7 +537,7 @@ Switch branches or create new branch.
 
 Emitted when git status changes (file modified, staged, etc.).
 
-**Connection:** `ws://localhost:8766/ws`
+**Connection:** `ws://localhost:16180/ws`
 
 **Payload:**
 

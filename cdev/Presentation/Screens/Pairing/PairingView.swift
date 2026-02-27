@@ -274,7 +274,7 @@ private struct ScannerSectionView: View {
 // MARK: - Scanner Frame Overlay
 
 private struct ScannerFrameOverlay: View {
-    @State private var isAnimating = false
+    @State private var scanProgress: CGFloat = 0
 
     // Inset from edges for corner brackets
     private let inset: CGFloat = 24
@@ -284,6 +284,11 @@ private struct ScannerFrameOverlay: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let height = geometry.size.height
+            let scanTop = inset + bracketSize / 2 + 6
+            let scanBottom = height - inset - bracketSize / 2 - 6
+            let scanTravel = max(0, scanBottom - scanTop)
+            let scanY = scanTop + (scanTravel * scanProgress)
+            let scanWidth = max(0, width - ((inset + bracketSize / 2) * 2))
 
             ZStack {
                 // Semi-transparent overlay
@@ -303,12 +308,9 @@ private struct ScannerFrameOverlay: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(height: 2)
-                    .offset(y: isAnimating ? height / 3 : -height / 3)
-                    .animation(
-                        .easeInOut(duration: 2.0).repeatForever(autoreverses: true),
-                        value: isAnimating
-                    )
+                    .frame(width: scanWidth, height: 2)
+                    .position(x: width / 2, y: scanY)
+                    .shadow(color: ColorSystem.primary.opacity(0.5), radius: 5, y: 0)
 
                 // Corner brackets - positioned at actual corners
                 // Top-left
@@ -337,7 +339,13 @@ private struct ScannerFrameOverlay: View {
             )
         }
         .onAppear {
-            isAnimating = true
+            scanProgress = 0
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                scanProgress = 1
+            }
+        }
+        .onDisappear {
+            scanProgress = 0
         }
     }
 }

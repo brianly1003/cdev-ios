@@ -4,7 +4,7 @@ import AVFoundation
 import Combine
 
 /// Apple Speech Framework implementation of voice input
-/// Optimized for Vietnamese language recognition with on-device processing
+/// Optimized for on-device speech recognition
 final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
 
     // MARK: - Properties
@@ -17,7 +17,7 @@ final class AppleSpeechService: NSObject, VoiceInputServiceProtocol {
         }
     }
 
-    var selectedLanguage: VoiceInputLanguage = .vietnamese
+    var selectedLanguage: VoiceInputLanguage = .english
 
     private(set) var state: VoiceInputState = .idle {
         didSet {

@@ -1510,7 +1510,7 @@ final class DashboardViewModel: ObservableObject {
         let promptHash = hashPrompt(userMessage)
         sentPromptHashes[promptHash] = Date()
         cleanupExpiredPromptHashes()
-        AppLogger.log("[Dashboard] Tracking sent prompt - hash: \(promptHash), text: '\(userMessage)'")
+        AppLogger.log("[Dashboard] Tracking sent prompt - hash: \(promptHash), length: \(userMessage.count)")
 
         isLoading = true
         Haptics.light()
@@ -3435,7 +3435,7 @@ final class DashboardViewModel: ObservableObject {
                         let hash = hashPrompt(extractedCommand)
                         let isOurs = sentPromptHashes[hash] != nil
 
-                        AppLogger.log("[Dashboard] Bash command echo - extracted: '\(extractedCommand)', hash: \(hash), isOurs: \(isOurs), tracked hashes: \(sentPromptHashes.keys)")
+                        AppLogger.log("[Dashboard] Bash command echo - hash: \(hash), isOurs: \(isOurs), tracked: \(sentPromptHashes.count)")
 
                         // Skip only if this was OUR OWN bash command
                         // Keep hash for 5 seconds to handle duplicate server echoes
@@ -3455,13 +3455,13 @@ final class DashboardViewModel: ObservableObject {
                     // Keep hash for 5 seconds to handle duplicate server echoes
                     else if isOurOwnPrompt(textContent) {
                         let hash = hashPrompt(textContent)
-                        AppLogger.log("[Dashboard] Skipping our own prompt echo (hash: \(hash), text: '\(textContent)')")
+                        AppLogger.log("[Dashboard] Skipping our own prompt echo (hash: \(hash))")
                         return
                     }
                     // Show messages from other clients (e.g., Claude Code CLI on laptop)
                     else {
                         let hash = hashPrompt(textContent)
-                        AppLogger.log("[Dashboard] Showing user message from another client - hash: \(hash), text: '\(textContent)'")
+                        AppLogger.log("[Dashboard] Showing user message from another client - hash: \(hash)")
                     }
                 }
 
@@ -4559,6 +4559,10 @@ final class DashboardViewModel: ObservableObject {
         switch event.type {
         case .sessionIdFailed, .sessionIdResolved, .ptyPermissionResolved:
             return true
+        case .sessionJoined, .sessionLeft:
+            // Multi-device awareness events may arrive without agent_type.
+            // Allow them through so viewer count stays in sync.
+            return event.agentType == nil || event.agentType?.isEmpty == true
         case .ptyPermission:
             // Only bypass when server omits agent_type; respect routing when present
             return event.agentType == nil || event.agentType?.isEmpty == true
@@ -5789,7 +5793,7 @@ final class DashboardViewModel: ObservableObject {
     private func isOurOwnPrompt(_ text: String) -> Bool {
         // Log for debugging
         let trackedHashes = Array(sentPromptHashes.keys)
-        AppLogger.log("[Dashboard] isOurOwnPrompt checking: '\(text.prefix(100))', tracked hashes: \(trackedHashes)")
+        AppLogger.log("[Dashboard] isOurOwnPrompt checking hash, tracked: \(trackedHashes.count)")
 
         // First try exact match
         let hash = hashPrompt(text)

@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Workspace Manager Service
 
 /// Service for workspace and session management via cdev server
-/// Single-port architecture: uses main WebSocket connection on port 8766
+/// Single-port architecture: uses main WebSocket connection on port 16180
 /// Provides JSON-RPC methods for workspace listing, session management, and subscriptions
 @MainActor
 final class WorkspaceManagerService: ObservableObject {

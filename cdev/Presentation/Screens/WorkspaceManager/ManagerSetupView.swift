@@ -3,6 +3,11 @@ import AVFoundation
 
 // MARK: - Manager Setup View
 
+enum ManagerSetupInitialSection {
+    case scanner
+    case manual
+}
+
 /// Setup sheet for connecting to a workspace manager
 /// Supports QR code scanning and manual IP entry - reuses PairingView's sophisticated UI
 struct ManagerSetupView: View {
@@ -11,6 +16,7 @@ struct ManagerSetupView: View {
 
     /// Callback when user enters a host to connect (host, optional token, optional pairing code)
     let onConnect: (String, String?, String?) -> Void
+    let initialSection: ManagerSetupInitialSection
 
     // State
     @State private var hostInput: String = ""
@@ -27,6 +33,14 @@ struct ManagerSetupView: View {
 
     // UserDefaults key for last host
     private static let lastHostKey = "cdev.manager.lastHost"
+
+    init(
+        initialSection: ManagerSetupInitialSection = .scanner,
+        onConnect: @escaping (String, String?, String?) -> Void
+    ) {
+        self.initialSection = initialSection
+        self.onConnect = onConnect
+    }
 
     /// Dismiss keyboard
     private func dismissKeyboard() {
@@ -136,6 +150,7 @@ struct ManagerSetupView: View {
                     ManagerManualEntry(
                         host: $hostInput,
                         pairingCode: $pairingCodeInput,
+                        autoFocusHost: initialSection == .manual,
                         onConnect: {
                             connectWithHost()
                         },
@@ -164,6 +179,14 @@ struct ManagerSetupView: View {
                 )
             }
             .scrollDismissesKeyboard(.interactively)
+            .onAppear {
+                guard initialSection == .manual else { return }
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo("manualEntry", anchor: .center)
+                    }
+                }
+            }
         }
     }
 
@@ -236,6 +259,7 @@ struct ManagerSetupView: View {
                     ManagerManualEntry(
                         host: $hostInput,
                         pairingCode: $pairingCodeInput,
+                        autoFocusHost: initialSection == .manual,
                         onConnect: {
                             connectWithHost()
                         }
@@ -342,11 +366,11 @@ struct ManagerSetupView: View {
     private func handleScannedCode(_ code: String) {
         // Extract host from QR code
         // Supported formats:
-        // 1. JSON PairingInfo: {"ws":"ws://host:8766/ws","http":"...","session":"...","repo":"..."}
+        // 1. JSON PairingInfo: {"ws":"ws://host:16180/ws","http":"...","session":"...","repo":"..."}
         // 2. Plain IP: "192.168.1.100"
-        // 3. Host:port: "192.168.1.100:8766"
-        // 4. URL format: "cdev-manager://192.168.1.100:8766"
-        // 5. WebSocket URL: "ws://192.168.1.100:8766/ws"
+        // 3. Host:port: "192.168.1.100:16180"
+        // 4. URL format: "cdev-manager://192.168.1.100:16180"
+        // 5. WebSocket URL: "ws://192.168.1.100:16180/ws"
 
         var host: String?
         var token: String?
@@ -358,7 +382,7 @@ struct ManagerSetupView: View {
            let wsURL = URL(string: wsURLString),
            let wsHost = wsURL.host {
             // Extract just the host (without port) - port will be added by connect function
-            // For dev tunnels, the full hostname is used (e.g., abc123x4-8766.devtunnels.ms)
+            // For dev tunnels, the full hostname is used (e.g., abc123x4-16180.devtunnels.ms)
             host = wsHost
             // Extract auth token if present
             token = json["token"] as? String
@@ -386,8 +410,8 @@ struct ManagerSetupView: View {
             // Remove default ports
             if rawHost.hasSuffix(":8765") {
                 rawHost = String(rawHost.dropLast(":8765".count))
-            } else if rawHost.hasSuffix(":8766") {
-                rawHost = String(rawHost.dropLast(":8766".count))
+            } else if rawHost.hasSuffix(":16180") {
+                rawHost = String(rawHost.dropLast(":16180".count))
             }
 
             host = rawHost
@@ -549,7 +573,7 @@ private struct ManagerScannerSection: View {
 // MARK: - Scanner Frame Overlay
 
 private struct ManagerScannerFrameOverlay: View {
-    @State private var isAnimating = false
+    @State private var scanProgress: CGFloat = 0
 
     private let inset: CGFloat = 24
     private let bracketSize: CGFloat = 28
@@ -558,6 +582,11 @@ private struct ManagerScannerFrameOverlay: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let height = geometry.size.height
+            let scanTop = inset + bracketSize / 2 + 6
+            let scanBottom = height - inset - bracketSize / 2 - 6
+            let scanTravel = max(0, scanBottom - scanTop)
+            let scanY = scanTop + (scanTravel * scanProgress)
+            let scanWidth = max(0, width - ((inset + bracketSize / 2) * 2))
 
             ZStack {
                 Rectangle()
@@ -576,12 +605,9 @@ private struct ManagerScannerFrameOverlay: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(height: 2)
-                    .offset(y: isAnimating ? height / 3 : -height / 3)
-                    .animation(
-                        .easeInOut(duration: 2.0).repeatForever(autoreverses: true),
-                        value: isAnimating
-                    )
+                    .frame(width: scanWidth, height: 2)
+                    .position(x: width / 2, y: scanY)
+                    .shadow(color: ColorSystem.primary.opacity(0.5), radius: 5, y: 0)
 
                 // Corner brackets
                 ManagerCornerBracket()
@@ -606,7 +632,13 @@ private struct ManagerScannerFrameOverlay: View {
             )
         }
         .onAppear {
-            isAnimating = true
+            scanProgress = 0
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                scanProgress = 1
+            }
+        }
+        .onDisappear {
+            scanProgress = 0
         }
     }
 }
@@ -740,6 +772,7 @@ private struct ManagerDivider: View {
 private struct ManagerManualEntry: View {
     @Binding var host: String
     @Binding var pairingCode: String
+    var autoFocusHost: Bool = false
     let onConnect: () -> Void
     var onFocusChange: ((Bool) -> Void)? = nil
     @FocusState private var isFocused: Bool
@@ -870,6 +903,12 @@ private struct ManagerManualEntry: View {
         }
         .onChange(of: isCodeFocused) { _, newValue in
             onFocusChange?(newValue)
+        }
+        .onAppear {
+            guard autoFocusHost else { return }
+            DispatchQueue.main.async {
+                isFocused = true
+            }
         }
     }
 }

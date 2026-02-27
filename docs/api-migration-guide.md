@@ -46,7 +46,7 @@ This guide documents the API architecture and helps with future migrations.
 │                           ▼                                          │
 └─────────────────────────────────────────────────────────────────────┘
                             │
-                            │ WebSocket (port 8766)
+                            │ WebSocket (port 16180)
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -283,5 +283,5 @@ func pauseClaude() async throws {
 
 | Version | Changes |
 |---------|---------|
-| 2.0 | Single-port (8766), session-based multi-workspace |
+| 2.0 | Single-port (16180), session-based multi-workspace |
 | 1.x | Multi-port, agent/* APIs, single workspace |

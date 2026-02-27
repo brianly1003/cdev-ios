@@ -76,7 +76,7 @@ struct TranscriptionResult: Equatable, Sendable {
         text: String,
         isFinal: Bool = true,
         confidence: Float? = nil,
-        language: String = "vi-VN",
+        language: String = "en-US",
         provider: VoiceInputProvider = .appleSpeech,
         audioDuration: TimeInterval? = nil,
         timestamp: Date = Date()
@@ -398,11 +398,11 @@ struct VoiceInputLanguage: Identifiable, Equatable, Sendable {
         flag: "🇰🇷"
     )
 
-    /// All supported languages (Vietnamese first as primary target)
+    /// All supported languages
     static let all: [VoiceInputLanguage] = [
-        .vietnamese,
         .english,
         .englishUK,
+        .vietnamese,
         .chinese,
         .japanese,
         .korean

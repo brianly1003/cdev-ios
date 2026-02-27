@@ -199,7 +199,7 @@ This is NOT a typical consumer app. This is a **developer tool** for monitoring 
 | Parameter | Value |
 |-----------|-------|
 | WebSocket Port | 8765 (default) |
-| HTTP Port | 8766 (default) |
+| HTTP Port | 16180 (default) |
 | Connection Timeout | 10 seconds |
 | Request Timeout | 30 seconds |
 | Ping Interval | 30 seconds |

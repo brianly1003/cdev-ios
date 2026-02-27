@@ -657,18 +657,23 @@ struct BashOutputSegmentView: View {
                             .font(Typography.terminal)
                             .foregroundStyle(ColorSystem.textQuaternary)
 
-                        Group {
-                            if searchText.isEmpty {
-                                Text(isExpanded ? output : previewText)
-                            } else {
-                                HighlightedText(isExpanded ? output : previewText, highlighting: searchText)
-                            }
+                        let displayText = isExpanded ? output : previewText
+                        let defaultColor = isError ? ColorSystem.error : ColorSystem.Bash.output
+
+                        if searchText.isEmpty {
+                            FailureAwareOutputStyler.coloredText(displayText, defaultColor: defaultColor)
+                                .font(Typography.terminal)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            HighlightedText(displayText, highlighting: searchText)
+                                .font(Typography.terminal)
+                                .foregroundStyle(defaultColor)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .font(Typography.terminal)
-                        .foregroundStyle(isError ? ColorSystem.error : ColorSystem.Bash.output)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     // Expand indicator
@@ -705,6 +710,45 @@ struct BashOutputSegmentView: View {
             .buttonStyle(.plain)
         }
         .frame(minHeight: 20)
+    }
+}
+
+/// Adds line-level error emphasis for command output while preserving default color.
+/// Used for cases where the overall tool result is not marked as an error, but output contains failed tests.
+private enum FailureAwareOutputStyler {
+    static func coloredText(_ text: String, defaultColor: Color) -> Text {
+        let lines = text.components(separatedBy: "\n")
+
+        return lines.enumerated().reduce(Text("")) { partial, entry in
+            let (index, line) = entry
+            let lineColor = isFailureLine(line) ? ColorSystem.error : defaultColor
+            var result = partial + Text(verbatim: line).foregroundColor(lineColor)
+
+            if index < lines.count - 1 {
+                result = result + Text(verbatim: "\n")
+            }
+
+            return result
+        }
+    }
+
+    private static func isFailureLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        if trimmed.range(of: #"(?i)^---\s*FAIL:"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        if trimmed.range(of: #"(?i)\bFAIL(?:ED)?\b"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        if trimmed.range(of: #"(?i)\bpanic:"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        return false
     }
 }
 
@@ -1631,18 +1675,23 @@ struct ToolResultElementView: View {
                             .font(Typography.terminal)
                             .foregroundStyle(ColorSystem.textQuaternary)
 
-                        Group {
-                            if searchText.isEmpty {
-                                Text(previewText.isEmpty ? "(No content)" : previewText)
-                            } else {
-                                HighlightedText(previewText.isEmpty ? "(empty)" : previewText, highlighting: searchText)
-                            }
+                        let previewDisplayText = previewText.isEmpty ? "(No content)" : previewText
+                        let previewColor = content.isError ? ColorSystem.error : ColorSystem.textSecondary
+
+                        if searchText.isEmpty {
+                            FailureAwareOutputStyler.coloredText(previewDisplayText, defaultColor: previewColor)
+                                .font(Typography.terminal)
+                                .textSelection(.disabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            HighlightedText(previewText.isEmpty ? "(empty)" : previewText, highlighting: searchText)
+                                .font(Typography.terminal)
+                                .foregroundStyle(previewColor)
+                                .textSelection(.disabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .font(Typography.terminal)
-                        .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textSecondary)
-                        .textSelection(.disabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(minHeight: 20)
 
@@ -1667,17 +1716,20 @@ struct ToolResultElementView: View {
             // Expanded content
             if isExpanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    Group {
-                        if searchText.isEmpty {
-                            Text(displayContent)
-                        } else {
-                            HighlightedText(displayContent, highlighting: searchText)
-                        }
+                    let expandedColor = content.isError ? ColorSystem.error : ColorSystem.textTertiary
+
+                    if searchText.isEmpty {
+                        FailureAwareOutputStyler.coloredText(displayContent, defaultColor: expandedColor)
+                            .font(Typography.terminalSmall)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        HighlightedText(displayContent, highlighting: searchText)
+                            .font(Typography.terminalSmall)
+                            .foregroundStyle(expandedColor)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(Typography.terminalSmall)
-                    .foregroundStyle(content.isError ? ColorSystem.error : ColorSystem.textTertiary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     // Collapse button
                     Button {

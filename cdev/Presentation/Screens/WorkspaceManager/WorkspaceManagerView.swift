@@ -37,6 +37,8 @@ struct WorkspaceManagerView: View {
     /// No Git alert state (shown when tapping workspace without git)
     @State private var showNoGitAlert: Bool = false
     @State private var noGitAlertWorkspace: RemoteWorkspace?
+    @State private var setupInitialSection: ManagerSetupInitialSection = .scanner
+    @State private var showConnectionGuideSheet: Bool = false
 
     private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
 
@@ -53,19 +55,21 @@ struct WorkspaceManagerView: View {
             NavigationStack {
                 VStack(spacing: 0) {
                     // Server connection status banner (non-blocking)
-                    ServerConnectionBanner(
-                        status: viewModel.serverStatus,
-                        host: viewModel.savedHost,
-                        onRetry: {
-                            Task { await viewModel.retryConnection() }
-                        },
-                        onCancel: {
-                            viewModel.cancelConnection()
-                        },
-                        onChangeServer: {
-                            viewModel.showSetupSheet = true
-                        }
-                    )
+                    if viewModel.hasSavedManager || viewModel.serverStatus.isConnecting {
+                        ServerConnectionBanner(
+                            status: viewModel.serverStatus,
+                            host: viewModel.savedHost,
+                            onRetry: {
+                                Task { await viewModel.retryConnection() }
+                            },
+                            onCancel: {
+                                viewModel.cancelConnection()
+                            },
+                            onChangeServer: {
+                                presentSetup(.scanner)
+                            }
+                        )
+                    }
 
                     // Main content - always show workspace list structure
                     if viewModel.hasSavedManager {
@@ -117,7 +121,7 @@ struct WorkspaceManagerView: View {
                             }
 
                             Button {
-                                viewModel.showSetupSheet = true
+                                presentSetup(.scanner)
                             } label: {
                                 Label("Change Server", systemImage: "server.rack")
                             }
@@ -142,15 +146,32 @@ struct WorkspaceManagerView: View {
                                 .foregroundStyle(ColorSystem.textSecondary)
                         }
                     }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showConnectionGuideSheet = true
+                        } label: {
+                            Label("How to Connect", systemImage: "questionmark.circle")
+                                .font(Typography.caption1)
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundStyle(ColorSystem.primary)
+                        .accessibilityHint("Open step-by-step cdev connection guide")
+                    }
                 }
             }
             .sheet(isPresented: $viewModel.showSetupSheet) {
-                ManagerSetupView { host, token, pairingCode in
+                ManagerSetupView(initialSection: setupInitialSection) { host, token, pairingCode in
                     Task {
                         await viewModel.connect(to: host, token: token, pairingCode: pairingCode)
                     }
                 }
                 .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showConnectionGuideSheet) {
+                ConnectionGuideSheet()
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $viewModel.showDiscoverySheet) {
@@ -227,9 +248,6 @@ struct WorkspaceManagerView: View {
                 } else if viewModel.hasSavedManager {
                     // Not connected but have saved manager - try to reconnect with retry
                     await viewModel.connectToSavedManager()
-                } else {
-                    // No saved manager - show setup
-                    viewModel.showSetupSheet = true
                 }
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -344,6 +362,11 @@ struct WorkspaceManagerView: View {
                 requestScroll(direction: direction)
             }
         } // End outer ZStack
+    }
+
+    private func presentSetup(_ section: ManagerSetupInitialSection) {
+        setupInitialSection = section
+        viewModel.showSetupSheet = true
     }
 
     // MARK: - Search Bar
@@ -697,35 +720,224 @@ struct WorkspaceManagerView: View {
 
     /// Content shown when no server has been configured yet
     private var noServerConfiguredContent: some View {
-        VStack(spacing: Spacing.lg) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 48))
-                .foregroundStyle(ColorSystem.textTertiary)
+        ScrollView {
+            VStack(spacing: Spacing.lg) {
+                VStack(alignment: .leading, spacing: Spacing.md) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: CornerRadius.large)
+                            .fill(ColorSystem.primary.opacity(0.15))
+                            .frame(width: 64, height: 64)
 
-            Text("No Server Configured")
-                .font(Typography.title3)
-                .foregroundStyle(ColorSystem.textPrimary)
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(ColorSystem.primary)
+                    }
 
-            Text("Connect to a workspace manager to view and manage your remote workspaces.")
-                .font(Typography.body)
-                .foregroundStyle(ColorSystem.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, Spacing.xl)
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text("Connect to Your Server")
+                            .font(Typography.title3)
+                            .foregroundStyle(ColorSystem.textPrimary)
 
-            Button {
-                viewModel.showSetupSheet = true
-            } label: {
-                Label("Connect to Server", systemImage: "wifi")
-                    .font(Typography.buttonLabel)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.vertical, Spacing.sm)
-                    .background(ColorSystem.primary)
-                    .clipShape(Capsule())
+                        Text("After connecting, your workspaces appear here so you can open, start, and switch projects quickly.")
+                            .font(Typography.body)
+                            .foregroundStyle(ColorSystem.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(layout.largePadding)
+                .background(ColorSystem.terminalBgElevated)
+                .clipShape(RoundedRectangle(cornerRadius: CornerRadius.large))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CornerRadius.large)
+                        .stroke(ColorSystem.primary.opacity(0.18), lineWidth: 1)
+                )
+                .padding(.horizontal, layout.standardPadding)
+
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("What you'll be able to do")
+                        .font(Typography.caption1)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .textCase(.uppercase)
+
+                    onboardingCapabilityRow(
+                        icon: "folder.badge.gearshape",
+                        title: "See Your Workspaces",
+                        subtitle: "View every project available on your server."
+                    )
+                    onboardingCapabilityRow(
+                        icon: "play.circle",
+                        title: "Start or Resume Sessions",
+                        subtitle: "Launch stopped workspaces or continue active ones."
+                    )
+                    onboardingCapabilityRow(
+                        icon: "bolt.horizontal.circle",
+                        title: "Switch in One Tap",
+                        subtitle: "Move between projects without reconfiguring."
+                    )
+                }
+                .padding(.horizontal, layout.standardPadding)
+
+                VStack(spacing: Spacing.sm) {
+                    Button {
+                        presentSetup(.scanner)
+                    } label: {
+                        Label("Set Up Connection", systemImage: "link.badge.plus")
+                            .font(Typography.buttonLabel)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Spacing.sm)
+                            .background(ColorSystem.primary)
+                            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.full))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Open connection setup")
+                }
+                .padding(.horizontal, layout.standardPadding)
             }
-            .buttonStyle(.plain)
+            .padding(.top, Spacing.xxl)
+            .padding(.bottom, Spacing.xxl)
         }
+        .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func onboardingCapabilityRow(icon: String, title: String, subtitle: String) -> some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            ZStack {
+                Circle()
+                    .fill(ColorSystem.primary.opacity(0.12))
+                    .frame(width: 24, height: 24)
+
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ColorSystem.primary)
+            }
+            .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Typography.callout)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text(subtitle)
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct ConnectionGuideSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.lg) {
+                    Text("Connect cdev in 5 Steps")
+                        .font(Typography.title3)
+                        .foregroundStyle(ColorSystem.textPrimary)
+
+                    guideStep(
+                        number: "1",
+                        title: "Install cdev on laptop / host / server",
+                        detail: "Use the open-source repo or install with Homebrew."
+                    )
+                    Link("https://github.com/brianly1003/cdev", destination: URL(string: "https://github.com/brianly1003/cdev")!)
+                        .font(Typography.caption1)
+                        .foregroundStyle(ColorSystem.primary)
+                    guideCommand("brew tap brianly1003/tap\nbrew install cdev")
+
+                    guideStep(
+                        number: "2",
+                        title: "Start cdev",
+                        detail: "Run cdev on your laptop in the project you want to connect."
+                    )
+                    guideCommand("cdev start")
+
+                    guideStep(
+                        number: "3",
+                        title: "Enable VSCode Port Forwarding",
+                        detail: "In VSCode Port Forwarding, forward port 16180 (default cdev port) on your laptop."
+                    )
+
+                    guideStep(
+                        number: "4",
+                        title: "Open pairing info",
+                        detail: "Run this command with your VSCode tunnel URL:"
+                    )
+                    guideCommand("cdev pair --external-url vscode-tunnel-url")
+
+                    guideStep(
+                        number: "5",
+                        title: "Connect from iPhone",
+                        detail: "Tap Set Up Connection in Workspaces, then scan QR or enter host + pairing code. On your laptop /pair page, click Approve to allow this device."
+                    )
+                }
+                .padding(Spacing.lg)
+            }
+            .background(ColorSystem.terminalBg.ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .foregroundStyle(ColorSystem.textSecondary)
+                }
+
+                ToolbarItem(placement: .principal) {
+                    Text("Connection Guide")
+                        .font(Typography.bodyBold)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func guideStep(number: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            Text(number)
+                .font(Typography.caption1)
+                .fontWeight(.bold)
+                .foregroundStyle(ColorSystem.primary)
+                .frame(width: 24, height: 24)
+                .background(ColorSystem.primary.opacity(0.16))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text(title)
+                    .font(Typography.callout)
+                    .foregroundStyle(ColorSystem.textPrimary)
+
+                Text(detail)
+                    .font(Typography.caption1)
+                    .foregroundStyle(ColorSystem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func guideCommand(_ command: String) -> some View {
+        Text(command)
+            .font(Typography.terminalSmall)
+            .foregroundStyle(ColorSystem.textSecondary)
+            .padding(Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ColorSystem.terminalBgElevated)
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(ColorSystem.textQuaternary.opacity(0.25), lineWidth: 1)
+            )
     }
 }
 
@@ -746,18 +958,36 @@ struct ServerConnectionBanner: View {
     var body: some View {
         // Only show banner when not connected
         if !status.isConnected {
-            HStack(spacing: Spacing.xs) {
-                // Status indicator with background pill
-                statusPill
-
-                Spacer()
-
-                // Action buttons
-                actionButtons
+            ViewThatFits(in: .horizontal) {
+                bannerInlineLayout
+                bannerStackedLayout
             }
             .padding(.horizontal, layout.standardPadding)
             .padding(.vertical, Spacing.xs)
             .background(bannerBackground)
+        }
+    }
+
+    @ViewBuilder
+    private var bannerInlineLayout: some View {
+        HStack(spacing: Spacing.xs) {
+            statusPill
+            Spacer(minLength: Spacing.xs)
+            actionButtons
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    @ViewBuilder
+    private var bannerStackedLayout: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            statusPill
+
+            HStack {
+                Spacer(minLength: 0)
+                actionButtons
+                    .fixedSize(horizontal: true, vertical: false)
+            }
         }
     }
 
@@ -784,10 +1014,11 @@ struct ServerConnectionBanner: View {
                     .foregroundStyle(status.statusColor)
 
                 if let host = host {
-                    Text(host)
+                    Text("Server: \(host)")
                         .font(Typography.terminalSmall)
                         .foregroundStyle(ColorSystem.textTertiary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
         }
@@ -837,6 +1068,8 @@ struct ServerConnectionBanner: View {
                     Text("Cancel")
                         .font(Typography.caption1)
                         .fontWeight(.medium)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(ColorSystem.textSecondary)
                         .padding(.horizontal, Spacing.sm)
                         .padding(.vertical, 6)
@@ -856,7 +1089,9 @@ struct ServerConnectionBanner: View {
                         Text("Retry")
                             .font(Typography.caption1)
                             .fontWeight(.semibold)
+                            .lineLimit(1)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundStyle(ColorSystem.primary)
                     .padding(.horizontal, Spacing.sm)
                     .padding(.vertical, 6)
@@ -864,23 +1099,29 @@ struct ServerConnectionBanner: View {
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Retry connection")
 
-                // Change server button - square with border
+                // Change server button - labeled for clarity
                 Button {
                     onChangeServer?()
                 } label: {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 12, weight: .semibold))
+                    Label("Change Server", systemImage: "server.rack")
+                        .font(Typography.caption1)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(ColorSystem.textSecondary)
-                        .frame(width: 30, height: 30)
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, 6)
                         .background(ColorSystem.terminalBgHighlight)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(Capsule())
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
+                            Capsule()
                                 .stroke(ColorSystem.textQuaternary.opacity(0.5), lineWidth: 1)
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityHint("Open server connection setup")
 
             case .connected:
                 EmptyView()

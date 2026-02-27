@@ -48,7 +48,7 @@ protocol VoiceInputServiceProtocol: AnyObject {
     // MARK: - Recording
 
     /// Start recording and transcription
-    /// - Parameter language: Target language locale (e.g., "vi-VN")
+    /// - Parameter language: Target language locale (e.g., "en-US")
     /// - Throws: VoiceInputError if recording cannot start
     func startRecording(language: VoiceInputLanguage) async throws
 
@@ -100,9 +100,9 @@ struct VoiceInputPermissionStatus: Equatable, Sendable {
 // MARK: - Default Implementations
 
 extension VoiceInputServiceProtocol {
-    /// Default language is Vietnamese
+    /// Default language is English (US)
     var defaultLanguage: VoiceInputLanguage {
-        .vietnamese
+        .english
     }
 
     /// Whether the service supports real-time partial results

@@ -90,12 +90,12 @@ final class VoiceInputSettingsStore: ObservableObject {
         // Users can disable it in settings if needed
         self.isEnabled = defaults.object(forKey: Keys.isEnabled) as? Bool ?? true
 
-        // Default language is Vietnamese
+        // Default language is English (US)
         if let languageId = defaults.string(forKey: Keys.selectedLanguage),
            let language = VoiceInputLanguage.find(byId: languageId) {
             self.selectedLanguage = language
         } else {
-            self.selectedLanguage = .vietnamese
+            self.selectedLanguage = .english
         }
 
         // Default provider is Apple Speech
@@ -123,7 +123,7 @@ final class VoiceInputSettingsStore: ObservableObject {
     /// Reset all voice input settings to defaults
     func resetToDefaults() {
         isEnabled = false
-        selectedLanguage = .vietnamese
+        selectedLanguage = .english
         selectedProvider = .appleSpeech
         showWaveform = true
         hapticFeedback = true

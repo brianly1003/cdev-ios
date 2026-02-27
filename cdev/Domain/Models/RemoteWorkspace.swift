@@ -57,7 +57,7 @@ struct WorkspaceGitInfo: Codable, Equatable {
 
 /// Remote workspace from cdev server
 /// Represents a directory (git or non-git) configured on the server
-/// Single-port architecture: all workspaces share port 8766
+/// Single-port architecture: all workspaces share port 16180
 struct RemoteWorkspace: Codable, Identifiable, Equatable, Hashable {
     let id: String              // "ws-abc123" - unique identifier
     let name: String            // "Backend API" - display name
@@ -528,7 +528,7 @@ struct DiscoveredRepository: Codable, Identifiable, Equatable {
 // MARK: - Server Connection
 
 /// Connection info for cdev server
-/// Single-port architecture: everything on port 8766
+/// Single-port architecture: everything on port 16180
 struct ServerConnection: Codable, Identifiable, Equatable {
     let id: UUID
     let host: String            // IP address or hostname
@@ -536,8 +536,8 @@ struct ServerConnection: Codable, Identifiable, Equatable {
     var lastConnected: Date     // For sorting recent connections
     var token: String?          // Access token (transient, not persisted)
 
-    /// Server port (always 8766 in single-port architecture)
-    static let serverPort: Int = 8766
+    /// Server port (always 16180 in single-port architecture)
+    static let serverPort: Int = 16180
 
     init(id: UUID = UUID(), host: String, name: String? = nil, lastConnected: Date = Date(), token: String? = nil) {
         self.id = id

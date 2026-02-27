@@ -25,11 +25,11 @@ enum ServerConnectionStatus: Equatable {
         case .connected:
             return "Connected"
         case .connecting(let attempt, let max):
-            return "Connecting... (\(attempt)/\(max))"
+            return "Connecting to Server... (\(attempt)/\(max))"
         case .disconnected:
-            return "Disconnected"
+            return "Not Connected"
         case .unreachable:
-            return "Server Unreachable"
+            return "Can't Reach Server"
         }
     }
 
@@ -478,7 +478,6 @@ final class WorkspaceManagerViewModel: ObservableObject {
             isConnecting = false
             hasCheckedConnection = true
             serverStatus = .disconnected
-            showSetupSheet = true
             return
         }
 
@@ -694,7 +693,6 @@ final class WorkspaceManagerViewModel: ObservableObject {
     /// Retry connection to current saved host
     func retryConnection() async {
         guard let host = managerStore.lastHost else {
-            showSetupSheet = true
             return
         }
         // Use saved token if available
@@ -1463,7 +1461,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
 
     // MARK: - Setup
 
-    /// Clear saved manager, disconnect, and show setup
+    /// Clear saved manager and disconnect.
+    /// UI remains on the onboarding/no-server screen until user taps a setup action.
     /// Use this when no onDisconnect callback is available (e.g., root view)
     func resetManager() {
         AppLogger.log("[WorkspaceManager] Resetting manager - disconnecting WebSocket")
@@ -1479,7 +1478,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
         resetManagerState()
     }
 
-    /// Reset local manager state without disconnecting WebSocket
+    /// Reset local manager state without disconnecting WebSocket.
+    /// UI remains on the onboarding/no-server screen until user taps a setup action.
     /// Use this after calling onDisconnect callback to clean up manager state
     func resetManagerState() {
         AppLogger.log("[WorkspaceManager] Resetting manager state")
@@ -1496,8 +1496,8 @@ final class WorkspaceManagerViewModel: ObservableObject {
         hasAutoLoadedForCurrentConnection = false
         currentWorkspaceId = nil
 
-        // Show setup sheet
-        showSetupSheet = true
+        // Do not auto-open setup here; let user opt in from onboarding CTAs.
+        showSetupSheet = false
     }
 
     /// Mark connection check as complete (used when connection failed previously)

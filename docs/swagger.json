@@ -14,7 +14,7 @@
         },
         "version": "1.0"
     },
-    "host": "localhost:8766",
+    "host": "localhost:16180",
     "basePath": "/",
     "paths": {
         "/api/claude/respond": {
