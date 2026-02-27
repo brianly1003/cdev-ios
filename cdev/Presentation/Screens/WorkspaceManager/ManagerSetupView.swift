@@ -322,9 +322,11 @@ struct ManagerSetupView: View {
             host = String(host[..<slashIndex])
         }
 
-        // Remove default port suffix
+        // Remove default port suffixes
         if host.hasSuffix(":8765") {
             host = String(host.dropLast(":8765".count))
+        } else if host.hasSuffix(":16180") {
+            host = String(host.dropLast(":16180".count))
         }
 
         // Validate
@@ -457,10 +459,12 @@ struct ManagerSetupView: View {
             host = String(host[..<slashIndex])
         }
 
-        // Extract port if present (for dev tunnels, port is in subdomain like abc123x4-8765)
-        // Don't strip port from hostname for tunnels, only strip default :8765 suffix
+        // Strip default local-port suffixes.
+        // For dev tunnels, port is already in subdomain (e.g., abc123x4-16180.devtunnels.ms).
         if host.hasSuffix(":8765") {
             host = String(host.dropLast(":8765".count))
+        } else if host.hasSuffix(":16180") {
+            host = String(host.dropLast(":16180".count))
         }
 
         guard isValidHost(host) else {
@@ -498,7 +502,7 @@ struct ManagerSetupView: View {
         // IP address pattern
         let ipPattern = #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#
 
-        // Hostname pattern - allows subdomains with numbers and hyphens (e.g., abc123x4-8765.asse.devtunnels.ms)
+        // Hostname pattern - allows subdomains with numbers and hyphens (e.g., abc123x4-16180.asse.devtunnels.ms)
         let hostnamePattern = #"^[a-zA-Z0-9][a-zA-Z0-9-]*(\.[a-zA-Z0-9][a-zA-Z0-9-]*)*$"#
 
         let ipRegex = try? NSRegularExpression(pattern: ipPattern)
