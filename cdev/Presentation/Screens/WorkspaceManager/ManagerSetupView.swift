@@ -322,13 +322,6 @@ struct ManagerSetupView: View {
             host = String(host[..<slashIndex])
         }
 
-        // Remove default port suffixes
-        if host.hasSuffix(":8765") {
-            host = String(host.dropLast(":8765".count))
-        } else if host.hasSuffix(":16180") {
-            host = String(host.dropLast(":16180".count))
-        }
-
         // Validate
         guard !host.isEmpty && isValidHost(host) else { return nil }
 
@@ -383,9 +376,9 @@ struct ManagerSetupView: View {
            let wsURLString = json["ws"] as? String,
            let wsURL = URL(string: wsURLString),
            let wsHost = wsURL.host {
-            // Extract just the host (without port) - port will be added by connect function
-            // For dev tunnels, the full hostname is used (e.g., abc123x4-16180.devtunnels.ms)
-            host = wsHost
+            // Preserve explicit ws port when present (e.g., wss://example.com:4443/ws).
+            // For dev tunnels, host typically has no explicit port and defaults to 443.
+            host = wsURL.port != nil ? "\(wsHost):\(wsURL.port!)" : wsHost
             // Extract auth token if present
             token = json["token"] as? String
             AppLogger.log("[ManagerSetup] Parsed JSON QR code, host: \(host ?? "nil"), token: \(token != nil ? "present" : "none")")
@@ -407,13 +400,6 @@ struct ManagerSetupView: View {
             // Remove path components (keep only host:port)
             if let slashIndex = rawHost.firstIndex(of: "/") {
                 rawHost = String(rawHost[..<slashIndex])
-            }
-
-            // Remove default ports
-            if rawHost.hasSuffix(":8765") {
-                rawHost = String(rawHost.dropLast(":8765".count))
-            } else if rawHost.hasSuffix(":16180") {
-                rawHost = String(rawHost.dropLast(":16180".count))
             }
 
             host = rawHost
@@ -457,14 +443,6 @@ struct ManagerSetupView: View {
         // Remove path components (keep only host:port)
         if let slashIndex = host.firstIndex(of: "/") {
             host = String(host[..<slashIndex])
-        }
-
-        // Strip default local-port suffixes.
-        // For dev tunnels, port is already in subdomain (e.g., abc123x4-16180.devtunnels.ms).
-        if host.hasSuffix(":8765") {
-            host = String(host.dropLast(":8765".count))
-        } else if host.hasSuffix(":16180") {
-            host = String(host.dropLast(":16180".count))
         }
 
         guard isValidHost(host) else {

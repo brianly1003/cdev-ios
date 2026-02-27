@@ -461,39 +461,32 @@ final class AppState: ObservableObject {
 
     // MARK: - Agent Connection
 
-    /// Connect directly to a cdev-agent at the given host
-    /// cdev-agent uses: WebSocket on port 8765, HTTP on port 16180
+    /// Connect directly to a cdev-agent at the given host.
+    /// Single-port architecture: WebSocket and HTTP both use ServerConnection.serverPort.
     func connectToAgent(host: String) async {
         AppLogger.log("[AppState] Connecting to cdev-agent at \(host)")
 
         // Determine URL scheme based on host type
-            let parts = splitHostPort(host)
-            let hostOnly = parts.host
-            let port = parts.port
-            let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
-            let isLocal = isLocalHost(hostOnly)
-            let wsScheme = isLocal ? "ws" : "wss"
-            let httpScheme = isLocal ? "http" : "https"
+        let parts = splitHostPort(host)
+        let hostOnly = parts.host
+        let port = parts.port
+        let hostWithPort = port != nil ? "\(hostOnly):\(port!)" : hostOnly
+        let isLocal = isLocalHost(hostOnly)
+        let wsScheme = isLocal ? "ws" : "wss"
+        let httpScheme = isLocal ? "http" : "https"
 
-        // cdev-agent ports (for local connections)
-        // For dev tunnels, port is embedded in the hostname
+        // Single-port architecture
         let wsURL: URL
         let httpURL: URL
 
-            if isLocal {
-                // Local network: explicit ports
-                wsURL = URL(string: "\(wsScheme)://\(hostOnly):8765/ws")!
-                httpURL = URL(string: "\(httpScheme)://\(hostOnly):16180")!
-            } else {
-                // Dev tunnels: port is in subdomain, no explicit port needed
-                // e.g., abc123x4-8765.asse.devtunnels.ms for WebSocket
-                // Need to handle HTTP separately (port 16180 tunnel)
-                wsURL = URL(string: "\(wsScheme)://\(hostWithPort)/ws")!
-                // For HTTP, user needs to provide the 16180 tunnel URL separately
-                // For now, assume same host (might need adjustment)
-                let httpHost = hostWithPort.replacingOccurrences(of: "-8765.", with: "-16180.")
-                httpURL = URL(string: "\(httpScheme)://\(httpHost)")!
-            }
+        if isLocal {
+            let resolvedPort = port ?? ServerConnection.serverPort
+            wsURL = URL(string: "\(wsScheme)://\(hostOnly):\(resolvedPort)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(hostOnly):\(resolvedPort)")!
+        } else {
+            wsURL = URL(string: "\(wsScheme)://\(hostWithPort)/ws")!
+            httpURL = URL(string: "\(httpScheme)://\(hostWithPort)")!
+        }
 
         // Create workspace entry
         let workspace = Workspace(
@@ -588,25 +581,6 @@ final class AppState: ObservableObject {
             return String(host[..<dashIndex])
         }
         return host
-    }
-
-    /// Replace port in dev tunnel subdomain
-    /// e.g., "abc123x4-8765.asse.devtunnels.ms" with port 16180 → "abc123x4-16180.asse.devtunnels.ms"
-    private func replacePortInDevTunnel(host: String, newPort: Int) -> String {
-        // Pattern: {id}-{port}.{rest}
-        // Find the pattern: dash followed by 4-5 digit port, then dot
-        let portPattern = #"-(\d{4,5})\."#
-
-        guard let regex = try? NSRegularExpression(pattern: portPattern),
-              let match = regex.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)),
-              let portRange = Range(match.range(at: 0), in: host) else {
-            // If pattern not found, return host as-is (might not be a dev tunnel)
-            return host
-        }
-
-        // Replace the port in the subdomain
-        let newPortString = "-\(newPort)."
-        return host.replacingCharacters(in: portRange, with: newPortString)
     }
 
     // MARK: - Remote Workspace Connection

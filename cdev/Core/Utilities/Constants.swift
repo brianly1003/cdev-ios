@@ -15,7 +15,6 @@ enum Constants {
     /// Network configuration
     enum Network {
         static let defaultHTTPPort = 16180
-        static let defaultWSPort = 8765
         static let connectionTimeout: TimeInterval = 30       // Increased for dev tunnels
         static let requestTimeout: TimeInterval = 120         // 2 min for dev tunnels with slow ops
         static let requestTimeoutLocal: TimeInterval = 30     // Faster for localhost

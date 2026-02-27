@@ -475,7 +475,7 @@ private struct ManualEntryView: View {
                     .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
 
                 // URL input
-                TextField("192.168.1.x:8765", text: $url)
+                TextField("192.168.1.x:16180", text: $url)
                     .font(Typography.terminal)
                     .foregroundStyle(ColorSystem.textPrimary)
                     .autocapitalization(.none)
