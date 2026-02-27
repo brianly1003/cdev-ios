@@ -909,7 +909,8 @@ extension ChatElement {
         let baseId = payload.uuid ?? generateTimestampBasedId(role: "assistant", text: effectiveContent.textContent, timestamp: payload.timestamp)
 
         switch effectiveContent {
-        case .text(let text):
+        case .text(let rawText):
+            let text = rawText.hasPrefix("\n") ? String(rawText.drop(while: { $0 == "\n" })) : rawText
             if !text.isEmpty {
                 elements.append(ChatElement(
                     id: "\(baseId)-text-0",
@@ -925,7 +926,9 @@ extension ChatElement {
 
                 switch block.type {
                 case "text":
-                    if let text = block.text, !text.isEmpty {
+                    if let rawText = block.text, !rawText.isEmpty {
+                        let text = rawText.hasPrefix("\n") ? String(rawText.drop(while: { $0 == "\n" })) : rawText
+                        guard !text.isEmpty else { continue }
                         // Use baseId + index for unique ID (text blocks may not have unique IDs)
                         let textId = "\(baseId)-text-\(index)"
                         elements.append(ChatElement(
@@ -1277,7 +1280,8 @@ extension ChatElement {
         }
 
         switch content {
-        case .string(let text):
+        case .string(let rawText):
+            let text = rawText.hasPrefix("\n") ? String(rawText.drop(while: { $0 == "\n" })) : rawText
             if !text.isEmpty {
                 if sessionMessage.type == "user" {
                     let displayText = ChatContentFilter.normalizedUserText(text)
@@ -1304,7 +1308,9 @@ extension ChatElement {
 
                 switch block.type {
                 case "text":
-                    if let text = block.text, !text.isEmpty {
+                    if let rawText = block.text, !rawText.isEmpty {
+                        let text = rawText.hasPrefix("\n") ? String(rawText.drop(while: { $0 == "\n" })) : rawText
+                        guard !text.isEmpty else { continue }
                         if sessionMessage.type == "user" {
                             let displayText = ChatContentFilter.normalizedUserText(text)
                             guard !displayText.isEmpty else { continue }

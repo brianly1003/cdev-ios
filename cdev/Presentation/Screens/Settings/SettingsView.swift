@@ -72,9 +72,15 @@ struct SettingsView: View {
 
                         // Data Section
                         SettingsSection(title: "Data", icon: "externaldrive") {
+                            SettingsInfoRow(
+                                icon: "square.stack.3d.up",
+                                title: "Saved Workspaces",
+                                value: "\(WorkspaceStore.shared.workspaces.count)"
+                            )
+
                             SettingsButtonRow(
                                 icon: "trash",
-                                title: "Clear Workspaces",
+                                title: "Clear All App Data",
                                 style: .destructive
                             ) {
                                 showClearDataConfirm = true
@@ -140,17 +146,17 @@ struct SettingsView: View {
                 }
             }
             .confirmationDialog(
-                "Clear all saved workspaces?",
+                "Clear all app data?",
                 isPresented: $showClearDataConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Clear All", role: .destructive) {
-                    WorkspaceStore.shared.clearAll()
+                Button("Clear All Data", role: .destructive) {
+                    Task { await clearAllAppData() }
                     Haptics.warning()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will remove all saved workspace connections. You'll need to scan QR codes again.")
+                Text("This removes all saved workspaces, tokens, session data, and caches. You'll need to scan a QR code to reconnect. Preferences (theme, timestamps) are kept.")
             }
             .sheet(isPresented: $showThemePicker) {
                 ThemePickerView(
@@ -175,6 +181,26 @@ struct SettingsView: View {
             // Sheets need their own preferredColorScheme (don't inherit from parent)
             .preferredColorScheme(currentTheme.colorScheme)
         }
+    }
+
+    // MARK: - Clear All Data
+
+    private func clearAllAppData() async {
+        // 1. Persisted connection & auth
+        TokenManager.shared.clearTokens()
+        let sessionRepo = SessionRepository()
+        try? await sessionRepo.clearConnection()
+        try? await sessionRepo.clearSessionToken()
+        sessionRepo.clearSelectedSessionId()
+
+        // 2. Saved workspaces & manager
+        WorkspaceStore.shared.clearAll()
+        ManagerStore.shared.clear()
+
+        // 3. In-memory caches & state
+        WorkspaceStateManager.shared.clearAll()
+
+        AppLogger.log("[Settings] All app data cleared")
     }
 }
 

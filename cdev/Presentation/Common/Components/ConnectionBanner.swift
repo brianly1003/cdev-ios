@@ -56,47 +56,48 @@ struct ConnectionBanner: View {
             VStack(spacing: 0) {
                 // Main banner content
                 HStack(spacing: Spacing.sm) {
-                    // Animated status indicator
-                    statusIndicator
+                    // Tappable area: icon + message (expands/collapses details)
+                    HStack(spacing: Spacing.sm) {
+                        // Animated status indicator
+                        statusIndicator
 
-                    // Message and details
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(stateConfig.message)
-                            .font(Typography.bodyBold)
-                            .foregroundStyle(ColorSystem.textPrimary)
-                            .lineLimit(1)
+                        // Message and details
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(stateConfig.message)
+                                .font(Typography.bodyBold)
+                                .foregroundStyle(ColorSystem.textPrimary)
+                                .lineLimit(1)
 
-                        // Progress details for reconnecting
-                        if case .reconnecting(let attempt) = connectionState {
-                            HStack(spacing: 4) {
-                                ProgressView(value: Double(attempt), total: Double(Constants.Network.maxReconnectAttempts))
-                                    .tint(ColorSystem.warning)
-                                    .frame(width: 60)
+                            // Progress details for reconnecting
+                            if case .reconnecting(let attempt) = connectionState {
+                                HStack(spacing: 4) {
+                                    ProgressView(value: Double(attempt), total: Double(Constants.Network.maxReconnectAttempts))
+                                        .tint(ColorSystem.warning)
+                                        .frame(width: 60)
 
-                                Text("~\(estimatedWaitTime(attempt: attempt))s")
-                                    .font(Typography.terminalSmall)
-                                    .foregroundStyle(ColorSystem.textTertiary)
+                                    Text("~\(estimatedWaitTime(attempt: attempt))s")
+                                        .font(Typography.terminalSmall)
+                                        .foregroundStyle(ColorSystem.textTertiary)
+                                }
                             }
                         }
                     }
-
-                    Spacer()
-
-                    // Action buttons
-                    actionButtons
-                }
-                .padding(.horizontal, layout.standardPadding)
-                .padding(.vertical, Spacing.xs)
-                .background(bannerBackground)
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    TapGesture().onEnded {
+                    .contentShape(Rectangle())
+                    .onTapGesture {
                         withAnimation(Animations.stateChange) {
                             isExpanded.toggle()
                         }
                         Haptics.selection()
                     }
-                )
+
+                    Spacer()
+
+                    // Action buttons (not inside the tap gesture)
+                    actionButtons
+                }
+                .padding(.horizontal, layout.standardPadding)
+                .padding(.vertical, Spacing.xs)
+                .background(bannerBackground)
 
                 // Expanded details
                 if isExpanded {
@@ -289,7 +290,7 @@ struct ConnectionBanner: View {
     private var connectionTip: String {
         switch connectionState {
         case .disconnected:
-            return "Check if cdev-agent is running on your machine"
+            return "Check if cdev is running on your machine"
         case .connecting:
             return "Establishing secure connection..."
         case .reconnecting:
