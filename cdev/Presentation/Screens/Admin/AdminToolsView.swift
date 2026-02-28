@@ -300,18 +300,17 @@ private struct CategoryPill: View {
                 Text(category.rawValue)
                     .font(Typography.tabLabel)
 
-                if count > 0 {
-                    Text("\(min(count, 999))")
-                        .font(Typography.badge)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(
-                            isSelected
-                                ? category.color.opacity(0.3)
-                                : ColorSystem.terminalBgHighlight
-                        )
-                        .clipShape(Capsule())
-                }
+                Text("\(min(count, 999))")
+                    .font(Typography.badge)
+                    .foregroundStyle(count == 0 ? ColorSystem.textQuaternary : ColorSystem.textSecondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        isSelected
+                            ? category.color.opacity(0.3)
+                            : ColorSystem.terminalBgHighlight
+                    )
+                    .clipShape(Capsule())
             }
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xxs)

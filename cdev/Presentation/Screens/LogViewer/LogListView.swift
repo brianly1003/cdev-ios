@@ -753,14 +753,9 @@ private struct ElementsScrollView: View {
 
             lastScrolledCount = elements.count
 
-            // Prefer the last element ID to avoid LazyVStack anchor overshoot on first load.
-            // Use the bottom anchor only when streaming so the extra padding is respected.
-            let targetId: String = {
-                if isStreaming {
-                    return "bottom"
-                }
-                return elements.last?.id ?? "bottom"
-            }()
+            // Always target the last realized element to avoid LazyVStack anchor overshoot.
+            // Using the synthetic "bottom" anchor can occasionally blank content during rapid updates.
+            let targetId = elements.last?.id ?? "bottom"
             AppLogger.log("[ElementsScrollView] scheduleScroll executing - targetId=\(targetId), animated=\(animated), elementsCount=\(elements.count), isStreaming=\(isStreaming)")
             if animated {
                 withAnimation(Animations.logAppear) {
@@ -769,19 +764,39 @@ private struct ElementsScrollView: View {
             } else {
                 proxy.scrollTo(targetId, anchor: .bottom)
             }
+
+            // Settle on the real bottom anchor without animation so very long
+            // trailing messages still end at the true bottom spacer.
+            try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
             AppLogger.log("[ElementsScrollView] scheduleScroll completed")
         }
     }
 
     /// Scroll for keyboard appearance - longer delay to wait for keyboard animation
     private func scheduleScrollForKeyboard(proxy: ScrollViewProxy) {
+        guard !elements.isEmpty else { return }
         scrollTask?.cancel()
         scrollTask = Task { @MainActor in
             // Wait for keyboard animation to complete (300ms)
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
 
+            let targetId = elements.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(targetId, anchor: .bottom)
+            }
+
+            try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
@@ -789,13 +804,23 @@ private struct ElementsScrollView: View {
 
     /// Scroll adjustment after keyboard dismisses - removes extra space
     private func scheduleScrollAfterKeyboardDismiss(proxy: ScrollViewProxy) {
+        guard !elements.isEmpty else { return }
         scrollTask?.cancel()
         scrollTask = Task { @MainActor in
             // Wait for keyboard dismiss animation to complete (250ms)
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
 
+            let targetId = elements.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo(targetId, anchor: .bottom)
+            }
+
+            try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
@@ -959,11 +984,20 @@ private struct LogsScrollView: View {
             guard !Task.isCancelled else { return }
 
             lastScrolledCount = logs.count
+            let targetId = logs.last?.id ?? "bottom"
             if animated {
                 withAnimation(Animations.logAppear) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                    proxy.scrollTo(targetId, anchor: .bottom)
                 }
             } else {
+                proxy.scrollTo(targetId, anchor: .bottom)
+            }
+
+            try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
@@ -971,13 +1005,23 @@ private struct LogsScrollView: View {
 
     /// Scroll for keyboard appearance - longer delay to wait for keyboard animation
     private func scheduleScrollForKeyboard(proxy: ScrollViewProxy) {
+        guard !logs.isEmpty else { return }
         scrollTask?.cancel()
         scrollTask = Task { @MainActor in
             // Wait for keyboard animation to complete (300ms)
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
 
+            let targetId = logs.last?.id ?? "bottom"
             withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(targetId, anchor: .bottom)
+            }
+
+            try? await Task.sleep(nanoseconds: 16_000_000) // ~1 frame
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }

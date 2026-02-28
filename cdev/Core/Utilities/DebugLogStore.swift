@@ -227,7 +227,16 @@ final class DebugLogStore: ObservableObject {
     static let shared = DebugLogStore()
 
     /// Maximum logs to keep in memory (circular buffer)
-    private let maxLogs = 500
+    private let maxLogs = 1000
+
+    /// Cap app logs when network logs exist to avoid starving HTTP/WS visibility.
+    private let maxAppLogsWhenNetworkPresent = 700
+
+    /// Minimum retained counts per category when trimming.
+    private let minRetainedByCategory: [DebugLogCategory: Int] = [
+        .http: 75,
+        .websocket: 75
+    ]
 
     /// Maximum logs to persist to file
     private let maxPersistedLogs = 2000
@@ -341,6 +350,7 @@ final class DebugLogStore: ObservableObject {
             sessionId: currentSessionId
         )
         logs.append(entry)
+        trimLogsIfNeeded()
         hasUnsavedChanges = true
     }
 
@@ -366,12 +376,8 @@ final class DebugLogStore: ObservableObject {
         }
 
         logs.append(entryWithSession)
+        trimLogsIfNeeded()
         hasUnsavedChanges = true
-
-        // Trim if over limit (keep previous session logs separate from count)
-        if logs.count > maxLogs {
-            logs.removeFirst(logs.count - maxLogs)
-        }
     }
 
     /// Clear all logs (memory only, optionally clear persisted)
@@ -494,6 +500,7 @@ final class DebugLogStore: ObservableObject {
 
             // Prepend previous session logs
             logs = previousLogs
+            trimLogsIfNeeded()
 
             #if DEBUG
             print("[DebugLogStore] Loaded \(previousLogs.count) logs from previous sessions")
@@ -716,5 +723,73 @@ final class DebugLogStore: ObservableObject {
             details: details.map { .text($0) }
         )
         add(entry)
+    }
+
+    // MARK: - Trimming
+
+    private func trimLogsIfNeeded() {
+        // If network logs are present, reserve room for them by capping app logs.
+        if hasNetworkLogs, categoryCount(for: .app) > maxAppLogsWhenNetworkPresent {
+            trimCategory(.app, to: maxAppLogsWhenNetworkPresent)
+        }
+
+        // Enforce global cap with category-aware prioritization.
+        while logs.count > maxLogs {
+            let counts = categoryCounts()
+
+            // Keep app logs from crowding out WS/HTTP while network logs exist.
+            if hasNetworkLogs,
+               counts[.app, default: 0] > maxAppLogsWhenNetworkPresent,
+               removeOldestLog(in: .app) {
+                continue
+            }
+
+            let trimPriority: [DebugLogCategory] = [.app, .http, .websocket]
+            if let categoryToTrim = trimPriority.first(where: { category in
+                counts[category, default: 0] > minimumRetainedCount(for: category)
+            }), removeOldestLog(in: categoryToTrim) {
+                continue
+            }
+
+            // Fallback safety path.
+            logs.removeFirst()
+        }
+    }
+
+    private var hasNetworkLogs: Bool {
+        let counts = categoryCounts()
+        return counts[.http, default: 0] > 0 || counts[.websocket, default: 0] > 0
+    }
+
+    private func trimCategory(_ category: DebugLogCategory, to maxCount: Int) {
+        while categoryCount(for: category) > maxCount {
+            guard removeOldestLog(in: category) else { return }
+        }
+    }
+
+    private func removeOldestLog(in category: DebugLogCategory) -> Bool {
+        guard let index = logs.firstIndex(where: { $0.category == category }) else {
+            return false
+        }
+        logs.remove(at: index)
+        return true
+    }
+
+    private func categoryCount(for category: DebugLogCategory) -> Int {
+        logs.reduce(into: 0) { count, entry in
+            if entry.category == category {
+                count += 1
+            }
+        }
+    }
+
+    private func categoryCounts() -> [DebugLogCategory: Int] {
+        logs.reduce(into: [:]) { counts, entry in
+            counts[entry.category, default: 0] += 1
+        }
+    }
+
+    private func minimumRetainedCount(for category: DebugLogCategory) -> Int {
+        minRetainedByCategory[category] ?? 0
     }
 }
