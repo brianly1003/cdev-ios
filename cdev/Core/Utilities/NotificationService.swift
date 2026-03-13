@@ -64,7 +64,8 @@ final class NotificationService: ObservableObject {
     func sendPermissionNotification(
         toolName: String?,
         description: String,
-        workspaceName: String?
+        workspaceName: String?,
+        autoApprovedByYolo: Bool = false
     ) async {
         // Check if app is in background
         let appState = UIApplication.shared.applicationState
@@ -82,17 +83,31 @@ final class NotificationService: ObservableObject {
         // Create notification content
         let content = UNMutableNotificationContent()
 
-        // Title based on tool name
-        if let tool = toolName, !tool.isEmpty {
-            content.title = "Permission: \(tool)"
+        // Title based on tool name + whether approval is automatic
+        if autoApprovedByYolo {
+            if let tool = toolName, !tool.isEmpty {
+                content.title = "Auto-approved: \(tool)"
+            } else {
+                content.title = "Permission auto-approved"
+            }
         } else {
-            content.title = "Claude needs permission"
+            if let tool = toolName, !tool.isEmpty {
+                content.title = "Permission: \(tool)"
+            } else {
+                content.title = "Claude needs permission"
+            }
         }
 
         // Body with description
         var body = description
+        if autoApprovedByYolo {
+            body = "\(description)\nAuto-approved by Yolo mode. No action needed."
+        }
         if let workspace = workspaceName, !workspace.isEmpty {
             body = "[\(workspace)] \(description)"
+            if autoApprovedByYolo {
+                body += "\nAuto-approved by Yolo mode. No action needed."
+            }
         }
         content.body = body
 
@@ -110,6 +125,7 @@ final class NotificationService: ObservableObject {
         if let tool = toolName {
             userInfo["tool"] = tool
         }
+        userInfo["autoApprovedByYolo"] = autoApprovedByYolo
         content.userInfo = userInfo
 
         // Create request with immediate trigger
@@ -121,7 +137,8 @@ final class NotificationService: ObservableObject {
 
         do {
             try await notificationCenter.add(request)
-            AppLogger.log("[Notification] Permission notification sent: \(toolName ?? "unknown")")
+            let mode = autoApprovedByYolo ? "auto-approved" : "manual-review"
+            AppLogger.log("[Notification] Permission notification sent (\(mode)): \(toolName ?? "unknown")")
         } catch {
             AppLogger.log("[Notification] Failed to send: \(error)", type: .error)
         }

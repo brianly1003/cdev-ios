@@ -182,12 +182,37 @@ private struct SessionHeaderView: View {
                     .clipShape(Capsule())
                 }
 
+                if let projectName = session.projectName {
+                    HStack(spacing: 3) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 9))
+                        Text(projectName)
+                            .font(Typography.terminalSmall)
+                    }
+                    .foregroundStyle(ColorSystem.textTertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(ColorSystem.terminalBgHighlight)
+                    .clipShape(Capsule())
+                }
+
                 Spacer()
 
                 // Time
                 Text(session.compactTime)
                     .font(Typography.terminalSmall)
                     .foregroundStyle(ColorSystem.textQuaternary)
+            }
+
+            if let projectPath = session.projectPath {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 9))
+                    Text(projectPath)
+                        .font(Typography.terminalTimestamp)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(ColorSystem.textQuaternary)
             }
         }
         .padding(.horizontal, Spacing.sm)

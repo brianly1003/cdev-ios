@@ -23,6 +23,7 @@ struct DashboardView: View {
     @State private var showCamera = false
     @State private var showCameraPermissionAlert = false
     @State private var showNotificationCenter = false
+    @State private var renamingTerminalWindow: TerminalWindow?
     @State private var previousConnectionState: ConnectionState?
     @FocusState private var isInputFocused: Bool
     @State private var isTextFieldEditing: Bool = false  // Tracks actual editing state from UITextView
@@ -106,6 +107,13 @@ struct DashboardView: View {
                         },
                         onClose: { windowId in
                             Task { await viewModel.closeTerminalWindow(windowId) }
+                        },
+                        onRename: { window in
+                            renamingTerminalWindow = window
+                        },
+                        onResetName: { windowId in
+                            viewModel.setWindowTitle(nil, for: windowId)
+                            Haptics.selection()
                         },
                         notificationUnreadCount: viewModel.notificationUnreadCount,
                         onNotificationTap: {
@@ -374,6 +382,12 @@ struct DashboardView: View {
                 .sheet(isPresented: $showNotificationCenter) {
                     NotificationCenterSheet(viewModel: viewModel)
                         .responsiveSheet()
+                }
+                .sheet(item: $renamingTerminalWindow) { window in
+                    RenameTerminalTabSheet(window: window) { customTitle in
+                        viewModel.setWindowTitle(customTitle, for: window.id)
+                    }
+                    .responsiveSheet()
                 }
                 .fullScreenCover(isPresented: $showSettings) {
                     SettingsView()
@@ -754,6 +768,8 @@ private struct MissionControlHeader: View {
     let onCreate: () -> Void
     let onSelect: (UUID) -> Void
     let onClose: (UUID) -> Void
+    let onRename: (TerminalWindow) -> Void
+    let onResetName: (UUID) -> Void
     let notificationUnreadCount: Int
     let onNotificationTap: () -> Void
 
@@ -795,6 +811,8 @@ private struct MissionControlHeader: View {
                 onCreate: onCreate,
                 onSelect: onSelect,
                 onClose: onClose,
+                onRename: onRename,
+                onResetName: onResetName,
                 isEmbeddedInMissionControl: true
             )
         }
@@ -966,6 +984,7 @@ struct StatusBarView: View {
                             Haptics.selection()
                         }
                     )
+                    .fixedSize(horizontal: true, vertical: false)
                 }
 
                 // Enhanced workspace badge - shows workspace count + ⌘K hint
@@ -977,6 +996,7 @@ struct StatusBarView: View {
                         Haptics.selection()
                     }
                 )
+                .layoutPriority(1)
             }
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)
@@ -1441,7 +1461,7 @@ struct ActionBarView: View {
         autoShowTask = nil
     }
 
-    private func setKeyboardHeight(_ value: CGFloat, animated: Bool = true, duration: Double = 0.25) {
+    private func setKeyboardHeight(_ value: CGFloat, animated: Bool = true, duration: Double = Animations.Duration.fast) {
         let clamped = max(0, value)
         guard abs(clamped - keyboardHeight) >= 0.5 else { return }
 
@@ -1456,7 +1476,7 @@ struct ActionBarView: View {
 
     /// Shared transition for keyboard-driven layout changes (input bar + action row).
     private var keyboardTransitionAnimation: Animation {
-        .easeOut(duration: Animations.Duration.standard)
+        .easeOut(duration: Animations.Duration.fast)
     }
 
     private func updateKeyboardHeight(from notification: Notification) {
@@ -1722,25 +1742,22 @@ struct ActionBarView: View {
             }
         }
         // Messenger-style: Collapse action buttons when input gains focus
-        .onChange(of: isEditing) { oldValue, newValue in
-            AppLogger.log("[ActionBar] isEditing changed: \(oldValue) -> \(newValue)")
+        .onChange(of: isEditing) { _, newValue in
             // Animate keyboard offset reset when editing ends to avoid jumpy layout.
             if !newValue {
-                setKeyboardHeight(0, animated: true, duration: Animations.Duration.standard)
+                setKeyboardHeight(0, animated: true, duration: Animations.Duration.fast)
             }
             if newValue {
                 // Focus gained - collapse action buttons (show chevron)
                 // Close attachment menu immediately when chevron appears
-                withAnimation(Animations.stateChange) {
+                withAnimation(keyboardTransitionAnimation) {
                     areActionsExpanded = false
                     shouldAutoShowButtons = false
                     showAttachmentMenu?.wrappedValue = false
                 }
-                AppLogger.log("[ActionBar] Focus gained - reset states, promptText.isEmpty=\(promptText.isEmpty)")
                 // Start timer if text is already empty
                 if promptText.isEmpty {
                     startAutoShowTimer()
-                    AppLogger.log("[ActionBar] Started 5-second timer")
                 }
             } else {
                 // Focus lost - cancel timer and reset states
@@ -1751,7 +1768,6 @@ struct ActionBarView: View {
                     // Also close menu when focus is lost
                     showAttachmentMenu?.wrappedValue = false
                 }
-                AppLogger.log("[ActionBar] Focus lost - reset states")
             }
         }
         // Messenger-style: Start/cancel 5-second timer based on text content
@@ -1774,7 +1790,7 @@ struct ActionBarView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
             let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
-                ?? Animations.Duration.standard
+                ?? Animations.Duration.fast
             setKeyboardHeight(0, animated: true, duration: duration)
         }
     }
@@ -1782,12 +1798,82 @@ struct ActionBarView: View {
 
 // MARK: - Terminal Windows Bar
 
+private func terminalTabPrefix(for runtime: AgentRuntime) -> String {
+    if runtime == .claude {
+        return "CC."
+    }
+    if runtime == .codex {
+        return "CX."
+    }
+
+    let shortName = runtime.shortName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !shortName.isEmpty else { return "AI." }
+    return shortName.hasSuffix(".") ? shortName : "\(shortName)."
+}
+
+private func terminalDefaultTabLabel(for window: TerminalWindow) -> String {
+    let prefix = terminalTabPrefix(for: window.runtime)
+    if let sessionId = window.sessionId, !sessionId.isEmpty {
+        return "\(prefix) \(String(sessionId.suffix(6)))"
+    }
+    return "\(prefix) new"
+}
+
+private func isLegacyGeneratedTerminalTabTitle(_ normalizedTitle: String, runtime: AgentRuntime) -> Bool {
+    let legacyPrefixes: [String]
+    switch runtime {
+    case .claude:
+        legacyPrefixes = ["C.", "CC."]
+    case .codex:
+        legacyPrefixes = ["Cx.", "CX."]
+    }
+
+    let allPrefixes = Set(legacyPrefixes + [terminalTabPrefix(for: runtime)])
+    let lowerTitle = normalizedTitle.lowercased()
+
+    for prefix in allPrefixes {
+        let tokenPrefix = "\(prefix) "
+        let lowerTokenPrefix = tokenPrefix.lowercased()
+        guard lowerTitle.hasPrefix(lowerTokenPrefix) else { continue }
+
+        let suffixStart = normalizedTitle.index(normalizedTitle.startIndex, offsetBy: tokenPrefix.count)
+        let suffix = normalizedTitle[suffixStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        if suffix.caseInsensitiveCompare("new") == .orderedSame {
+            return true
+        }
+        if suffix.range(of: "^[A-Za-z0-9]{6}$", options: .regularExpression) != nil {
+            return true
+        }
+    }
+
+    return false
+}
+
+private func isDefaultGeneratedTerminalTitle(_ normalizedTitle: String, for window: TerminalWindow) -> Bool {
+    if normalizedTitle.isEmpty {
+        return true
+    }
+
+    let runtimeDefaultTitle = "\(window.runtime.displayName) Window"
+    if normalizedTitle.caseInsensitiveCompare(runtimeDefaultTitle) == .orderedSame {
+        return true
+    }
+
+    if normalizedTitle.caseInsensitiveCompare(terminalDefaultTabLabel(for: window)) == .orderedSame {
+        return true
+    }
+
+    return isLegacyGeneratedTerminalTabTitle(normalizedTitle, runtime: window.runtime)
+}
+
 private struct TerminalWindowsBar: View {
     let windows: [TerminalWindow]
     let activeWindowId: UUID?
     let onCreate: () -> Void
     let onSelect: (UUID) -> Void
     let onClose: (UUID) -> Void
+    let onRename: (TerminalWindow) -> Void
+    let onResetName: (UUID) -> Void
     var isEmbeddedInMissionControl: Bool = false
 
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -1796,26 +1882,33 @@ private struct TerminalWindowsBar: View {
     private var createButtonSize: CGFloat { max(24, layout.indicatorSize - 4) }
     private var createButtonIconSize: CGFloat { max(12, layout.iconAction + 1) }
 
-    private func title(for window: TerminalWindow, index: Int) -> String {
-        let prefix = window.runtime.shortName
-        if let sessionId = window.sessionId, !sessionId.isEmpty {
-            return "\(prefix) \(String(sessionId.suffix(6)))"
+    private func hasCustomTitle(_ window: TerminalWindow) -> Bool {
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !normalizedTitle.isEmpty && !isDefaultGeneratedTerminalTitle(normalizedTitle, for: window)
+    }
+
+    private func title(for window: TerminalWindow) -> String {
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hasCustomTitle(window) {
+            return normalizedTitle
         }
-        return "\(prefix) new"
+
+        return terminalDefaultTabLabel(for: window)
     }
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.xs) {
-                    ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
+                    ForEach(windows) { window in
                         let isActive = window.id == activeWindowId
                         HStack(spacing: 4) {
                             Button {
+                                guard !isActive else { return }
                                 Haptics.selection()
                                 onSelect(window.id)
                             } label: {
-                                Text(title(for: window, index: index + 1))
+                                Text(title(for: window))
                                     .font(Typography.terminalSmall)
                                     .foregroundStyle(isActive ? ColorSystem.textPrimary : ColorSystem.textSecondary)
                                     .lineLimit(1)
@@ -1823,6 +1916,7 @@ private struct TerminalWindowsBar: View {
                                     .padding(.vertical, 5)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityHint("Long press for tab options")
 
                             Button {
                                 Haptics.light()
@@ -1835,6 +1929,34 @@ private struct TerminalWindowsBar: View {
                             .buttonStyle(.plain)
                             .padding(.trailing, Spacing.xs)
                         }
+                        .contextMenu(menuItems: {
+                            Button {
+                                Haptics.selection()
+                                onRename(window)
+                            } label: {
+                                Label("Rename Tab", systemImage: "pencil")
+                            }
+
+                            if hasCustomTitle(window) {
+                                Button {
+                                    Haptics.light()
+                                    onResetName(window.id)
+                                } label: {
+                                    Label("Use Default Name", systemImage: "arrow.uturn.backward.circle")
+                                }
+                            }
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                Haptics.light()
+                                onClose(window.id)
+                            } label: {
+                                Label("Close Tab", systemImage: "xmark.circle")
+                            }
+                        }, preview: {
+                            EmptyView()
+                        })
                         .background(
                             Capsule()
                                 .fill(isActive ? ColorSystem.terminalBgHighlight : ColorSystem.terminalBg)
@@ -1896,6 +2018,200 @@ private struct TerminalWindowsBar: View {
     }
 }
 
+private struct RenameTerminalTabSheet: View {
+    let window: TerminalWindow
+    let onSave: (String?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @FocusState private var isNameFieldFocused: Bool
+    @State private var draftTitle: String
+    private var layout: ResponsiveLayout { ResponsiveLayout.current(for: sizeClass) }
+
+    init(window: TerminalWindow, onSave: @escaping (String?) -> Void) {
+        self.window = window
+        self.onSave = onSave
+
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialDraft = isDefaultGeneratedTerminalTitle(normalizedTitle, for: window) ? "" : normalizedTitle
+        _draftTitle = State(initialValue: initialDraft)
+    }
+
+    private var normalizedDraft: String {
+        draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var existingCustomTitle: String? {
+        let normalizedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTitle.isEmpty, !isDefaultGeneratedTerminalTitle(normalizedTitle, for: window) else {
+            return nil
+        }
+        return normalizedTitle
+    }
+
+    private var pendingCustomTitle: String? {
+        normalizedDraft.isEmpty ? nil : normalizedDraft
+    }
+
+    private var hasChanges: Bool {
+        pendingCustomTitle != existingCustomTitle
+    }
+
+    private var defaultTabLabel: String {
+        terminalDefaultTabLabel(for: window)
+    }
+
+    private var previewLabel: String {
+        pendingCustomTitle ?? defaultTabLabel
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: layout.sectionSpacing) {
+                VStack(alignment: .leading, spacing: layout.contentSpacing) {
+                    HStack(spacing: layout.smallPadding) {
+                        Image(systemName: "pencil.and.scribble")
+                            .font(.system(size: layout.iconAction, weight: .semibold))
+                            .foregroundStyle(ColorSystem.primary)
+                        Text("Rename terminal tab")
+                            .font(Typography.title3)
+                            .foregroundStyle(ColorSystem.textPrimary)
+                    }
+
+                    Text("Custom names are saved per workspace and restored automatically.")
+                        .font(Typography.caption1)
+                        .foregroundStyle(ColorSystem.textSecondary)
+                }
+                .padding(layout.standardPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(ColorSystem.terminalBgElevated)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(ColorSystem.textQuaternary.opacity(0.35), lineWidth: 1)
+                        )
+                )
+
+                VStack(alignment: .leading, spacing: layout.smallPadding) {
+                    Text("Tab Name")
+                        .font(Typography.caption1)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    TextField("Enter a custom name", text: $draftTitle)
+                        .focused($isNameFieldFocused)
+                        .textInputAutocapitalization(.words)
+                        .disableAutocorrection(true)
+                        .submitLabel(.done)
+                        .font(Typography.body)
+                        .foregroundStyle(ColorSystem.textPrimary)
+                        .padding(.horizontal, layout.standardPadding)
+                        .padding(.vertical, layout.smallPadding + 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(ColorSystem.terminalBgHighlight)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(ColorSystem.primary.opacity(0.25), lineWidth: 1)
+                                )
+                        )
+                        .onSubmit {
+                            guard hasChanges else { return }
+                            onSave(pendingCustomTitle)
+                            Haptics.success()
+                            dismiss()
+                        }
+
+                    Text("Leave empty to follow the default runtime/session label.")
+                        .font(Typography.caption2)
+                        .foregroundStyle(ColorSystem.textTertiary)
+                }
+
+                VStack(alignment: .leading, spacing: layout.smallPadding) {
+                    Text("Preview")
+                        .font(Typography.caption1)
+                        .foregroundStyle(ColorSystem.textSecondary)
+
+                    HStack(spacing: layout.smallPadding) {
+                        Image(systemName: "tag")
+                            .font(.system(size: layout.iconSmall + 2, weight: .semibold))
+                            .foregroundStyle(ColorSystem.primary)
+                        Text(previewLabel)
+                            .font(Typography.body)
+                            .foregroundStyle(ColorSystem.textPrimary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, layout.standardPadding)
+                    .padding(.vertical, layout.smallPadding + 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(ColorSystem.terminalBgElevated)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(ColorSystem.textQuaternary.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                }
+
+                Button {
+                    guard existingCustomTitle != nil else { return }
+                    onSave(nil)
+                    Haptics.selection()
+                    dismiss()
+                } label: {
+                    Label("Use Default Name", systemImage: "arrow.uturn.backward.circle")
+                        .font(Typography.body)
+                        .foregroundStyle(existingCustomTitle == nil ? ColorSystem.textQuaternary : ColorSystem.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, layout.smallPadding + 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(ColorSystem.terminalBgElevated)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(ColorSystem.textQuaternary.opacity(0.35), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(existingCustomTitle == nil)
+
+                Spacer(minLength: 0)
+            }
+            .padding(layout.largePadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(ColorSystem.terminalBg.ignoresSafeArea())
+            .navigationTitle("Rename Tab")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(pendingCustomTitle)
+                        Haptics.success()
+                        dismiss()
+                    }
+                    .disabled(!hasChanges)
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationBackground(ColorSystem.terminalBg)
+        .presentationDetents(ResponsiveLayout.isIPad ? [.fraction(0.45), .medium] : [.height(420), .medium])
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                isNameFieldFocused = true
+            }
+        }
+    }
+}
+
 // MARK: - Notification Inbox Button
 
 private struct NotificationInboxButton: View {
@@ -1909,27 +2225,26 @@ private struct NotificationInboxButton: View {
 
     var body: some View {
         Button(action: onTap) {
-            ZStack(alignment: .topTrailing) {
-                HStack(spacing: 4) {
-                    Image(systemName: hasUnread ? "bell.badge.fill" : "bell")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(hasUnread ? ColorSystem.warning : ColorSystem.textTertiary)
+            HStack(spacing: 4) {
+                Image(systemName: hasUnread ? "bell.badge.fill" : "bell")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(hasUnread ? ColorSystem.warning : ColorSystem.textTertiary)
 
-                    Text("Inbox")
-                        .font(Typography.statusLabel)
-                        .foregroundStyle(hasUnread ? ColorSystem.warning : ColorSystem.textSecondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(hasUnread ? ColorSystem.warning.opacity(0.14) : ColorSystem.terminalBgHighlight)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(hasUnread ? ColorSystem.warning.opacity(0.35) : .clear, lineWidth: 1)
-                        )
-                )
-
+                Text("Inbox")
+                    .font(Typography.statusLabel)
+                    .foregroundStyle(hasUnread ? ColorSystem.warning : ColorSystem.textSecondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(hasUnread ? ColorSystem.warning.opacity(0.14) : ColorSystem.terminalBgHighlight)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(hasUnread ? ColorSystem.warning.opacity(0.35) : .clear, lineWidth: 1)
+                    )
+            )
+            .overlay(alignment: .topTrailing) {
                 if hasUnread {
                     Text(unreadLabel)
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -1976,6 +2291,8 @@ private struct EnhancedWorkspaceBadge: View {
                     Text(repoName)
                         .font(Typography.statusLabel)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
                 } else {
                     Text("No Workspace")
                         .font(Typography.statusLabel)

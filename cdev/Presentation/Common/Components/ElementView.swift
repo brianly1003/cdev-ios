@@ -19,8 +19,13 @@ struct ElementView: View {
         self.isMatch = isMatch
     }
 
-    /// Check if this element should be hidden (internal Claude Code messages or empty bash output)
-    private var shouldHide: Bool {
+    /// Check if this element should be rendered at all.
+    /// Filters hidden/internal messages and structurally empty payloads that would render blank rows.
+    private var shouldRender: Bool {
+        Self.shouldRenderElement(element)
+    }
+
+    static func shouldHideElement(_ element: ChatElement) -> Bool {
         if case .userInput(let content) = element.content {
             // Hide internal Claude Code messages
             if ChatContentFilter.shouldHideInternalMessage(content.text) {
@@ -34,8 +39,58 @@ struct ElementView: View {
         return false
     }
 
+    /// Validate that an element has visible UI content.
+    /// Some element payloads are technically present but render as EmptyView in subtype views.
+    static func hasRenderableContent(_ element: ChatElement) -> Bool {
+        switch element.content {
+        case .userInput(let content):
+            let trimmed = content.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            return !UserInputElementView.parseBashTags(from: content.text).isEmpty
+
+        case .assistantText(let content):
+            let text = content.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = content.model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return !text.isEmpty || !model.isEmpty
+
+        case .thinking(let content):
+            return !content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        case .interrupted(let content):
+            return !content.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        case .contextCompaction(let content):
+            return !content.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        case .task(let content):
+            return !content.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        case .taskGroup(let content):
+            return !content.tasks.isEmpty
+
+        case .toolCall(let content):
+            return !content.tool.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !content.display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !content.params.isEmpty
+                || !(content.fullContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
+        case .toolResult:
+            return true
+
+        case .diff(let content):
+            return !content.hunks.isEmpty
+
+        case .editDiff(let content):
+            return !content.lines.isEmpty
+        }
+    }
+
+    static func shouldRenderElement(_ element: ChatElement) -> Bool {
+        !shouldHideElement(element) && hasRenderableContent(element)
+    }
+
     /// Check if text contains only empty bash output tags with no actual content
-    private func isOnlyEmptyBashOutput(_ text: String) -> Bool {
+    private static func isOnlyEmptyBashOutput(_ text: String) -> Bool {
         // Pattern to match bash-stdout and bash-stderr tags
         let bashOutputPattern = #"<(bash-stdout|bash-stderr)>([\s\S]*?)</\1>"#
         guard let regex = try? NSRegularExpression(pattern: bashOutputPattern, options: []) else {
@@ -77,8 +132,8 @@ struct ElementView: View {
     }
 
     var body: some View {
-        // Hide internal Claude Code messages completely (no timestamp, no space)
-        if shouldHide {
+        // Hide internal/empty elements completely (no timestamp, no space)
+        if !shouldRender {
             EmptyView()
         } else {
             elementRow

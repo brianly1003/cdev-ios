@@ -134,7 +134,8 @@ final class DashboardRuntimeCoordinator {
                     workspaceId: workspaceId,
                     startedAt: historySession.startedAt,
                     lastActive: historySession.lastActive,
-                    viewers: historySession.viewers
+                    viewers: historySession.viewers,
+                    projectPath: historySession.projectPath
                 )
             }
 

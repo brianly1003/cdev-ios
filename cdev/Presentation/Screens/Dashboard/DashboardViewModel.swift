@@ -334,6 +334,13 @@ final class DashboardViewModel: ObservableObject {
             )
         }
     }
+
+    /// Updates a terminal tab title. Empty values reset to runtime default.
+    func setWindowTitle(_ title: String?, for windowId: UUID? = nil) {
+        let targetId = windowId ?? activeTerminalWindowId
+        guard let targetId else { return }
+        appState?.setTerminalWindowTitle(targetId, title: title)
+    }
     @Published var sessionsHasMore: Bool = false
     @Published var isLoadingMoreSessions: Bool = false
     private var sessionsNextOffset: Int = 0
@@ -449,9 +456,13 @@ final class DashboardViewModel: ObservableObject {
                 sessionId: userSelectedSessionId,
                 runtime: selectedSessionRuntime
             )
-        } else if appState.activeTerminalWindowId == nil,
-                  let first = appState.terminalWindows(for: workspaceId).first {
-            appState.activateTerminalWindow(first.id)
+            return
+        }
+
+        let activeWorkspaceForCurrentWindow = appState.activeTerminalWindowId
+            .flatMap { appState.terminalWindow(id: $0)?.workspaceId }
+        if activeWorkspaceForCurrentWindow != workspaceId {
+            _ = appState.activatePreferredTerminalWindow(for: workspaceId)
         }
     }
 
@@ -459,12 +470,10 @@ final class DashboardViewModel: ObservableObject {
         guard let appState else { return }
         guard let workspaceId = currentWorkspaceId else { return }
 
-        let nextIndex = appState.terminalWindows(for: workspaceId).count + 1
         let window = appState.openTerminalWindow(
             workspaceId: workspaceId,
             sessionId: nil,
-            runtime: selectedSessionRuntime,
-            title: "Window \(nextIndex)"
+            runtime: selectedSessionRuntime
         )
         windowStateByWindowId[window.id] = TerminalWindowSessionState()
         await activateTerminalWindow(window.id)
@@ -610,9 +619,8 @@ final class DashboardViewModel: ObservableObject {
 
         guard let workspaceId else { return nil }
 
-        if let existing = appState.terminalWindows(for: workspaceId).first {
-            appState.activateTerminalWindow(existing.id)
-            return appState.terminalWindow(id: existing.id)
+        if let preferredWindowId = appState.activatePreferredTerminalWindow(for: workspaceId) {
+            return appState.terminalWindow(id: preferredWindowId)
         }
 
         return appState.openTerminalWindow(
@@ -2576,11 +2584,17 @@ final class DashboardViewModel: ObservableObject {
         return keys.contains("allow_once") || keys.contains("allow_session") || keys.contains("deny")
     }
 
+    private func shouldAutoApproveLivePermission(_ interaction: PendingInteraction) -> Bool {
+        guard isYoloModeEnabled else { return false }
+        guard selectedSessionRuntime == .claude else { return false } // Codex does not support hook-bridge permission flow yet.
+        guard isLivePermissionInteraction(interaction) else { return false } // LIVE mode only.
+        guard lastYoloAutoApprovedPermissionId != interaction.id else { return false }
+        guard yoloAutoApprovalKey(for: interaction) != nil else { return false }
+        return true
+    }
+
     private func maybeAutoApproveLivePermission(_ interaction: PendingInteraction) {
-        guard isYoloModeEnabled else { return }
-        guard selectedSessionRuntime == .claude else { return } // Codex does not support hook-bridge permission flow yet.
-        guard isLivePermissionInteraction(interaction) else { return } // LIVE mode only.
-        guard lastYoloAutoApprovedPermissionId != interaction.id else { return }
+        guard shouldAutoApproveLivePermission(interaction) else { return }
         guard let key = yoloAutoApprovalKey(for: interaction) else { return }
 
         lastYoloAutoApprovedPermissionId = interaction.id
@@ -3682,6 +3696,7 @@ final class DashboardViewModel: ObservableObject {
                 pendingInteraction = PendingInteraction.fromPTYPermission(event: event)
                 agentState = .waiting  // Update state to show waiting indicator
                 Haptics.permissionAlert()
+                let shouldAutoApprove = pendingInteraction.map { shouldAutoApproveLivePermission($0) } ?? false
 
                 // Check if this is a trust_folder permission - session APIs won't work until approved
                 // Also mark as pending temp session since session_id_resolved will provide real ID
@@ -3697,7 +3712,8 @@ final class DashboardViewModel: ObservableObject {
                     await NotificationService.shared.sendPermissionNotification(
                         toolName: payload.toolName,
                         description: payload.displayDescription,
-                        workspaceName: agentStatus.repoName
+                        workspaceName: agentStatus.repoName,
+                        autoApprovedByYolo: shouldAutoApprove
                     )
                 }
 

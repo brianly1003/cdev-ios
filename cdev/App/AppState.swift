@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-struct TerminalWindow: Identifiable, Equatable, Sendable {
+struct TerminalWindow: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     let workspaceId: String
     var sessionId: String?
@@ -55,6 +55,13 @@ final class AppState: ObservableObject {
 
     private var _dashboardViewModel: DashboardViewModel?
     private var _pairingViewModel: PairingViewModel?
+    private var preferredActiveWindowIdByWorkspace: [String: UUID] = [:]
+
+    private struct PersistedTerminalWindowState: Codable {
+        let windows: [TerminalWindow]
+        let activeWindowId: UUID?
+        let preferredActiveWindowIdByWorkspace: [String: UUID]
+    }
 
     // MARK: - QR Scan Debouncing (persists across PairingViewModel instances)
 
@@ -98,6 +105,8 @@ final class AppState: ObservableObject {
 
     private var stateTask: Task<Void, Never>?
     private var workspaceCancellable: AnyCancellable?
+    private let terminalWindowStateDefaultsKey = "cdev.terminal_window_state.v1"
+    private var isRestoringTerminalWindowState = false
 
     // MARK: - Init
 
@@ -131,6 +140,7 @@ final class AppState: ObservableObject {
            let workspaces = try? JSONDecoder().decode([Workspace].self, from: data) {
             self.hasWorkspaces = !workspaces.isEmpty
         }
+        restoreTerminalWindowState()
 
         // Observe WorkspaceStore changes to update hasWorkspaces
         workspaceCancellable = WorkspaceStore.shared.$workspaces
@@ -221,12 +231,18 @@ final class AppState: ObservableObject {
     }
 
     func activateTerminalWindow(_ windowId: UUID) {
+        guard let activatedWindow = terminalWindows.first(where: { $0.id == windowId && $0.isOpen }) else {
+            return
+        }
+
         activeTerminalWindowId = windowId
         terminalWindows = terminalWindows.map { window in
             var next = window
             next.isFocused = (window.id == windowId) && window.isOpen
             return next
         }
+        preferredActiveWindowIdByWorkspace[activatedWindow.workspaceId] = windowId
+        persistTerminalWindowState()
     }
 
     func closeTerminalWindow(_ windowId: UUID) {
@@ -235,6 +251,9 @@ final class AppState: ObservableObject {
         }
 
         terminalWindows.removeAll { $0.id == windowId }
+        if preferredActiveWindowIdByWorkspace[closingWindow.workspaceId] == windowId {
+            preferredActiveWindowIdByWorkspace.removeValue(forKey: closingWindow.workspaceId)
+        }
 
         if activeTerminalWindowId == windowId {
             let nextActiveId = terminalWindows.first(where: { $0.workspaceId == closingWindow.workspaceId })?.id
@@ -244,6 +263,13 @@ final class AppState: ObservableObject {
             } else {
                 activeTerminalWindowId = nil
             }
+        } else {
+            persistTerminalWindowState()
+        }
+
+        if terminalWindows(for: closingWindow.workspaceId).isEmpty {
+            preferredActiveWindowIdByWorkspace.removeValue(forKey: closingWindow.workspaceId)
+            persistTerminalWindowState()
         }
     }
 
@@ -254,15 +280,23 @@ final class AppState: ObservableObject {
             next.sessionId = sessionId
             return next
         }
+        persistTerminalWindowState()
     }
 
     func setTerminalWindowRuntime(_ windowId: UUID, runtime: AgentRuntime) {
         terminalWindows = terminalWindows.map { window in
             guard window.id == windowId else { return window }
             var next = window
+            let previousRuntime = window.runtime
             next.runtime = runtime
+            let previousDefaultTitle = "\(previousRuntime.displayName) Window"
+            let currentTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if currentTitle.isEmpty || currentTitle == previousDefaultTitle {
+                next.title = "\(runtime.displayName) Window"
+            }
             return next
         }
+        persistTerminalWindowState()
     }
 
     func setTerminalWindowYoloMode(_ windowId: UUID, enabled: Bool) {
@@ -272,6 +306,22 @@ final class AppState: ObservableObject {
             next.isYoloModeEnabled = enabled
             return next
         }
+        persistTerminalWindowState()
+    }
+
+    func setTerminalWindowTitle(_ windowId: UUID, title: String?) {
+        terminalWindows = terminalWindows.map { window in
+            guard window.id == windowId else { return window }
+            var next = window
+            let normalizedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let normalizedTitle, !normalizedTitle.isEmpty {
+                next.title = normalizedTitle
+            } else {
+                next.title = "\(window.runtime.displayName) Window"
+            }
+            return next
+        }
+        persistTerminalWindowState()
     }
 
     func terminalWindow(id windowId: UUID) -> TerminalWindow? {
@@ -280,6 +330,84 @@ final class AppState: ObservableObject {
 
     func terminalWindows(for workspaceId: String) -> [TerminalWindow] {
         terminalWindows.filter { $0.workspaceId == workspaceId && $0.isOpen }
+    }
+
+    func preferredTerminalWindowId(for workspaceId: String) -> UUID? {
+        if let preferredId = preferredActiveWindowIdByWorkspace[workspaceId],
+           terminalWindows.contains(where: { $0.id == preferredId && $0.workspaceId == workspaceId && $0.isOpen }) {
+            return preferredId
+        }
+
+        return terminalWindows(for: workspaceId).first?.id
+    }
+
+    @discardableResult
+    func activatePreferredTerminalWindow(for workspaceId: String) -> UUID? {
+        guard let preferredWindowId = preferredTerminalWindowId(for: workspaceId) else {
+            return nil
+        }
+
+        activateTerminalWindow(preferredWindowId)
+        return preferredWindowId
+    }
+
+    private func restoreTerminalWindowState() {
+        guard let data = UserDefaults.standard.data(forKey: terminalWindowStateDefaultsKey) else {
+            return
+        }
+
+        guard let persistedState = try? JSONDecoder().decode(PersistedTerminalWindowState.self, from: data) else {
+            AppLogger.log("[AppState] Failed to decode persisted terminal window state", type: .warning)
+            UserDefaults.standard.removeObject(forKey: terminalWindowStateDefaultsKey)
+            return
+        }
+
+        isRestoringTerminalWindowState = true
+        defer { isRestoringTerminalWindowState = false }
+
+        let openWindows = persistedState.windows.filter(\.isOpen)
+        terminalWindows = openWindows
+        preferredActiveWindowIdByWorkspace = persistedState.preferredActiveWindowIdByWorkspace.filter { workspaceId, windowId in
+            openWindows.contains { $0.id == windowId && $0.workspaceId == workspaceId && $0.isOpen }
+        }
+
+        if let activeWindowId = persistedState.activeWindowId,
+           openWindows.contains(where: { $0.id == activeWindowId && $0.isOpen }) {
+            activeTerminalWindowId = activeWindowId
+        } else {
+            activeTerminalWindowId = nil
+        }
+
+        terminalWindows = terminalWindows.map { window in
+            var next = window
+            next.isFocused = window.id == activeTerminalWindowId
+            return next
+        }
+
+        AppLogger.log("[AppState] Restored \(terminalWindows.count) terminal windows from storage")
+    }
+
+    private func persistTerminalWindowState() {
+        guard !isRestoringTerminalWindowState else { return }
+
+        let openWindows = terminalWindows.filter(\.isOpen)
+        let normalizedPreferredIds = preferredActiveWindowIdByWorkspace.filter { workspaceId, windowId in
+            openWindows.contains { $0.id == windowId && $0.workspaceId == workspaceId && $0.isOpen }
+        }
+        preferredActiveWindowIdByWorkspace = normalizedPreferredIds
+
+        let persistedState = PersistedTerminalWindowState(
+            windows: openWindows,
+            activeWindowId: activeTerminalWindowId,
+            preferredActiveWindowIdByWorkspace: normalizedPreferredIds
+        )
+
+        guard let data = try? JSONEncoder().encode(persistedState) else {
+            AppLogger.log("[AppState] Failed to encode terminal window state", type: .warning)
+            return
+        }
+
+        UserDefaults.standard.set(data, forKey: terminalWindowStateDefaultsKey)
     }
 
     // MARK: - App Lifecycle

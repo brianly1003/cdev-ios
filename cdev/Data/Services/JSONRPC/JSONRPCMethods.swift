@@ -1366,6 +1366,9 @@ struct HistorySessionInfo: Codable, Sendable, Identifiable {
     /// List of client IDs currently viewing this session (multi-device awareness)
     let viewers: [String]?
 
+    /// Project/working directory path for this session
+    let projectPath: String?
+
     enum CodingKeys: String, CodingKey {
         case summary, branch, status, viewers
         case sessionId = "session_id"
@@ -1374,6 +1377,7 @@ struct HistorySessionInfo: Codable, Sendable, Identifiable {
         case workspaceId = "workspace_id"
         case startedAt = "started_at"
         case lastActive = "last_active"
+        case projectPath = "project_path"
     }
 
     /// Whether this is a running session that can receive prompts
