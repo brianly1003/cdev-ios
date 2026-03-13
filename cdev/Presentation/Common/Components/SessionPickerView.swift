@@ -35,7 +35,9 @@ struct SessionPickerView: View {
         }
         return sessions.filter { session in
             session.summary.localizedCaseInsensitiveContains(searchText) ||
-            session.sessionId.localizedCaseInsensitiveContains(searchText)
+            session.sessionId.localizedCaseInsensitiveContains(searchText) ||
+            (session.projectPath?.localizedCaseInsensitiveContains(searchText) ?? false) ||
+            (session.projectName?.localizedCaseInsensitiveContains(searchText) ?? false)
         }
     }
 
@@ -221,7 +223,6 @@ struct SessionPickerView: View {
             }
         }
         .responsiveSheet()
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -240,7 +241,7 @@ struct SessionRowView: View {
     }
 
     var body: some View {
-        HStack(spacing: Spacing.xs) {
+        HStack(alignment: .top, spacing: Spacing.xs) {
             // Status indicator - pulsing for running sessions
             ZStack {
                 Circle()
@@ -258,7 +259,7 @@ struct SessionRowView: View {
             .frame(width: 12, height: 12)
 
             // Summary and metadata
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(session.displaySummary)
                         .font(Typography.terminal)
@@ -277,7 +278,7 @@ struct SessionRowView: View {
                     }
                 }
 
-                // Agent type badge + session ID
+                // Agent type + project badges
                 HStack(spacing: 4) {
                     if let agentType = session.agentType {
                         HStack(spacing: 2) {
@@ -293,11 +294,28 @@ struct SessionRowView: View {
                         .clipShape(Capsule())
                     }
 
-                    Text(session.sessionId)
-                        .font(Typography.terminalTimestamp)
-                        .foregroundStyle(ColorSystem.textQuaternary)
-                        .lineLimit(1)
+                    if let projectName = session.projectName {
+                        HStack(spacing: 2) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 8))
+                            Text(projectName)
+                                .font(Typography.badge)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .foregroundStyle(ColorSystem.textTertiary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(ColorSystem.terminalBgHighlight)
+                        .clipShape(Capsule())
+                    }
                 }
+
+                Text(session.sessionId)
+                    .font(Typography.terminalTimestamp)
+                    .foregroundStyle(ColorSystem.textQuaternary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             Spacer(minLength: Spacing.xs)
